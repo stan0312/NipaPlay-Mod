@@ -1554,7 +1554,6 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
           SizedBox(height: 6),
         ],
 
-        ],
         if (anime.ratingDetails != null &&
             anime.ratingDetails!.entries.any((entry) =>
                 entry.key != 'Bangumi评分' &&
@@ -2255,8 +2254,16 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
 
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
-    // [QBSenHook] 已移除追番收藏按钮
-    final Widget? topRightAction = null;
+    final Widget? topRightAction =
+        DandanplayService.isLoggedIn && (_detailedAnime?.id ?? 0) > 0
+            ? _WindowFavoriteButton(
+                isFavorited: _isFavorited,
+                isToggling: _isTogglingFavorite,
+                onTap: _toggleFavorite,
+                secondaryTextColor: secondaryTextColor,
+                isLargeScreenMode: _isLargeScreenModeActive,
+              )
+            : null;
     final Widget? inlineHeaderAction =
         widget.renderInWindowScaffold ? null : topRightAction;
 
