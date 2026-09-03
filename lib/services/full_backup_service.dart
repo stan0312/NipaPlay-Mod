@@ -16,6 +16,7 @@ import 'package:nipaplay/services/dandanplay_remote_service.dart';
 import 'package:nipaplay/services/incremental_sync_native_codec.dart';
 import 'package:nipaplay/services/backup_category.dart';
 import 'package:crypto/crypto.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 /// 全量备份服务
 ///

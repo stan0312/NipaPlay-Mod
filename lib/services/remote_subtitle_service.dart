@@ -14,6 +14,7 @@ import 'package:nipaplay/services/webdav_service.dart';
 import 'package:nipaplay/services/dandanplay_remote_service.dart';
 import 'package:nipaplay/utils/media_source_utils.dart';
 import 'package:nipaplay/utils/storage_service.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 sealed class RemoteSubtitleCandidate {
   const RemoteSubtitleCandidate();

@@ -3,6 +3,7 @@ import 'package:nipaplay/themes/cupertino/cupertino_imports.dart';
 import 'package:nipaplay/l10n/l10n.dart';
 
 import 'package:nipaplay/providers/dandanplay_remote_provider.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 /// 用户在 Cupertino 界面中配置弹弹play 远程访问时输入的数据
 class DandanplayConnectionConfig {

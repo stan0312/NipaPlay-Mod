@@ -7,6 +7,7 @@ import 'package:shelf_router/shelf_router.dart';
 import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/dandanplay_remote_service.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class NetworkMediaSettingsApi {
   NetworkMediaSettingsApi() {

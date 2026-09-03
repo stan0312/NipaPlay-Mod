@@ -8,6 +8,7 @@ import 'dandanplay_remote_provider.dart';
 import 'emby_provider.dart';
 import 'jellyfin_provider.dart';
 import 'watch_history_provider.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class ServiceProvider {
   ServiceProvider._();

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'package:nipaplay/services/dandanplay_remote_service.dart';
 import 'package:nipaplay/services/web_remote_access_service.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class DandanplayRemoteProvider extends ChangeNotifier {
   DandanplayRemoteProvider() {

@@ -70,6 +70,7 @@ import 'package:nipaplay/widgets/media_server_network_image.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_app_page_header.dart';
 import 'package:nipaplay/utils/watch_history_auto_match_helper.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 part '../themes/nipaplay/widgets/dashboard_home_page_data_loading.dart';
 part '../themes/nipaplay/widgets/dashboard_home_page_build_hero.dart';

@@ -34,6 +34,7 @@ import 'package:nipaplay/utils/tab_change_notifier.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class RemoteMediaLibrarySettingsContent extends StatefulWidget {
   const RemoteMediaLibrarySettingsContent({super.key});

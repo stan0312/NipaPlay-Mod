@@ -63,18 +63,6 @@ List<UnifiedAppPage> buildUnifiedAppPages(
 
   return <UnifiedAppPage>[
     UnifiedAppPage(
-      id: AppPageIds.home,
-      titleBuilder: (localizations) => localizations.tabHome,
-      phoneIcon: CupertinoIcons.house,
-      phoneActiveIcon: CupertinoIcons.house_fill,
-      phoneSymbol: 'house',
-      phoneActiveSymbol: 'house.fill',
-      components: const [
-        AppPageComponent(id: 'home-feed', type: AppPageComponentType.homeFeed),
-      ],
-      actionIds: commonActions,
-    ),
-    UnifiedAppPage(
       id: AppPageIds.video,
       titleBuilder: (localizations) => localizations.tabVideoPlay,
       phoneIcon: CupertinoIcons.play_rectangle,
@@ -85,22 +73,6 @@ List<UnifiedAppPage> buildUnifiedAppPages(
         AppPageComponent(id: 'playback', type: AppPageComponentType.playback),
       ],
     ),
-    if (availability.showWebDAV)
-      UnifiedAppPage(
-        id: AppPageIds.webdav,
-        titleBuilder: (_) => 'WebDAV',
-        phoneIcon: CupertinoIcons.cloud,
-        phoneActiveIcon: CupertinoIcons.cloud_fill,
-        phoneSymbol: 'cloud',
-        phoneActiveSymbol: 'cloud.fill',
-        components: const [
-          AppPageComponent(
-            id: 'webdav-browser',
-            type: AppPageComponentType.webdavBrowser,
-          ),
-        ],
-        actionIds: commonActions,
-      ),
     UnifiedAppPage(
       id: AppPageIds.mediaLibrary,
       titleBuilder: (localizations) => localizations.tabMediaLibrary,
@@ -116,22 +88,6 @@ List<UnifiedAppPage> buildUnifiedAppPages(
       ],
       actionIds: commonActions,
     ),
-    if (availability.showDownloader)
-      UnifiedAppPage(
-        id: AppPageIds.torrent,
-        titleBuilder: (localizations) => localizations.tabTorrentDownload,
-        phoneIcon: CupertinoIcons.arrow_down_circle,
-        phoneActiveIcon: CupertinoIcons.arrow_down_circle_fill,
-        phoneSymbol: 'arrow.down.circle',
-        phoneActiveSymbol: 'arrow.down.circle.fill',
-        components: const [
-          AppPageComponent(
-            id: 'torrent-tasks',
-            type: AppPageComponentType.torrentTasks,
-          ),
-        ],
-        actionIds: commonActions,
-      ),
     UnifiedAppPage(
       id: AppPageIds.account,
       titleBuilder: (localizations) => localizations.tabAccount,
@@ -144,22 +100,6 @@ List<UnifiedAppPage> buildUnifiedAppPages(
       ],
       actionIds: commonActions,
     ),
-    if (availability.showExternalPlayerConsole)
-      UnifiedAppPage(
-        id: AppPageIds.externalPlayerConsole,
-        titleBuilder: (localizations) => localizations.tabDanmakuConsole,
-        phoneIcon: CupertinoIcons.captions_bubble,
-        phoneActiveIcon: CupertinoIcons.captions_bubble_fill,
-        phoneSymbol: 'captions.bubble',
-        phoneActiveSymbol: 'captions.bubble.fill',
-        components: const [
-          AppPageComponent(
-            id: 'external-player-console',
-            type: AppPageComponentType.externalPlayerConsole,
-          ),
-        ],
-        actionIds: commonActions,
-      ),
   ];
 }
 
@@ -174,9 +114,6 @@ String effectiveAppPageId(
 ) {
   if (appPageIndexById(pages, requestedPageId) >= 0) {
     return requestedPageId!;
-  }
-  if (appPageIndexById(pages, AppPageIds.home) >= 0) {
-    return AppPageIds.home;
   }
   return pages.isEmpty ? AppPageIds.home : pages.first.id;
 }

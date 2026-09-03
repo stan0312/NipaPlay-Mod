@@ -20,6 +20,7 @@ import 'package:nipaplay/services/smb_service.dart';
 import 'package:nipaplay/services/webdav_service.dart';
 import 'package:nipaplay/services/dandanplay_remote_service.dart';
 import 'package:nipaplay/utils/auto_sync_settings.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 enum AutoSyncPhase { idle, pulling, merging, pushing, complete, failed }
 

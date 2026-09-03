@@ -36,6 +36,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/utils/settings_storage.dart';
 import 'package:nipaplay/utils/tab_change_notifier.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class AdaptiveMediaLibraryPage extends StatefulWidget {
   const AdaptiveMediaLibraryPage({

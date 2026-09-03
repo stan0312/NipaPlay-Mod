@@ -26,6 +26,7 @@ import 'package:provider/provider.dart';
 import 'package:nipaplay/providers/watch_history_provider.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class BackupRestorePage extends StatefulWidget {
   const BackupRestorePage({super.key});

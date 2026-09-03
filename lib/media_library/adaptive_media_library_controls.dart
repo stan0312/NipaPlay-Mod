@@ -27,6 +27,8 @@ import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/services/large_screen_ui_sfx_service.dart';
 import 'package:nipaplay/widgets/in_view_dialog.dart';
 import 'package:provider/provider.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/dandanplay_remote_library_view.dart';
 
 class AdaptiveMediaLibraryScaffold extends material.StatelessWidget {
   const AdaptiveMediaLibraryScaffold({

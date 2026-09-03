@@ -13,6 +13,7 @@ import 'package:nipaplay/services/jellyfin_dandanplay_matcher.dart';
 import 'package:nipaplay/services/emby_dandanplay_matcher.dart';
 import 'package:nipaplay/services/jellyfin_episode_mapping_service.dart';
 import 'package:nipaplay/services/emby_episode_mapping_service.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class WatchHistoryAutoMatchHelper {
   static bool shouldAutoMatch(WatchHistoryItem item) {

@@ -8,6 +8,7 @@ import 'package:nipaplay/utils/storage_service.dart';
 import 'package:nipaplay/services/auto_sync_service.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/utils/media_identity_resolver.dart';
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class WatchHistoryItem {
   String filePath;

@@ -1,3 +1,4 @@
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 part of dashboard_home_page;
 
 extension DashboardHomePageDataLoading on _DashboardHomePageState {
