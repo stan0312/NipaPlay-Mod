@@ -1,0 +1,76 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:nipaplay/models/danmaku/style.dart';
+
+void main() {
+  test('uses the expected default danmaku style', () {
+    final style = DanmakuStyle();
+
+    expect(style.opacity, 1.0);
+    expect(style.outlineWidth, 1.0);
+    expect(style.outlineEnabled, isTrue);
+    expect(style.danmakuOffset, 0.0);
+    expect(style.danmakuAllowStacking, isFalse);
+  });
+
+  test('copyWith only replaces the selected danmaku style fields', () {
+    final style = DanmakuStyle(
+      opacity: 0.8,
+      outlineWidth: 2.5,
+      danmakuOffset: 1.25,
+      danmakuAllowStacking: true,
+    );
+
+    final updated = style.copyWith(
+      opacity: 0.5,
+      danmakuAllowStacking: false,
+    );
+
+    expect(updated.opacity, 0.5);
+    expect(updated.outlineWidth, 2.5);
+    expect(updated.danmakuOffset, 1.25);
+    expect(updated.danmakuAllowStacking, isFalse);
+    expect(updated, DanmakuStyle(
+      opacity: 0.5,
+      outlineWidth: 2.5,
+      danmakuOffset: 1.25,
+      danmakuAllowStacking: false,
+    ));
+  });
+
+  test('normalizes danmaku style values', () {
+    final style = DanmakuStyle(
+      opacity: -0.5,
+      outlineWidth: 8.0,
+    );
+
+    expect(style.opacity, DanmakuStyle.minOpacity);
+    expect(style.outlineWidth, DanmakuStyle.maxOutlineWidth);
+
+    final normalized = style.copyWith(
+      opacity: double.nan,
+      outlineWidth: double.infinity,
+      danmakuOffset: double.negativeInfinity,
+    );
+
+    expect(normalized.opacity, DanmakuStyle.maxOpacity);
+    expect(normalized.outlineWidth, 1.0);
+    expect(normalized.danmakuOffset, 0.0);
+  });
+
+  test('setters normalize and update danmaku style values', () {
+    final style = DanmakuStyle();
+
+    style.opacity = 1.5;
+    style.outlineWidth = 0.1;
+    style.danmakuOffset = -2.5;
+    style.danmakuAllowStacking = false;
+
+    expect(style.opacity, DanmakuStyle.maxOpacity);
+    expect(style.outlineWidth, DanmakuStyle.minOutlineWidth);
+    expect(style.danmakuOffset, -2.5);
+    style.outlineWidth = 0.0;
+    expect(style.outlineWidth, 0.0);
+    expect(style.outlineEnabled, isFalse);
+    expect(style.danmakuAllowStacking, isFalse);
+  });
+}

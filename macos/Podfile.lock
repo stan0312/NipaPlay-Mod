@@ -1,0 +1,96 @@
+PODS:
+  - erika_flutter (0.1.3):
+    - FlutterMacOS
+  - flutter_js (0.0.1):
+    - FlutterMacOS
+  - FlutterMacOS (1.0.0)
+  - fvp (0.33.1):
+    - Flutter
+    - FlutterMacOS
+    - mdk (~> 0.33.1)
+  - HotKey (0.2.1)
+  - hotkey_manager_macos (0.0.1):
+    - FlutterMacOS
+    - HotKey
+  - mdk (0.33.1)
+  - media_kit_libs_macos_video (1.0.4):
+    - FlutterMacOS
+  - media_kit_video (0.0.1):
+    - FlutterMacOS
+  - nipaplay_smb2 (0.0.1):
+    - FlutterMacOS
+  - rust_lib_nipaplay (0.0.1):
+    - FlutterMacOS
+  - screen_retriever_macos (0.0.1):
+    - FlutterMacOS
+  - tray_manager (0.0.1):
+    - FlutterMacOS
+  - window_manager (0.2.0):
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - erika_flutter (from `Flutter/ephemeral/.symlinks/plugins/erika_flutter/macos`)
+  - flutter_js (from `Flutter/ephemeral/.symlinks/plugins/flutter_js/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - fvp (from `Flutter/ephemeral/.symlinks/plugins/fvp/darwin`)
+  - hotkey_manager_macos (from `Flutter/ephemeral/.symlinks/plugins/hotkey_manager_macos/macos`)
+  - mdk (from `../third_party/podspecs/mdk.podspec.json`)
+  - media_kit_libs_macos_video (from `Flutter/ephemeral/.symlinks/plugins/media_kit_libs_macos_video/macos`)
+  - media_kit_video (from `Flutter/ephemeral/.symlinks/plugins/media_kit_video/macos`)
+  - nipaplay_smb2 (from `Flutter/ephemeral/.symlinks/plugins/nipaplay_smb2/macos`)
+  - rust_lib_nipaplay (from `Flutter/ephemeral/.symlinks/plugins/rust_lib_nipaplay/macos`)
+  - screen_retriever_macos (from `Flutter/ephemeral/.symlinks/plugins/screen_retriever_macos/macos`)
+  - tray_manager (from `Flutter/ephemeral/.symlinks/plugins/tray_manager/macos`)
+  - window_manager (from `Flutter/ephemeral/.symlinks/plugins/window_manager/macos`)
+
+SPEC REPOS:
+  trunk:
+    - HotKey
+
+EXTERNAL SOURCES:
+  erika_flutter:
+    :path: Flutter/ephemeral/.symlinks/plugins/erika_flutter/macos
+  flutter_js:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_js/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  fvp:
+    :path: Flutter/ephemeral/.symlinks/plugins/fvp/darwin
+  hotkey_manager_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/hotkey_manager_macos/macos
+  mdk:
+    :podspec: "../third_party/podspecs/mdk.podspec.json"
+  media_kit_libs_macos_video:
+    :path: Flutter/ephemeral/.symlinks/plugins/media_kit_libs_macos_video/macos
+  media_kit_video:
+    :path: Flutter/ephemeral/.symlinks/plugins/media_kit_video/macos
+  nipaplay_smb2:
+    :path: Flutter/ephemeral/.symlinks/plugins/nipaplay_smb2/macos
+  rust_lib_nipaplay:
+    :path: Flutter/ephemeral/.symlinks/plugins/rust_lib_nipaplay/macos
+  screen_retriever_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/screen_retriever_macos/macos
+  tray_manager:
+    :path: Flutter/ephemeral/.symlinks/plugins/tray_manager/macos
+  window_manager:
+    :path: Flutter/ephemeral/.symlinks/plugins/window_manager/macos
+
+SPEC CHECKSUMS:
+  erika_flutter: c9537c4922444b82ecd09601aed2ff82e7f8ec59
+  flutter_js: 79c3c70d33ba464c67d8eb88639a61aa718cd8b8
+  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  fvp: ed100b827d10aff53789fb9cb9dfdd85a87d037d
+  HotKey: 400beb7caa29054ea8d864c96f5ba7e5b4852277
+  hotkey_manager_macos: a4317849af96d2430fa89944d3c58977ca089fbe
+  mdk: ce8436c2c5ba770c7bfc0047f024ac2d967ac2d4
+  media_kit_libs_macos_video: 85a23e549b5f480e72cae3e5634b5514bc692f65
+  media_kit_video: fa6564e3799a0a28bff39442334817088b7ca758
+  nipaplay_smb2: da01641bec939e73001cd1934643d5c5d2acb866
+  rust_lib_nipaplay: ad303ace8ae6c9e62d8ad4e8076ebfe4d1c64b74
+  screen_retriever_macos: 452e51764a9e1cdb74b3c541238795849f21557f
+  tray_manager: a104b5c81b578d83f3c3d0f40a997c8b10810166
+  window_manager: 1d01fa7ac65a6e6f83b965471b1a7fdd3f06166c
+
+PODFILE CHECKSUM: d8f651b9b24d21681d77d9cf5a55e67bfaa4a5a9
+
+COCOAPODS: 1.16.2

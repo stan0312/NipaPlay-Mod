@@ -1,0 +1,492 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nipaplay/models/jellyfin_model.dart';
+import 'package:nipaplay/services/jellyfin_service.dart';
+import 'package:nipaplay/models/watch_history_model.dart';
+import 'package:nipaplay/services/web_remote_access_service.dart';
+
+class JellyfinProvider extends ChangeNotifier {
+  final JellyfinService _jellyfinService = JellyfinService.instance;
+  
+  bool _isInitialized = false;
+  bool _isLoading = false;
+  bool _hasError = false;
+  String? _errorMessage;
+  List<JellyfinMediaItem> _mediaItems = [];
+  List<JellyfinMovieInfo> _movieItems = [];
+  Map<String, JellyfinMediaItemDetail> _mediaDetailsCache = {};
+  Map<String, JellyfinMovieInfo> _movieDetailsCache = {};
+  Timer? _notifyTimer;
+  bool _disposed = false;
+  
+  // Provider 级 ready：首次媒体/电影列表加载完成后触发
+  bool _isReady = false;
+  bool get isReady => _isReady;
+  final List<VoidCallback> _readyCallbacks = [];
+  bool _initializingAfterConnect = false;
+  int _initialPendingParts = 0; // 2 = media + movie
+  
+  // 排序相关状态
+  String _currentSortBy = 'DateCreated,SortName';
+  String _currentSortOrder = 'Descending';
+  
+  // 每个媒体库的独立排序设置
+  Map<String, Map<String, String>> _librarySpecificSortSettings = {};
+
+  // Getters
+  bool get isInitialized => _isInitialized;
+  bool get isLoading => _isLoading;
+  bool get hasError => _hasError;
+  String? get errorMessage => _errorMessage;
+  bool get isConnected => _jellyfinService.isConnected;
+  List<JellyfinMediaItem> get mediaItems => _mediaItems;
+  List<JellyfinMovieInfo> get movieItems => _movieItems;
+  List<JellyfinLibrary> get availableLibraries => _jellyfinService.availableLibraries;
+  List<String> get selectedLibraryIds => _jellyfinService.selectedLibraryIds;
+  String? get serverUrl => _jellyfinService.serverUrl;
+  String? get username => _jellyfinService.username;
+  
+  // 排序相关getter
+  String get currentSortBy => _currentSortBy;
+  String get currentSortOrder => _currentSortOrder;
+  
+  // 获取特定媒体库的排序设置
+  Map<String, String> getLibrarySortSettings(String libraryId) {
+    return _librarySpecificSortSettings[libraryId] ?? {
+      'sortBy': _currentSortBy,
+      'sortOrder': _currentSortOrder,
+    };
+  }
+  
+  // 设置特定媒体库的排序设置
+  void setLibrarySortSettings(String libraryId, String sortBy, String sortOrder) {
+    _librarySpecificSortSettings[libraryId] = {
+      'sortBy': sortBy,
+      'sortOrder': sortOrder,
+    };
+    print('JellyfinProvider: 为媒体库 $libraryId 设置排序 - sortBy: $sortBy, sortOrder: $sortOrder');
+    
+    // 保存到SharedPreferences
+    _saveSortSettings();
+  }
+  
+  // 保存排序设置到SharedPreferences
+  Future<void> _saveSortSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonString = json.encode(_librarySpecificSortSettings);
+      await prefs.setString('jellyfin_library_sort_settings', jsonString);
+      print('JellyfinProvider: 排序设置已保存');
+    } catch (e) {
+      print('JellyfinProvider: 保存排序设置失败: $e');
+    }
+  }
+  
+  // 加载排序设置
+  Future<void> _loadSortSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final sortSettingsJson = prefs.getString('jellyfin_library_sort_settings');
+      if (sortSettingsJson != null) {
+        final Map<String, dynamic> decoded = json.decode(sortSettingsJson);
+        _librarySpecificSortSettings = decoded.map((key, value) => MapEntry(key, Map<String, String>.from(value)));
+        print('JellyfinProvider: 加载了媒体库排序设置: $_librarySpecificSortSettings');
+      }
+    } catch (e) {
+      print('JellyfinProvider: 加载媒体库排序设置失败: $e');
+      _librarySpecificSortSettings = {};
+    }
+  }
+
+  // 将临近多次状态变化合并为一次通知，降低 UI 抖动
+  void _notifyCoalesced({Duration delay = const Duration(milliseconds: 800)}) {
+    if (_disposed) return;
+    _notifyTimer?.cancel();
+    _notifyTimer = Timer(delay, () {
+      if (_disposed) return;
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _notifyTimer?.cancel();
+    super.dispose();
+  }
+
+  // Provider ready 监听 API
+  void addReadyListener(VoidCallback callback) {
+    _readyCallbacks.add(callback);
+  }
+  void removeReadyListener(VoidCallback callback) {
+    _readyCallbacks.remove(callback);
+  }
+  void _notifyReady() {
+    for (final cb in List<VoidCallback>.from(_readyCallbacks)) {
+      try { cb(); } catch (_) {}
+    }
+  }
+  void _resetReady() {
+    _isReady = false;
+    _initializingAfterConnect = false;
+    _initialPendingParts = 0;
+  }
+  void _maybeMarkReady() {
+    if (_initializingAfterConnect && _initialPendingParts <= 0 && !_isReady) {
+      _isReady = true;
+      _initializingAfterConnect = false;
+      _initialPendingParts = 0;
+      _notifyReady();
+    }
+  }
+
+  // 初始化Jellyfin Provider
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+    
+    _isLoading = true;
+    _hasError = false;
+    _errorMessage = null;
+    _notifyCoalesced();
+    
+    try {
+      if (kIsWeb) {
+        await _syncFromRemote();
+      } else {
+        await _jellyfinService.loadSavedSettings();
+      }
+      await _loadSortSettings(); // 加载排序设置
+      _isInitialized = true;
+      
+      // 添加连接状态监听器
+      _jellyfinService.addConnectionStateListener(_onConnectionStateChanged);
+    } catch (e) {
+      _hasError = true;
+      _errorMessage = e.toString();
+    } finally {
+      _isLoading = false;
+      _notifyCoalesced();
+    }
+  }
+
+  Future<void> _syncFromRemote() async {
+    final base = await WebRemoteAccessService.resolveCandidateBaseUrl();
+    if (base == null) return;
+
+    try {
+      final response = await http.get(Uri.parse('$base/api/settings/network/jellyfin'));
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        _jellyfinService.serverUrl = data['serverUrl'];
+        _jellyfinService.username = data['username'];
+        _jellyfinService.isConnected = data['isConnected'] ?? false;
+        if (data['selectedLibraryIds'] != null) {
+          _jellyfinService.selectedLibraryIds = List<String>.from(data['selectedLibraryIds']);
+        }
+        // Force notify
+        _onConnectionStateChanged(_jellyfinService.isConnected);
+      }
+    } catch (e) {
+      print('JellyfinProvider: Failed to sync from remote: $e');
+    }
+  }
+  
+  /// 连接状态变化回调
+  void _onConnectionStateChanged(bool isConnected) {
+    print('JellyfinProvider: 连接状态变化 - isConnected: $isConnected');
+    
+    // 连接状态变化需要立即通知UI，不能延迟
+    // 这样可以确保媒体库标签页能及时显示/隐藏
+    notifyListeners();
+    
+    if (isConnected) {
+      print('JellyfinProvider: Jellyfin已连接，开始加载媒体项目...');
+      // 跟踪首次加载（媒体+电影），完成后触发 provider-ready
+      _resetReady();
+      _initializingAfterConnect = true;
+      _initialPendingParts = 2;
+      // 异步加载媒体项目，不阻塞UI
+      loadMediaItems();
+      loadMovieItems();
+    } else {
+      _resetReady();
+    }
+  }
+  
+  // 加载Jellyfin媒体项
+  Future<void> loadMediaItems() async {
+    if (!_jellyfinService.isConnected) return;
+    
+    _isLoading = true;
+    _hasError = false;
+    _notifyCoalesced();
+    
+    try {
+      _mediaItems = await _jellyfinService.getLatestMediaItems(
+        sortBy: _currentSortBy,
+        sortOrder: _currentSortOrder,
+      );
+    } catch (e) {
+      _hasError = true;
+      _errorMessage = e.toString();
+      _mediaItems = [];
+    } finally {
+      _isLoading = false;
+      _notifyCoalesced();
+      if (_initializingAfterConnect) {
+        _initialPendingParts = (_initialPendingParts - 1).clamp(0, 2);
+        _maybeMarkReady();
+      }
+    }
+  }
+  
+  // 加载Jellyfin电影项
+  Future<void> loadMovieItems() async {
+    if (!_jellyfinService.isConnected) return;
+    
+    try {
+      _movieItems = await _jellyfinService.getLatestMovies();
+    } catch (e) {
+      _hasError = true;
+      _errorMessage = e.toString();
+      _movieItems = [];
+    } finally {
+      _notifyCoalesced();
+      if (_initializingAfterConnect) {
+        _initialPendingParts = (_initialPendingParts - 1).clamp(0, 2);
+        _maybeMarkReady();
+      }
+    }
+  }
+  
+  // 连接到Jellyfin服务器
+  Future<bool> connectToServer(String serverUrl, String username, String password, {String? addressName}) async {
+    _isLoading = true;
+    _hasError = false;
+    _errorMessage = null;
+    _notifyCoalesced();
+    
+    try {
+      bool success;
+      if (kIsWeb) {
+        final base = await WebRemoteAccessService.resolveCandidateBaseUrl();
+        if (base == null) throw Exception('Remote server not found');
+        
+        final response = await http.post(
+          Uri.parse('$base/api/settings/network/jellyfin'),
+          body: json.encode({
+            'serverUrl': serverUrl,
+            'username': username,
+            'password': password,
+          }),
+        );
+        
+        if (response.statusCode == 200) {
+          await _syncFromRemote();
+          success = _jellyfinService.isConnected;
+        } else {
+          throw Exception('Remote connection failed: ${response.body}');
+        }
+      } else {
+        success = await _jellyfinService.connect(serverUrl, username, password, addressName: addressName);
+      }
+      
+      // 首次加载由连接状态回调统一触发，避免重复加载
+      return success;
+    } catch (e) {
+      _hasError = true;
+      _errorMessage = e.toString();
+      return false;
+    } finally {
+      _isLoading = false;
+      _notifyCoalesced();
+    }
+  }
+  
+  // 断开Jellyfin服务器连接
+  Future<void> disconnectFromServer() async {
+    await _jellyfinService.disconnect();
+    _mediaItems = [];
+    _movieItems = [];
+    _mediaDetailsCache = {};
+    _movieDetailsCache = {};
+  _resetReady();
+    _notifyCoalesced();
+  }
+  
+  // 更新选中的媒体库
+  Future<void> updateSelectedLibraries(List<String> libraryIds) async {
+    if (kIsWeb) {
+      final base = await WebRemoteAccessService.resolveCandidateBaseUrl();
+      if (base != null) {
+        await http.post(
+          Uri.parse('$base/api/settings/network/jellyfin'),
+          body: json.encode({'selectedLibraryIds': libraryIds}),
+        );
+        await _syncFromRemote();
+      }
+    } else {
+      await _jellyfinService.updateSelectedLibraries(libraryIds);
+    }
+    await loadMediaItems();
+    await loadMovieItems();
+  }
+  
+  // 获取媒体详情
+  Future<JellyfinMediaItemDetail> getMediaItemDetails(String itemId) async {
+    // 如果已经缓存了详情，直接返回
+    if (_mediaDetailsCache.containsKey(itemId)) {
+      return _mediaDetailsCache[itemId]!;
+    }
+    
+    try {
+      final details = await _jellyfinService.getMediaItemDetails(itemId);
+      _mediaDetailsCache[itemId] = details;
+      return details;
+    } catch (e) {
+      rethrow;
+    }
+  }
+  
+  // 获取电影详情
+  Future<JellyfinMovieInfo?> getMovieDetails(String movieId) async {
+    // 如果已经缓存了详情，直接返回
+    if (_movieDetailsCache.containsKey(movieId)) {
+      return _movieDetailsCache[movieId]!;
+    }
+    
+    try {
+      final details = await _jellyfinService.getMovieDetails(movieId);
+      if (details != null) {
+        _movieDetailsCache[movieId] = details;
+      }
+      return details;
+    } catch (e) {
+      rethrow;
+    }
+  }
+  
+  // 将Jellyfin媒体项转换为WatchHistoryItem
+  List<WatchHistoryItem> convertToWatchHistoryItems() {
+    return _mediaItems.map((item) => item.toWatchHistoryItem()).toList();
+  }
+  
+  // 更新排序设置并重新加载媒体项
+  Future<void> updateSortSettings(String sortBy, String sortOrder) async {
+    print('JellyfinProvider: 更新排序设置 - sortBy: $sortBy, sortOrder: $sortOrder');
+    if (_currentSortBy != sortBy || _currentSortOrder != sortOrder) {
+      _currentSortBy = sortBy;
+      _currentSortOrder = sortOrder;
+      print('JellyfinProvider: 排序设置已更新，开始重新加载媒体项');
+      await loadMediaItems();
+    } else {
+      print('JellyfinProvider: 排序设置未变化，跳过重新加载');
+    }
+  }
+  
+  // 只更新排序设置，不重新加载媒体项（用于单个媒体库视图）
+  void updateSortSettingsOnly(String sortBy, String sortOrder) {
+    print('JellyfinProvider: 仅更新排序设置 - sortBy: $sortBy, sortOrder: $sortOrder');
+    if (_currentSortBy != sortBy || _currentSortOrder != sortOrder) {
+      _currentSortBy = sortBy;
+      _currentSortOrder = sortOrder;
+      print('JellyfinProvider: 排序设置已更新，不重新加载媒体项，也不发送通知');
+      // 不调用 notifyListeners() 以避免触发其他组件重新加载
+    } else {
+      print('JellyfinProvider: 排序设置未变化，跳过更新');
+    }
+  }
+  
+  // 将Jellyfin电影项转换为WatchHistoryItem
+  List<WatchHistoryItem> convertMoviesToWatchHistoryItems() {
+    return _movieItems.map((item) => item.toWatchHistoryItem()).toList();
+  }
+  
+  // 获取流媒体URL
+  String getStreamUrl(String itemId) {
+    return _jellyfinService.getStreamUrl(itemId);
+  }
+  
+  // 获取图片URL
+  String getImageUrl(String itemId, {String type = 'Primary', int? width, int? height, int? quality}) {
+    return _jellyfinService.getImageUrl(
+      itemId,
+      type: type,
+      width: width,
+      height: height,
+      quality: quality,
+    );
+  }
+
+  /// 获取指定媒体库的最新条目列表。
+  Future<List<JellyfinMediaItem>> fetchMediaItemsForLibrary(
+    String libraryId, {
+    int limit = 60,
+    String? sortBy,
+    String? sortOrder,
+  }) async {
+    final settings = getLibrarySortSettings(libraryId);
+    final resolvedSortBy = sortBy ?? settings['sortBy'] ?? _currentSortBy;
+    final resolvedSortOrder = sortOrder ?? settings['sortOrder'] ?? _currentSortOrder;
+    return await _jellyfinService.getLatestMediaItemsByLibrary(
+      libraryId,
+      limit: limit,
+      sortBy: resolvedSortBy,
+      sortOrder: resolvedSortOrder,
+    );
+  }
+
+  /// 获取指定媒体库或文件夹下的子项（用于混合库文件夹导航）。
+  Future<List<JellyfinMediaItem>> fetchFolderItems(
+    String parentId, {
+    int limit = 99999,
+  }) async {
+    return await _jellyfinService.getFolderItems(parentId, limit: limit);
+  }
+
+  /// 查找媒体库信息。
+  JellyfinLibrary? findLibrary(String libraryId) {
+    for (final library in availableLibraries) {
+      if (library.id == libraryId) {
+        return library;
+      }
+    }
+    return null;
+  }
+
+  /// 获取媒体库封面图。
+  String? getLibraryImageUrl(
+    String libraryId, {
+    int width = 720,
+    int? height,
+  }) {
+    if (!_jellyfinService.isConnected) {
+      return null;
+    }
+    final library = findLibrary(libraryId);
+    if (library == null || (library.imageTagsPrimary?.isEmpty ?? true)) {
+      return null;
+    }
+    try {
+      return _jellyfinService.getImageUrl(
+        libraryId,
+        type: 'Primary',
+        width: width,
+        height: height,
+        quality: 90,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 刷新可用媒体库列表。
+  Future<void> refreshAvailableLibraries() async {
+    await _jellyfinService.loadAvailableLibraries();
+    _notifyCoalesced(delay: const Duration(milliseconds: 16));
+  }
+}

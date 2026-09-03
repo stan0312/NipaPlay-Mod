@@ -1,0 +1,462 @@
+part of video_player_state;
+
+extension VideoPlayerStateInitialization on VideoPlayerState {
+  Future<void> _loadVideoEnhancementSettingsEarly() async {
+    try {
+      await _loadDoubleResolutionPlayback();
+    } catch (e) {
+      debugPrint('[VideoPlayerState] 提前加载双倍分辨率设置失败: $e');
+    }
+    try {
+      await _loadErikaUpscalerMode();
+    } catch (e) {
+      debugPrint('[VideoPlayerState] 提前加载 Erika 超分设置失败: $e');
+    }
+    try {
+      await _loadAnime4KProfile();
+    } catch (e) {
+      debugPrint('[VideoPlayerState] 提前加载 Anime4K 设置失败: $e');
+    }
+    try {
+      await _loadCrtProfile();
+    } catch (e) {
+      debugPrint('[VideoPlayerState] 提前加载 CRT 设置失败: $e');
+    }
+  }
+
+  Future<void> _initialize() async {
+    if (globals.isMobilePlatform) {
+      // 使用新的屏幕方向管理器设置初始方向
+      await ScreenOrientationManager.instance.setInitialOrientation();
+      await _initializeSystemVolumeController();
+      await _loadInitialBrightness(); // Load initial brightness for phone
+    }
+    await _loadInitialVolume();
+    // 不在初始化时启动帧级Ticker，避免空闲/非播放状态也持续产帧
+    _startUiUpdateTimer(); // 仅创建/准备Ticker，是否启动由播放状态决定
+    _setupWindowManagerListener();
+    _focusNode.requestFocus();
+    await _loadLastVideo();
+    await _loadVideoEnhancementSettingsEarly();
+    await _loadAutoFullScreenEnabled();
+    await _loadMinimalProgressBarSettings(); // 加载最小化进度条设置
+    await _loadPrecacheBufferSize(); // 加载播放预缓存大小
+    await _loadPrecacheBufferDuration(); // 加载播放预缓存时长
+    await applyPrecacheBufferSettings(); // 应用预缓存设置
+    await _loadTimelinePreviewSetting(); // 加载时间轴缩略图开关
+    await _loadDanmakuOpacity(); // 加载保存的弹幕不透明度
+    await _loadDanmakuVisible(); // 加载弹幕可见性
+    await _loadMergeDanmaku(); // 加载弹幕合并设置
+    await _loadDanmakuStacking(); // 加载弹幕堆叠设置
+    await _loadDanmakuRandomColorEnabled(); // 加载弹幕随机染色设置
+    await _loadTimelineDanmakuEnabled(); // 加载时间轴告知弹幕轨道开关
+    await _loadHardwareDecoderSetting(); // 加载硬件解码开关
+
+    // 加载弹幕类型屏蔽设置
+    await _loadBlockTopDanmaku();
+    await _loadBlockBottomDanmaku();
+    await _loadBlockScrollDanmaku();
+
+    // 加载弹幕屏蔽词
+    await _loadDanmakuBlockWords();
+    _attachPluginDanmakuFilter();
+    await _loadSpoilerPreventionEnabled();
+    await _loadSpoilerAiSettings();
+
+    // 加载弹幕字体大小和显示区域
+    await _loadDanmakuFontSize();
+    await _loadDanmakuDisplayEffectSettings();
+    await _loadTitanDanmakuSettings();
+    await _loadSubtitleSettings();
+    await _loadDanmakuDisplayArea();
+    await _loadDanmakuSpeedMultiplier();
+    await _loadDanmakuDfmPlusTrackGap();
+    await _loadRememberDanmakuOffset();
+
+    // 加载播放速度设置
+    await _loadPlaybackRate();
+
+    // 加载快进快退时间设置
+    await _loadSeekStepSeconds();
+
+    // 加载跳过时间设置
+    await _loadSkipSeconds();
+
+    // 加载播放结束行为设置
+    await _loadPlaybackEndAction();
+    await _loadAutoNextCountdownSeconds();
+    await _loadPauseOnBackgroundSetting();
+    await _loadDesktopHoverSettingsMenuEnabled();
+    await _loadInstantHidePlayerUiEnabled();
+    await _loadPlayerTopButtonVisibilitySettings();
+    await _loadChapterMarkersEnabled(); // 加载 MKV 章节标记开关
+    await _loadScreenshotSaveTarget();
+    await _loadScreenshotSaveDirectory();
+
+    // 订阅内核切换事件
+    _subscribeToKernelChanges();
+
+    // Ensure wakelock is disabled on initialization
+    try {
+      WakelockPlus.disable();
+      //debugPrint("Wakelock disabled on VideoPlayerState initialization.");
+    } catch (e) {
+      //debugPrint("Error disabling wakelock on init: $e");
+    }
+  }
+
+  /// 订阅内核切换事件
+  void _subscribeToKernelChanges() {
+    // 订阅播放器内核切换事件
+    _playerKernelChangeSubscription = PlayerFactory.onKernelChanged.listen((_) {
+      debugPrint('[VideoPlayerState] 收到播放器内核切换事件，执行热切换');
+      _requestPlayerKernelHotSwap();
+    });
+
+    // 订阅弹幕内核切换事件
+    _danmakuKernelChangeSubscription =
+        DanmakuKernelFactory.onKernelChanged.listen((newKernel) {
+      debugPrint('[VideoPlayerState] 收到弹幕内核切换事件: $newKernel');
+      PlayerKernelManager.performDanmakuKernelHotSwap(this, newKernel);
+    });
+  }
+
+  void _requestPlayerKernelHotSwap() {
+    if (_isDisposed) {
+      return;
+    }
+    _playerKernelSwapRequested++;
+    _startPlayerKernelHotSwapDrain();
+  }
+
+  void _startPlayerKernelHotSwapDrain() {
+    if (_isDisposed || _playerKernelSwapDrain != null) {
+      return;
+    }
+    final drain = _drainPlayerKernelHotSwaps();
+    _playerKernelSwapDrain = drain;
+    unawaited(drain);
+  }
+
+  Future<void> _drainPlayerKernelHotSwaps() async {
+    try {
+      while (!_isDisposed &&
+          _playerKernelSwapApplied < _playerKernelSwapRequested) {
+        final targetGeneration = _playerKernelSwapRequested;
+        try {
+          await PlayerKernelManager.performPlayerKernelHotSwap(this);
+        } catch (error, stackTrace) {
+          debugPrint(
+            '[VideoPlayerState] Player hot swap failed '
+            'generation=$targetGeneration: $error\n$stackTrace',
+          );
+        } finally {
+          _playerKernelSwapApplied = targetGeneration;
+        }
+      }
+    } finally {
+      _playerKernelSwapDrain = null;
+      if (!_isDisposed &&
+          _playerKernelSwapApplied < _playerKernelSwapRequested) {
+        _startPlayerKernelHotSwapDrain();
+      }
+    }
+  }
+
+  Future<void> _loadInitialBrightness() async {
+    if (!globals.isMobilePlatform) return;
+    try {
+      _currentBrightness = await ScreenBrightness().current;
+      _initialDragBrightness =
+          _currentBrightness; // Initialize drag brightness too
+      //debugPrint("Initial screen brightness loaded: $_currentBrightness");
+    } catch (e) {
+      //debugPrint("Failed to get initial screen brightness: $e");
+      // Keep default _currentBrightness if error occurs
+    }
+    _notifyListeners();
+  }
+
+  // Load initial volume. Mobile keeps using system volume; desktop/web use
+  // the player's own volume so keyboard volume shortcuts start from reality.
+  Future<void> _loadInitialVolume() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedVolume = prefs.getDouble(_playerVolumeKey);
+
+      if (_useSystemVolume) {
+        _ensurePlayerVolumeMatchesPlatformPolicy();
+        _systemVolumeController ??= VolumeController.instance;
+        _systemVolumeController!.showSystemUI = false;
+        final currentSystemVolume = await _systemVolumeController!.getVolume();
+        final initialVolume =
+            (savedVolume ?? currentSystemVolume).clamp(0.0, 1.0);
+        _currentVolume = initialVolume;
+        _initialDragVolume = initialVolume;
+        if (savedVolume != null) {
+          await _setSystemVolume(initialVolume);
+        }
+      } else {
+        // Web 等不支持系统音量时：使用播放器内部音量
+        final initialVolume = (savedVolume ?? player.volume).clamp(0.0, 1.0);
+        _currentVolume = initialVolume;
+        _initialDragVolume = initialVolume;
+        player.volume = initialVolume;
+      }
+    } catch (e) {
+      _currentVolume = 0.5; // Fallback
+      _initialDragVolume = _currentVolume;
+    }
+    _notifyListeners();
+  }
+
+  void startBrightnessDrag() {
+    if (!globals.isMobilePlatform) return;
+    // Refresh _initialDragBrightness with the most up-to-date _currentBrightness
+    // This handles cases where brightness might have been changed by other means
+    // or if a previous drag was interrupted.
+    _initialDragBrightness = _currentBrightness;
+    _showBrightnessIndicator();
+    debugPrint(
+        "Brightness drag started. Initial drag brightness: $_initialDragBrightness");
+  }
+
+  Future<void> updateBrightnessOnDrag(
+      double verticalDragDelta, BuildContext context) async {
+    if (!globals.isMobilePlatform) return;
+
+    final screenHeight = MediaQuery.of(context).size.height;
+    // 修改灵敏度：拖动屏幕高度的 80% (0.8) 对应亮度从0到1的变化。
+    final sensitivityFactor = screenHeight * 0.3;
+
+    double change = -verticalDragDelta / sensitivityFactor;
+    // 使用 _initialDragBrightness 作为基准来计算变化量
+    double newBrightness = _initialDragBrightness + change;
+    newBrightness = newBrightness.clamp(0.0, 1.0);
+
+    try {
+      await ScreenBrightness().setScreenBrightness(newBrightness);
+      _currentBrightness = newBrightness;
+      // 更新 _initialDragBrightness 为当前成功设置的亮度，以确保下次拖拽的起点是连贯的
+      _initialDragBrightness = newBrightness;
+      _showBrightnessIndicator();
+      _notifyListeners();
+      ////debugPrint("[VideoPlayerState] Brightness updated. Current: $_currentBrightness, InitialDrag: $_initialDragBrightness");
+    } catch (e) {
+      //debugPrint("Failed to set screen brightness: $e");
+    }
+  }
+
+  void endBrightnessDrag() {
+    if (!globals.isMobilePlatform) return;
+    // _initialDragBrightness is already updated at the start of the next drag.
+    // The indicator will hide via its own timer.
+    // No specific action needed here unless we want to immediately save or something.
+    // debugPrint("Brightness drag ended. Current brightness: $_currentBrightness");
+  }
+
+  void _showBrightnessIndicator() {
+    if (!globals.isMobilePlatform || _context == null) return;
+
+    _isBrightnessIndicatorVisible = true;
+
+    if (_brightnessOverlayEntry == null) {
+      _brightnessOverlayEntry = OverlayEntry(
+        builder: (context) {
+          return ChangeNotifierProvider<VideoPlayerState>.value(
+            value: this,
+            child: Consumer<VideoPlayerState>(
+              builder: (context, videoState, _) {
+                return Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      transform: Matrix4.translationValues(
+                        videoState.isBrightnessIndicatorVisible ? -35.0 : 70.0,
+                        0.0,
+                        0.0,
+                      ),
+                      child: const BrightnessIndicator(),
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      );
+      Overlay.of(_context!).insert(_brightnessOverlayEntry!);
+    }
+
+    _notifyListeners();
+
+    _brightnessIndicatorTimer?.cancel();
+    _brightnessIndicatorTimer = Timer(const Duration(seconds: 2), () {
+      _hideBrightnessIndicator();
+    });
+    // The final _notifyListeners() from the original method is already covered above.
+  }
+
+  void _hideBrightnessIndicator() {
+    if (!globals.isMobilePlatform) return;
+    _brightnessIndicatorTimer?.cancel();
+
+    if (_isBrightnessIndicatorVisible) {
+      _isBrightnessIndicatorVisible = false;
+      _notifyListeners();
+
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (_brightnessOverlayEntry != null) {
+          _brightnessOverlayEntry!.remove();
+          _brightnessOverlayEntry = null;
+        }
+      });
+    } else {
+      if (_brightnessOverlayEntry != null) {
+        _brightnessOverlayEntry!.remove();
+        _brightnessOverlayEntry = null;
+      }
+    }
+  }
+
+  // Volume Indicator Overlay Methods
+  void _showVolumeIndicator() {
+    if (_context == null) return;
+
+    _isVolumeIndicatorVisible = true;
+
+    if (_volumeOverlayEntry == null) {
+      _volumeOverlayEntry = OverlayEntry(
+        builder: (context) {
+          return ChangeNotifierProvider<VideoPlayerState>.value(
+            value: this,
+            child: Consumer<VideoPlayerState>(
+              builder: (context, videoState, _) {
+                return Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      transform: Matrix4.translationValues(
+                        videoState.isVolumeUIVisible ? 35.0 : -70.0,
+                        0.0,
+                        0.0,
+                      ),
+                      child: const VolumeIndicator(),
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      );
+      Overlay.of(_context!).insert(_volumeOverlayEntry!);
+    }
+    _notifyListeners();
+
+    _volumeIndicatorTimer?.cancel();
+    _volumeIndicatorTimer = Timer(const Duration(seconds: 2), () {
+      _hideVolumeIndicator();
+    });
+  }
+
+  void _hideVolumeIndicator() {
+    // if (!globals.isPhone) return; // 原始判断可能阻止PC
+    _volumeIndicatorTimer?.cancel();
+
+    if (_isVolumeIndicatorVisible) {
+      _isVolumeIndicatorVisible = false;
+      _notifyListeners();
+
+      Future.delayed(const Duration(milliseconds: 150), () {
+        if (_volumeOverlayEntry != null) {
+          _volumeOverlayEntry!.remove();
+          _volumeOverlayEntry = null;
+        }
+      });
+    } else {
+      if (_volumeOverlayEntry != null) {
+        _volumeOverlayEntry!.remove();
+        _volumeOverlayEntry = null;
+      }
+    }
+  }
+
+  Future<void> _loadLastVideo() async {
+    // 不再自动加载上次视频，让用户手动选择
+    return;
+  }
+
+  Future<void> _saveLastVideo() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastVideoKey, _currentVideoPath ?? '');
+    await prefs.setInt(_lastPositionKey, _position.inMilliseconds);
+  }
+
+  // 保存视频播放位置
+  Future<void> _saveVideoPosition(String path, int position) async {
+    final prefs = await SharedPreferences.getInstance();
+    final positions = prefs.getString(_videoPositionsKey) ?? '{}';
+    final Map<String, dynamic> positionMap =
+        Map<String, dynamic>.from(json.decode(positions));
+    positionMap[path] = position;
+    await prefs.setString(_videoPositionsKey, json.encode(positionMap));
+  }
+
+  // 获取视频播放位置（支持iOS容器路径修复和进度回退）
+  Future<int> _getVideoPosition(String path) async {
+    final prefs = await SharedPreferences.getInstance();
+    final positions = prefs.getString(_videoPositionsKey) ?? '{}';
+    final Map<String, dynamic> positionMap =
+        Map<String, dynamic>.from(json.decode(positions));
+
+    // 1. 直接查找原路径
+    int position = positionMap[path] ?? 0;
+    if (position > 0) {
+      return position;
+    }
+
+    // 2. iOS平台：尝试修复容器路径查找进度
+    if (!kIsWeb && Platform.isIOS) {
+      final fixedPath = await iOSContainerPathFixer.fixContainerPath(path);
+      if (fixedPath != null) {
+        position = positionMap[fixedPath] ?? 0;
+        if (position > 0) {
+          debugPrint('通过iOS路径修复找到播放进度: $position ms');
+          // 同时更新新路径的进度记录
+          positionMap[path] = position;
+          await prefs.setString(_videoPositionsKey, json.encode(positionMap));
+          return position;
+        }
+      }
+
+      // 3. iOS进度回退：通过视频识别结果查询进度
+      if (_animeId != null && _episodeId != null) {
+        try {
+          final historyByEpisode = await WatchHistoryDatabase.instance
+              .getHistoryByEpisode(_animeId!, _episodeId!);
+          if (historyByEpisode != null && historyByEpisode.lastPosition > 0) {
+            debugPrint('通过视频识别回退查找到播放进度: ${historyByEpisode.lastPosition} ms');
+            debugPrint(
+                '匹配视频: ${historyByEpisode.animeName} - ${historyByEpisode.episodeTitle}');
+
+            // 保存到新路径
+            positionMap[path] = historyByEpisode.lastPosition;
+            await prefs.setString(_videoPositionsKey, json.encode(positionMap));
+            return historyByEpisode.lastPosition;
+          }
+        } catch (e) {
+          debugPrint('通过视频识别查询进度失败: $e');
+        }
+      }
+    }
+
+    return 0;
+  }
+}

@@ -1,0 +1,347 @@
+name: nipaplay
+description: "咪啪～☆."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.11.6
+
+environment:
+  sdk: ^3.5.3
+  
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Cross-platform IPC (Windows named pipe / Unix domain socket)
+  dart_ipc: ^1.0.1
+
+  # Shelf for web server
+  shelf: ^1.4.1
+  shelf_static: ^1.1.2
+  shelf_router: ^1.1.4
+  shelf_cors_headers: ^0.1.5
+  
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  window_manager: ^0.4.3
+  screen_retriever: ^0.2.0
+  tray_manager: ^0.5.2
+  shared_preferences: ^2.2.2
+  # Flutter's tvOS fork only registers plugins that explicitly expose a tvOS
+  # implementation. Pin the official fluttertv ports for reproducible builds.
+  shared_preferences_tvos:
+    git:
+      url: https://github.com/fluttertv/plugins.git
+      ref: 79dc1ac13b94d593e2361bf10b5ed8bdd225d3db
+      path: packages/shared_preferences_tvos
+  provider: ^6.1.2
+  file_selector: ^1.0.3
+  path_provider: ^2.1.2
+  path_provider_tvos:
+    git:
+      url: https://github.com/fluttertv/plugins.git
+      ref: 79dc1ac13b94d593e2361bf10b5ed8bdd225d3db
+      path: packages/path_provider_tvos
+  path: ^1.9.1
+  # package_info_plus_tvos requires the 4.x platform interface exposed by 10.x.
+  # HarmonyOS keeps its older platform interface through its own override file.
+  package_info_plus: ^10.2.1
+  package_info_plus_tvos:
+    git:
+      url: https://github.com/fluttertv/plugins.git
+      ref: 79dc1ac13b94d593e2361bf10b5ed8bdd225d3db
+      path: packages/package_info_plus_tvos
+  image_picker: ^1.1.2
+  permission_handler: ^12.0.0+1
+  # Federated HarmonyOS implementation for permission_handler.
+  permission_handler_ohos:
+    path: packages/permission_handler_ohos
+  glassmorphism: ^3.0.0
+  # Keep the mainline-compatible release here. HarmonyOS selects the adapted
+  # 0.37.3 package through pubspec_overrides.ohos.yaml.
+  fvp: ^0.33.1
+  http: ^1.3.0
+  dio: ^5.1.0
+  xml: ^6.5.0
+  yaml: ^3.1.3
+  webdav_client: ^1.2.2
+  crypto: ^3.0.3
+  cached_network_image: ^3.4.1
+  hugeicons: ^0.0.10
+  url_launcher: ^6.3.1
+  universal_html: ^2.2.4
+  kmbal_ionicons: ^1.0.0
+  image: ^4.5.4
+  intl: ^0.20.2
+  uuid: ^4.5.1
+  transparent_image: ^2.0.1
+  # Shared with the tvOS federated implementation. HarmonyOS applies its
+  # compatible platform-interface override in pubspec_overrides.ohos.yaml.
+  wakelock_plus: ^1.7.0
+  wakelock_plus_tvos:
+    git:
+      url: https://github.com/fluttertv/plugins.git
+      ref: 79dc1ac13b94d593e2361bf10b5ed8bdd225d3db
+      path: packages/wakelock_plus_tvos
+  # Local fork aligns the OHOS Pigeon codec with platform_interface 1.3.x.
+  wakelock_plus_ohos:
+    path: packages/wakelock_plus_ohos
+  screen_brightness: ^2.1.3
+  volume_controller: ^3.4.0
+  universal_gamepad:
+    git:
+      url: https://github.com/makabaka11/universal_gamepad.git
+      ref: main
+  sqflite: ^2.3.2
+  sqflite_tvos:
+    git:
+      url: https://github.com/fluttertv/plugins.git
+      ref: 79dc1ac13b94d593e2361bf10b5ed8bdd225d3db
+      path: packages/sqflite_tvos
+  sqflite_common_ffi: ^2.3.3  # 用于桌面平台
+  video_player: 2.9.5
+  video_player_tvos:
+    git:
+      url: https://github.com/fluttertv/plugins.git
+      ref: 79dc1ac13b94d593e2361bf10b5ed8bdd225d3db
+      path: packages/video_player_tvos
+  media_kit:
+    path: packages/media_kit
+  media_kit_video:
+    path: packages/media_kit_video
+  media_kit_libs_video:
+    path: third_party/media-kit-upstream/libs/universal/media_kit_libs_video
+  erika_flutter:
+    git:
+      url: https://github.com/AimesSoft/Erika.git
+      ref: e1d598d032c69ec53c42fe38d49c1d48503f5a91
+      path: packages/erika_flutter
+  qr_flutter: ^4.1.0  # 用于生成二维码
+  mobile_scanner: ^7.2.0
+  flutter_svg: ^2.0.14  # 用于显示SVG图标
+  flutter_markdown: ^0.7.1
+  desktop_drop: ^0.6.1
+  # Local fork: secondary windows use the same Flutter engine/isolate so the
+  # player page can move without serializing playback state.
+  desktop_multi_window:
+    path: packages/desktop_multi_window
+  cupertino_icons: ^1.0.8
+  # Pure Dart subtitle decoding keeps HarmonyOS independent from platform
+  # channels while preserving CJK legacy encoding fallbacks.
+  charset: ^2.0.1
+  cp949_codec: ^1.0.2
+  enough_convert: ^1.6.0
+  system_info2: ^3.0.1
+  hotkey_manager: ^0.2.3
+  adaptive_platform_ui: ^0.1.98
+  liquid_glass_widgets: ^0.21.3
+  dynamic_color: ^1.6.0
+  fluent_ui: ^4.13.0
+  ffi: ^2.1.3
+  smb_connect: ^0.0.9
+  danmaku_canvas:
+    path: packages/danmaku_canvas
+  nipaplay_smb2:
+    path: packages/nipaplay_smb2
+  battery_plus: ^7.0.0
+  pinyin: ^3.3.0
+  rust_lib_nipaplay:
+    path: rust_builder
+  flutter_rust_bridge: 2.12.0
+  # Used on existing platforms. HarmonyOS uses the repository-owned QuickJS
+  # FFI bridge because flutter_js has no OHOS implementation.
+  flutter_js: ^0.8.0
+  # Optional plugin danmaku renderer host (enabled only on Android/iOS).
+  # 4.14+ requires Dart >=3.10 which the HarmonyOS fork (3.35.8, Dart 3.9.2) cannot resolve.
+  webview_flutter: ^4.13.1
+  audioplayers: ^6.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  path_provider_platform_interface: ^2.1.2
+  msix: ^3.16.13
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  web:
+    generate: true
+    image_path: "icons/new-icon-win.png"
+    background_color: "#ffffff"
+    theme_color: "#ffffff"
+  windows:
+    generate: true
+    image_path: "icons/new-icon-win.png"
+    icon_size: 48
+  macos:
+    generate: true
+    image_path: "icons/new-icon-mac.png"
+  linux:
+    generate: true
+    image_path: "icons/new-icon-win.png"
+
+  # Android 使用 new-icon.png
+  image_path: "icons/new-icon.png"
+  adaptive_icon_background: "#ffffff"
+  adaptive_icon_foreground: "icons/new-icon.png"
+  adaptive_icon_monochrome: "assets/nipaplay.png"
+
+  # iOS 使用 new-icon-apple.png
+  image_path_ios: "icons/new-icon-apple.png"
+  image_path_ios_dark_transparent:  "icons/new-icon-apple-dark.png"
+  remove_alpha_ios: true
+
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+      name: sqlite3
+      name_windows: winsqlite3
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+# The following section is specific to Flutter packages.
+flutter:
+  generate: true
+  assets:
+    - pubspec.lock
+    - packages/adaptive_platform_ui/pubspec.yaml
+    - packages/danmaku_canvas/pubspec.yaml
+    - packages/nipaplay_smb2/pubspec.yaml
+    - third_party/smb_connect/pubspec.yaml
+    - assets/build_info.json
+    - assets/logo.png
+    - assets/logo2.png
+    - assets/images/logo512.png
+    - assets/backempty.png
+    - assets/girl.png
+    - assets/nipaplay.png
+    - assets/dandanplay.png
+    - assets/bangumi.png
+    - assets/avatar.png
+    - assets/images/main_image.png
+    - assets/images/main_image_mobile.png
+    - assets/subfont.ttf
+    - assets/jellyfin.svg
+    - assets/emby.svg
+    - assets/danmaku-fill.svg
+    - assets/danmaku-off-fill.svg
+    - assets/sfx/
+    - assets/images/
+    # web assets (generated by build_and_copy_web.sh)
+    - assets/web/
+    - others/赞赏码.jpg
+    - assets/shaders/anime4k/
+    - assets/shaders/crt/
+    - assets/plugins/builtin/
+    - assets/plugins/custom/
+  # GPU着色器文件
+  shaders:
+    - assets/shaders/danmaku/msdf_text.frag
+    - assets/shaders/danmaku/msdf_text_next.frag
+    
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+  # To add assets to your application, add an assets section, like this:
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  fonts:
+    - family: subfont
+      fonts:
+        - asset: assets/subfont.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
+  #   - family: Trajan Pro
+  #     fonts:
+  #       - asset: fonts/TrajanPro.ttf
+  #       - asset: fonts/TrajanPro_Bold.ttf
+  #         weight: 700
+  #
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package
+
+# Add dependency_overrides for all media_kit related packages
+dependency_overrides:
+  # HarmonyOS-only dependency forks live in pubspec_overrides.ohos.yaml and
+  # Linux 3.47-only forks live in pubspec_overrides.linux.yaml. Keeping both
+  # profiles out of this shared graph lets every platform use its pinned SDK.
+  # Forked from 0.21.3 to fix obfuscated shape geometry and retain Android blur layers.
+  liquid_glass_widgets:
+    path: packages/liquid_glass_widgets
+  media_kit:
+    path: packages/media_kit
+  media_kit_video:
+    path: packages/media_kit_video
+  media_kit_libs_video:
+    path: third_party/media-kit-upstream/libs/universal/media_kit_libs_video
+  adaptive_platform_ui:
+    path: packages/adaptive_platform_ui
+  media_kit_libs_linux:
+    path: third_party/media-kit-upstream/libs/linux/media_kit_libs_linux
+  media_kit_libs_ios_video:
+    path: third_party/media-kit-upstream/libs/ios/media_kit_libs_ios_video
+  media_kit_libs_android_video:
+    path: third_party/media-kit-upstream/libs/android/media_kit_libs_android_video
+  media_kit_libs_windows_video:
+    path: third_party/media-kit-upstream/libs/windows/media_kit_libs_windows_video
+  media_kit_libs_macos_video:
+    path: third_party/media-kit-upstream/libs/macos/media_kit_libs_macos_video
+  smb_connect:
+    path: third_party/smb_connect
+  kmbal_ionicons:
+    path: third_party/kmbal_ionicons
+  volume_controller:
+    path: third_party/volume_controller
+
+
+
+msix_config:
+  store: true
+  language: zh-CN
+  identity_name: 33628AimesSoft.NipaPlay
+  publisher: CN=C59910EA-A156-4592-AEB5-22014F59AACA
+  publisher_display_name: AimesSoft
+  display_name: NipaPlay
+  msix_version: 1.19.21.0
+  logo_path: icons\new-icon-win.png

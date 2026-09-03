@@ -1,0 +1,296 @@
+name: 'Setup Flutter Environment'
+description: '设置 Flutter 开发环境，包括 Java、FVM/Flutter 和获取版本信息'
+inputs:
+  java-version:
+    description: 'Java 版本'
+    required: false
+    default: '21'
+  flutter-version:
+    description: 'Optional Flutter version override for a platform-specific build'
+    required: false
+    default: '3.44.6'
+  dependency-profile:
+    description: 'Dependency override profile: mainline or linux'
+    required: false
+    default: 'mainline'
+outputs:
+  version:
+    description: '从 pubspec.yaml 获取的应用版本'
+    value: ${{ steps.get_version.outputs.version }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: ${{ inputs.java-version }}
+
+    - name: Setup Dart (for FVM)
+      uses: dart-lang/setup-dart@v1
+
+    - name: Cache FVM & Pub cache (Linux/macOS)
+      if: runner.os != 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.fvm
+          ~/.pub-cache/bin
+          ~/.pub-cache/git/cache
+          ~/.pub-cache/global_packages
+          ~/.pub-cache/hosted
+        key: ${{ runner.os }}-fvm-${{ inputs.flutter-version }}-${{ inputs.dependency-profile }}-${{ hashFiles('.fvmrc') }}-${{ hashFiles('**/pubspec.lock') }}-${{ hashFiles('**/gradle-wrapper.properties') }}-v2
+        restore-keys: |
+          ${{ runner.os }}-fvm-
+
+    - name: Cache FVM & Pub cache (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.USERPROFILE }}\.fvm
+          ${{ env.LOCALAPPDATA }}\Pub\Cache\bin
+          ${{ env.LOCALAPPDATA }}\Pub\Cache\git\cache
+          ${{ env.LOCALAPPDATA }}\Pub\Cache\global_packages
+          ${{ env.LOCALAPPDATA }}\Pub\Cache\hosted
+        key: ${{ runner.os }}-fvm-${{ inputs.flutter-version }}-${{ inputs.dependency-profile }}-${{ hashFiles('.fvmrc') }}-${{ hashFiles('**/pubspec.lock') }}-${{ hashFiles('**/gradle-wrapper.properties') }}-v2
+        restore-keys: |
+          ${{ runner.os }}-fvm-
+
+    - name: Add Pub Cache bin to PATH (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        echo "${PUB_CACHE:-$HOME/.pub-cache}/bin" >> "$GITHUB_PATH"
+
+    - name: Add Pub Cache bin to PATH (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $pubCache = if ($env:PUB_CACHE) { $env:PUB_CACHE } else { "$env:LOCALAPPDATA\\Pub\\Cache" }
+        Add-Content -Path $env:GITHUB_PATH -Value "$pubCache\\bin"
+    
+    - name: Install FVM
+      shell: bash
+      run: |
+        dart pub global activate fvm
+
+    - name: Install Flutter via FVM (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        requested_version='${{ inputs.flutter-version }}'
+        if [ -n "$requested_version" ]; then
+          fvm install "$requested_version"
+          fvm use "$requested_version" --force
+        else
+          fvm install
+          fvm use --force
+        fi
+
+    - name: Install Flutter via FVM (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $requestedVersion = '${{ inputs.flutter-version }}'
+        if ($requestedVersion) {
+          fvm install $requestedVersion
+          fvm use $requestedVersion --force
+        } else {
+          fvm install
+          fvm use --force
+        }
+
+    - name: Add Flutter to PATH (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        echo "$GITHUB_WORKSPACE/.fvm/flutter_sdk/bin" >> "$GITHUB_PATH"
+
+    - name: Add Flutter to PATH (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Add-Content -Path $env:GITHUB_PATH -Value "$env:GITHUB_WORKSPACE\.fvm\flutter_sdk\bin"
+
+    - name: Disable Flutter analytics
+      shell: bash
+      run: |
+        flutter config --no-analytics
+        flutter --version
+
+    - name: Disable Swift Package Manager (force CocoaPods)
+      shell: bash
+      run: |
+        flutter config --no-enable-swift-package-manager
+
+    - name: Sync vendored submodules
+      shell: bash
+      run: |
+        if [ -f .gitmodules ]; then
+          git submodule sync --recursive
+          git submodule update --init --recursive
+        fi
+
+    - name: Configure platform dependency profile
+      shell: bash
+      run: |
+        dart run tool/configure_flutter_dependencies.dart '${{ inputs.dependency-profile }}'
+    
+    - name: Get app version
+      id: get_version
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          # Use PowerShell for Windows to extract version
+          VERSION=$(pwsh -Command "(Get-Content pubspec.yaml | Select-String -Pattern '^version:' | ForEach-Object { \$_ -replace '^version: ', '' }).Trim()")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        else
+          # Use grep/cut for Linux/macOS
+          echo "version=$(grep '^version:' pubspec.yaml | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Refresh Erika dependency
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -f "pubspec.lock" ]; then
+          echo "❌ pubspec.lock 不存在，无法刷新 Erika 依赖。"
+          echo "当前目录: $(pwd)"
+          ls -la
+          exit 1
+        fi
+
+        CONFIGURED_ERIKA_REF="$(awk '
+          /^  erika_flutter:/ {in_erika=1; next}
+          in_erika && /^      ref:/ {print $2; exit}
+          in_erika && /^  [^ ]/ {exit}
+        ' pubspec.yaml)"
+        ERIKA_REF="${ERIKA_REF:-${CONFIGURED_ERIKA_REF}}"
+        if [ -z "${ERIKA_REF}" ]; then
+          echo "Unable to resolve the Erika ref from pubspec.yaml."
+          exit 1
+        fi
+        ERIKA_REMOTE="https://github.com/AimesSoft/Erika.git"
+        if [[ "${ERIKA_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+          ERIKA_SHA="$(printf '%s' "${ERIKA_REF}" | tr '[:upper:]' '[:lower:]')"
+        else
+          ERIKA_SHA="$(git ls-remote "${ERIKA_REMOTE}" "refs/heads/${ERIKA_REF}" | awk '{print $1}')"
+          if [ -z "${ERIKA_SHA}" ]; then
+            ERIKA_SHA="$(git ls-remote "${ERIKA_REMOTE}" "refs/tags/${ERIKA_REF}^{}" | awk '{print $1}')"
+          fi
+          if [ -z "${ERIKA_SHA}" ]; then
+            ERIKA_SHA="$(git ls-remote "${ERIKA_REMOTE}" "refs/tags/${ERIKA_REF}" | awk '{print $1}')"
+          fi
+        fi
+        if [ -z "${ERIKA_SHA}" ]; then
+          echo "❌ 无法解析 Erika ref: ${ERIKA_REF}。"
+          exit 1
+        fi
+
+        PYTHON_BIN="python3"
+        if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
+          PYTHON_BIN="python"
+        fi
+
+        ERIKA_REF="${ERIKA_REF}" ERIKA_SHA="${ERIKA_SHA}" "${PYTHON_BIN}" - <<'PY'
+        import os
+        from pathlib import Path
+
+        erika_ref = os.environ["ERIKA_REF"]
+        erika_sha = os.environ["ERIKA_SHA"]
+
+        def update_erika_block(path, replacements):
+            lines = Path(path).read_text(encoding='utf-8').splitlines(keepends=True)
+            output = []
+            in_block = False
+            seen = set()
+
+            for line in lines:
+                if line == "  erika_flutter:\n":
+                    in_block = True
+                    output.append(line)
+                    continue
+
+                if in_block and line.startswith("  ") and not line.startswith("    "):
+                    missing = set(replacements) - seen
+                    if missing:
+                        raise SystemExit(f"{path}: missing Erika fields: {sorted(missing)}")
+                    in_block = False
+
+                if in_block:
+                    stripped = line.strip()
+                    key = stripped.split(":", 1)[0] if ":" in stripped else ""
+                    if key in replacements:
+                        indent = line[: len(line) - len(line.lstrip())]
+                        newline = "\n" if line.endswith("\n") else ""
+                        output.append(f"{indent}{key}: {replacements[key]}{newline}")
+                        seen.add(key)
+                        continue
+
+                output.append(line)
+
+            if in_block:
+                missing = set(replacements) - seen
+                if missing:
+                    raise SystemExit(f"{path}: missing Erika fields: {sorted(missing)}")
+
+            Path(path).write_text("".join(output), encoding='utf-8')
+
+        update_erika_block("pubspec.yaml", {"ref": erika_ref})
+        update_erika_block(
+            "pubspec.lock",
+            {
+                "ref": erika_ref,
+                "resolved-ref": f'"{erika_sha}"',
+            },
+        )
+        PY
+
+        echo "ERIKA_REF=${ERIKA_REF}" >> "$GITHUB_ENV"
+        echo "ERIKA_SHA=${ERIKA_SHA}" >> "$GITHUB_ENV"
+        echo "Erika ${ERIKA_REF} resolved to ${ERIKA_SHA}."
+    
+    - name: Flutter Pub Get
+      shell: bash
+      run: |
+        # Only set core.longpaths on Windows (not supported on macOS/Linux)
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          git config --global core.longpaths true
+        fi
+        if [ ! -f "pubspec.lock" ]; then
+          echo "❌ pubspec.lock 不存在，无法使用 --enforce-lockfile。"
+          echo "当前目录: $(pwd)"
+          ls -la
+          exit 1
+        fi
+        flutter pub get # 暂时移除了--enforce-lockfile
+
+    - name: Configure Erika prebuilt release
+      if: env.ERIKA_PREBUILT == '1' && env.ERIKA_FORCE_SOURCE_BUILD != '1'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ -n "${ERIKA_PREBUILT_TAG:-}" ]; then
+          echo "Using explicitly configured Erika prebuilt release ${ERIKA_PREBUILT_TAG}."
+          exit 0
+        fi
+
+        ERIKA_PACKAGE_VERSION="$(awk '
+          /^  erika_flutter:/ {in_erika=1; next}
+          in_erika && /^    version:/ {
+            gsub(/"/, "", $2)
+            print $2
+            exit
+          }
+          in_erika && /^  [^ ]/ {exit}
+        ' pubspec.lock)"
+        if [ -z "${ERIKA_PACKAGE_VERSION}" ]; then
+          echo "Unable to resolve the Erika package version from pubspec.lock." >&2
+          exit 1
+        fi
+
+        ERIKA_PREBUILT_TAG="v${ERIKA_PACKAGE_VERSION#v}"
+        echo "ERIKA_PREBUILT_TAG=${ERIKA_PREBUILT_TAG}" >> "$GITHUB_ENV"
+        echo "Erika ${ERIKA_REF} uses prebuilt release ${ERIKA_PREBUILT_TAG}."

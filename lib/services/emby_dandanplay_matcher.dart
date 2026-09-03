@@ -1,0 +1,1752 @@
+import 'dart:convert';
+import 'dart:ui';
+
+// crypto not needed here (hash computed in RemoteMediaFetcher)
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:nipaplay/models/emby_model.dart';
+import 'package:nipaplay/models/watch_history_model.dart';
+import 'package:nipaplay/services/dandanplay_service.dart';
+import 'package:nipaplay/services/danmaku_cache_manager.dart';
+import 'package:nipaplay/services/emby_episode_mapping_service.dart';
+import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/services/web_remote_access_service.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tvos_remote_text_input_scope.dart';
+import 'package:nipaplay/utils/remote_media_fetcher.dart';
+import 'package:nipaplay/providers/settings_provider.dart';
+import 'package:nipaplay/widgets/in_view_dialog.dart';
+import 'package:provider/provider.dart';
+
+/// 负责将Emby媒体与DandanPlay的内容匹配，以获取弹幕和元数据
+class EmbyDandanplayMatcher {
+  static final EmbyDandanplayMatcher instance =
+      EmbyDandanplayMatcher._internal();
+
+  EmbyDandanplayMatcher._internal();
+
+  final Map<String, Future<Map<String, dynamic>>> _videoInfoTasks = {};
+  final Map<String, Map<String, dynamic>> _videoInfoCache = {};
+
+  // 预计算哈希值和预匹配弹幕ID的方法
+  //
+  // 在视频播放前提前计算哈希值和匹配弹幕ID，避免播放时卡顿
+  // 返回一个包含预匹配结果的Map
+  Future<Map<String, dynamic>> precomputeVideoInfoAndMatch(
+      BuildContext context, EmbyEpisodeInfo episode) async {
+    if (context.read<SettingsProvider>().skipDanmakuMatching) {
+      return const {
+        'success': false,
+        'message': '已跳过弹幕匹配',
+      };
+    }
+    try {
+      final String seriesName = episode.seriesName ?? '未知剧集';
+      final String episodeName =
+          episode.name.isNotEmpty ? episode.name : '未知标题';
+      debugPrint('开始预计算Emby视频信息和匹配弹幕ID: $seriesName - $episodeName');
+
+      // 预计算阶段不再触发哈希计算，直接返回默认信息
+      final videoInfoMap = {
+        'hash': '',
+        'fileName': '$seriesName - $episodeName.mp4',
+        'fileSize': 0
+      };
+
+      // 获取预匹配结果
+      final matchResult =
+          await _matchWithDandanPlay(context, episode, false, videoInfoMap);
+
+      if (matchResult.isNotEmpty &&
+          matchResult['matches'] != null &&
+          matchResult['matches'].isNotEmpty) {
+        final match = matchResult['matches'][0];
+        final animeId = match['animeId'];
+        final episodeId = match['episodeId'];
+
+        if (episodeId != null && animeId != null) {
+          debugPrint('预匹配成功! 已获取ID: animeId=$animeId, episodeId=$episodeId');
+
+          // 预先获取弹幕数据并缓存，但不等待结果
+          _preloadDanmaku(episodeId.toString(), animeId);
+
+          return {
+            'success': true,
+            'animeId': animeId,
+            'episodeId': episodeId,
+            'animeTitle': match['animeTitle'],
+            'episodeTitle': match['episodeTitle'],
+            'videoHash': videoInfoMap['hash'], // 如果计算成功，则包含哈希值
+            'fileName': videoInfoMap['fileName'],
+            'fileSize': videoInfoMap['fileSize']
+          };
+        }
+      }
+
+      debugPrint('预匹配未能找到完全匹配的结果');
+      return {
+        'success': false,
+        'message': '预计算阶段不再执行哈希，仅在播放前处理',
+        'videoHash': '',
+        'fileName': videoInfoMap['fileName'],
+        'fileSize': videoInfoMap['fileSize']
+      };
+    } catch (e) {
+      debugPrint('预计算和匹配过程中出错: $e');
+      return {'success': false, 'message': e.toString()};
+    }
+  }
+
+  // 预加载弹幕数据（异步执行，不等待结果）
+  Future<void> _preloadDanmaku(String episodeId, int animeId) async {
+    try {
+      debugPrint('开始预加载弹幕: episodeId=$episodeId, animeId=$animeId');
+
+      // 检查是否已经缓存了弹幕数据
+      final cachedDanmaku =
+          await DanmakuCacheManager.getDanmakuFromCache(episodeId);
+      if (cachedDanmaku != null) {
+        debugPrint('弹幕已存在于缓存中，无需预加载: episodeId=$episodeId');
+        return;
+      }
+
+      // 异步预加载弹幕，不等待结果
+      DandanplayService.getDanmaku(episodeId, animeId).then((danmakuData) {
+        final count = danmakuData['count'];
+        if (count != null) {
+          debugPrint('弹幕预加载成功: 加载了$count条弹幕');
+        } else {
+          debugPrint('弹幕预加载成功，但无法确定数量');
+        }
+
+        // 确保弹幕数据被正确缓存
+        if (danmakuData['comments'] != null &&
+            danmakuData['comments'] is List) {
+          final List<dynamic> comments = danmakuData['comments'];
+          if (comments.isNotEmpty) {
+            debugPrint('已成功缓存 ${comments.length} 条弹幕');
+          }
+        }
+      }).catchError((e) {
+        debugPrint('弹幕预加载失败: $e');
+      });
+    } catch (e) {
+      debugPrint('预加载弹幕出错: $e');
+    }
+  }
+
+  /// 创建一个可播放的历史记录条目
+  ///
+  /// 将Emby媒体信息转换为可播放的WatchHistoryItem，同时尝试匹配DandanPlay元数据
+  ///
+  /// [context] 用于显示匹配对话框
+  /// [episode] Emby剧集信息
+  /// [showMatchDialog] 是否显示匹配对话框（默认true）
+  ///
+  /// 返回一个完整的WatchHistoryItem，包含弹幕信息
+  Future<WatchHistoryItem?> createPlayableHistoryItem(
+      BuildContext context, EmbyEpisodeInfo episode,
+      {bool showMatchDialog = true}) async {
+    if (context.read<SettingsProvider>().skipDanmakuMatching) {
+      return episode.toWatchHistoryItem();
+    }
+    // 1. 先创建基本的WatchHistoryItem
+    final historyItem = episode.toWatchHistoryItem();
+
+    try {
+      // 获取Emby流媒体URL（仅用于日志）
+      final streamUrl = await getPlayUrl(episode);
+      debugPrint('正在为Emby内容创建可播放项: ${episode.seriesName} - ${episode.name}');
+      debugPrint('Emby流媒体URL: $streamUrl');
+
+      // 获取视频信息（阻塞等待，确保优先尝试哈希匹配）
+      Map<String, dynamic> videoInfo = {};
+      try {
+        videoInfo = await calculateVideoHash(episode);
+      } catch (e) {
+        debugPrint('获取视频信息失败: $e');
+        videoInfo = {'hash': '', 'fileName': '', 'fileSize': 0};
+      }
+
+      // 2. 通过DandanPlay API匹配内容
+      final Map<String, dynamic> dummyVideoInfo = await _matchWithDandanPlay(
+          context, episode, showMatchDialog, videoInfo);
+      if (dummyVideoInfo['__cancel__'] == true) {
+        debugPrint('用户取消了弹幕匹配，直接返回null');
+        return null;
+      }
+
+      // 3. 如果匹配成功，更新历史条目的元数据
+      if (dummyVideoInfo.isNotEmpty && dummyVideoInfo['animeId'] != null) {
+        final animeId = dummyVideoInfo['animeId'];
+        final episodeId = dummyVideoInfo['episodeId'];
+
+        debugPrint('匹配成功! animeId=$animeId, episodeId=$episodeId');
+
+        // 使用转换后的数据更新WatchHistoryItem
+        final updatedItem = WatchHistoryItem(
+          filePath: historyItem.filePath, // 保持原始的emby://协议路径，实际播放时再替换
+          animeName: dummyVideoInfo['animeTitle'] ?? historyItem.animeName,
+          episodeTitle:
+              dummyVideoInfo['episodeTitle'] ?? historyItem.episodeTitle,
+          episodeId: episodeId,
+          animeId: animeId,
+          watchProgress: historyItem.watchProgress,
+          lastPosition: historyItem.lastPosition,
+          duration: historyItem.duration,
+          lastWatchTime: historyItem.lastWatchTime,
+          thumbnailPath: historyItem.thumbnailPath,
+          isFromScan: false,
+          videoHash: videoInfo['hash'], // 保存视频哈希值，用于后续匹配弹幕
+        );
+        debugPrint(
+            '创建了增强的历史记录项: ${updatedItem.animeName} - ${updatedItem.episodeTitle}');
+
+        // 保存映射关系到数据库
+        try {
+          await _saveMappingToDatabase(
+            episode: episode,
+            animeId: animeId,
+            animeTitle: dummyVideoInfo['animeTitle'] ?? historyItem.animeName,
+            episodeId: episodeId,
+            episodeTitle:
+                dummyVideoInfo['episodeTitle'] ?? historyItem.episodeTitle,
+          );
+        } catch (e) {
+          debugPrint('保存映射关系到数据库时出错: $e');
+          // 不影响主流程，继续返回匹配结果
+        }
+
+        return updatedItem;
+      } else {
+        debugPrint('没有匹配到DandanPlay内容，将使用原始历史记录项');
+      }
+    } catch (e) {
+      debugPrint('Emby媒体匹配失败: $e');
+      // 匹配失败仍然返回原始项，不中断播放流程
+    }
+
+    return historyItem;
+  }
+
+  /// 创建一个可播放的历史记录条目（电影版本）
+  ///
+  /// 将Emby电影信息转换为可播放的WatchHistoryItem，同时尝试匹配DandanPlay元数据
+  /// 复用现有的剧集匹配逻辑，内部进行兼容性转换
+  ///
+  /// [context] 用于显示匹配对话框
+  /// [movie] Emby电影信息
+  /// [showMatchDialog] 是否显示匹配对话框（默认true）
+  Future<WatchHistoryItem?> createPlayableHistoryItemFromMovie(
+      BuildContext context, EmbyMovieInfo movie,
+      {bool showMatchDialog = true}) async {
+    // 创建虚拟的EmbyEpisodeInfo来复用现有匹配逻辑
+    final episodeInfo = _createVirtualEpisodeFromMovie(movie);
+    // 直接调用现有的剧集匹配方法
+    final result = await createPlayableHistoryItem(context, episodeInfo,
+        showMatchDialog: showMatchDialog);
+    if (result == null) return null;
+    return result;
+  }
+
+  /// 创建虚拟的剧集信息从电影，用于复用现有匹配逻辑
+  EmbyEpisodeInfo _createVirtualEpisodeFromMovie(EmbyMovieInfo movie) {
+    return EmbyEpisodeInfo(
+      id: movie.id,
+      name: '电影', // 电影设置为通用标题，这样搜索时会是"电影名 电影"
+      overview: movie.overview,
+      seriesId: movie.id,
+      seriesName: movie.name, // 电影名作为系列名，这是主要的搜索关键词
+      seasonId: null,
+      seasonName: null,
+      indexNumber: 1, // 电影默认为第1集
+      parentIndexNumber: null,
+      imagePrimaryTag: movie.imagePrimaryTag,
+      dateAdded: movie.dateAdded,
+      premiereDate: movie.premiereDate,
+      runTimeTicks: movie.runTimeTicks,
+    );
+  }
+
+  /// 获取播放URL
+  ///
+  /// 根据Emby剧集信息获取媒体流URL
+  Future<String> getPlayUrl(EmbyEpisodeInfo episode) async {
+    final url = EmbyService.instance.getStreamUrlWithOptions(
+      episode.id,
+      forceDirectPlay: true,
+    );
+    debugPrint('Emby直连URL: $url');
+    return url;
+  }
+
+  /// 使用DandanPlay API匹配Emby内容
+  ///
+  /// 返回格式化为videoInfo的数据
+  /// [videoInfo] 包含视频哈希值、文件名和文件大小的Map
+  Future<Map<String, dynamic>> _matchWithDandanPlay(
+      BuildContext context, EmbyEpisodeInfo episode, bool showMatchDialog,
+      [Map<String, dynamic>? videoInfo]) async {
+    try {
+      // 构建匹配的查询参数
+      final String seriesName = episode.seriesName ?? '';
+      final String episodeName = episode.name;
+
+      final String queryTitle =
+          seriesName + (episodeName.isNotEmpty ? ' $episodeName' : '');
+
+      debugPrint('开始匹配Emby内容: "$queryTitle"');
+
+      // 如果有视频信息，尝试使用哈希值、文件名和文件大小进行匹配
+      final info = videoInfo;
+      bool hashMatchFailed = false;
+      if (info != null) {
+        final hasHash = info['hash']?.toString().isNotEmpty ?? false;
+        final fileSize = info['fileSize'];
+        final hasBasicInfo =
+            (info['fileName']?.toString().isNotEmpty ?? false) ||
+                (fileSize is int && fileSize > 0);
+
+        if (hasHash) {
+          debugPrint(
+              '尝试使用精确信息匹配: ${info['fileName']}, 文件大小: ${info['fileSize']} 字节, 哈希值: ${info['hash']}');
+
+          try {
+            final matchApiResult = await _matchWithDandanPlayAPI(info);
+            if (matchApiResult.isNotEmpty &&
+                matchApiResult['isMatched'] == true) {
+              debugPrint('使用match API精确匹配成功');
+              return matchApiResult;
+            } else {
+              debugPrint('match API匹配未成功，尝试fallback搜索');
+            }
+          } catch (e) {
+            debugPrint('使用match API匹配时出错: $e，尝试fallback搜索');
+          }
+          hashMatchFailed = true;
+        } else {
+          final reason = hasBasicInfo ? '缺少有效哈希值' : '没有可用的精确信息';
+          debugPrint('$reason，使用标题搜索匹配');
+        }
+      } else {
+        debugPrint('没有可用的精确信息，使用标题搜索匹配');
+      }
+
+      // 为弹窗预搜索一些候选项，但不依赖搜索结果
+      String extractSearchKeywordFromFileName(String rawName) {
+        if (rawName.trim().isEmpty) return '';
+        var name = rawName.split(RegExp(r'[\\/]')).last.trim();
+        name = name.replaceAll(RegExp(r'\.[^\.]+$'), '').trim();
+        return name;
+      }
+
+      String searchTitle = queryTitle;
+      if (hashMatchFailed) {
+        final rawFileName = (info?['fileName'] ?? '').toString();
+        final fileNameKeyword = extractSearchKeywordFromFileName(rawFileName);
+        if (fileNameKeyword.isNotEmpty) {
+          searchTitle = fileNameKeyword;
+        }
+      }
+
+      debugPrint('为弹窗预搜索候选动画: "$searchTitle"');
+      List<Map<String, dynamic>> animeMatches = [];
+
+      try {
+        animeMatches = await _searchAnime(searchTitle);
+        if (animeMatches.isEmpty && searchTitle != queryTitle) {
+          animeMatches = await _searchAnime(queryTitle);
+        }
+        debugPrint('预搜索找到 ${animeMatches.length} 个候选项');
+
+        // 如果通过标题搜索没找到匹配，尝试使用季名称搜索
+        if (animeMatches.isEmpty) {
+          debugPrint('尝试使用季名称搜索');
+          final String seriesNameOnly = episode.seriesName ?? '';
+          if (seriesNameOnly.isNotEmpty && seriesNameOnly != queryTitle) {
+            final seriesMatches = await _searchAnime(seriesNameOnly);
+            if (seriesMatches.isNotEmpty) {
+              debugPrint(
+                  '使用季名称"$seriesNameOnly"搜索到 ${seriesMatches.length} 个候选项');
+              animeMatches = seriesMatches;
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('预搜索过程中出错: $e，将显示空候选列表供手动搜索');
+      }
+
+      Map<String, dynamic>? selectedMatch; // This will hold the chosen anime
+      Map<String, dynamic>?
+          matchedEpisode; // This will hold the chosen episode, if selected directly in dialog
+      bool autoPickEnabled = true;
+      try {
+        autoPickEnabled = context
+            .read<SettingsProvider>()
+            .autoMatchDanmakuFirstSearchResultOnHashFail;
+      } catch (_) {}
+      final bool autoPickOnHashFail =
+          showMatchDialog && hashMatchFailed && autoPickEnabled;
+
+      if (showMatchDialog && !autoPickOnHashFail) {
+        // 显示匹配对话框，让用户手动选择
+        debugPrint(
+            '显示选择对话框 (有  [38;5;246m [48;5;236m${animeMatches.length} [0m 个预搜索候选项)');
+        final dialogResult = await showInViewDialog<Map<String, dynamic>>(
+          context: context,
+          barrierDismissible: false, // Make it modal, like Jellyfin's
+          builder: (context) => AnimeMatchDialog(
+            matches: animeMatches, // Pass current animeMatches, can be empty
+            episodeInfo: episode,
+          ),
+        );
+        // 关键：和Jellyfin一致，关闭弹窗时直接中断
+        if (dialogResult?['__cancel__'] == true) {
+          debugPrint('用户关闭了弹幕匹配弹窗，彻底中断匹配流程');
+          return {'__cancel__': true};
+        }
+        if (dialogResult == null) {
+          debugPrint('用户跳过了匹配对话框');
+          return {};
+        }
+        selectedMatch = dialogResult;
+        if (dialogResult.containsKey('episodeId') &&
+            dialogResult['episodeId'] != null) {
+          matchedEpisode = dialogResult;
+          debugPrint(
+              '用户选择了动画和剧集: ${dialogResult['animeTitle']} - ${dialogResult['episodeTitle']}');
+        } else {
+          debugPrint('用户选择了动画: ${dialogResult['animeTitle']}，但没有选择具体剧集');
+        }
+      } else {
+        if (autoPickOnHashFail) {
+          debugPrint('哈希匹配失败：自动选择文件名搜索的第一个结果（跳过弹窗）');
+          if (animeMatches.isNotEmpty) {
+            selectedMatch = animeMatches.first;
+            debugPrint('自动选择第一个动画: ${selectedMatch['animeTitle']}');
+            try {
+              final episodesList = await _getAnimeEpisodes(
+                selectedMatch['animeId'],
+                selectedMatch['animeTitle'],
+              );
+              if (episodesList.isNotEmpty && episode.indexNumber != null) {
+                final targetEpisode = episodesList.firstWhere(
+                  (ep) {
+                    final episodeIndex = ep['episodeIndex'];
+                    int epIndex = 0;
+                    if (episodeIndex is int) {
+                      epIndex = episodeIndex;
+                    } else if (episodeIndex is String) {
+                      epIndex = int.tryParse(episodeIndex) ?? 0;
+                    }
+                    return epIndex == episode.indexNumber;
+                  },
+                  orElse: () => {},
+                );
+                if (targetEpisode.isNotEmpty) {
+                  matchedEpisode = targetEpisode;
+                  debugPrint(
+                      '自动匹配到剧集: ${matchedEpisode['episodeTitle']}, episodeId=${matchedEpisode['episodeId']}');
+                } else {
+                  debugPrint('自动匹配剧集未命中，将交由后续逻辑继续尝试');
+                }
+              }
+            } catch (e) {
+              debugPrint('自动匹配剧集时出错: $e，将交由后续逻辑继续尝试');
+            }
+          } else {
+            debugPrint('自动选择失败：没有找到候选动画');
+          }
+        } else {
+          // 预匹配模式：尝试自动选择最佳匹配项
+          debugPrint('预匹配模式：尝试自动选择最佳匹配');
+          if (animeMatches.isNotEmpty) {
+            selectedMatch = animeMatches.first; // 选择第一个匹配项
+            debugPrint('自动选择第一个动画: ${selectedMatch['animeTitle']}');
+
+            // 尝试自动匹配剧集
+            final episodesList = await _getAnimeEpisodes(
+                selectedMatch['animeId'], selectedMatch['animeTitle']);
+            if (episodesList.isNotEmpty && episode.indexNumber != null) {
+              // 尝试通过集数匹配
+              final targetEpisode = episodesList.firstWhere(
+                (ep) {
+                  final episodeIndex = ep['episodeIndex'];
+                  int epIndex = 0;
+                  if (episodeIndex is int) {
+                    epIndex = episodeIndex;
+                  } else if (episodeIndex is String) {
+                    epIndex = int.tryParse(episodeIndex) ?? 0;
+                  }
+                  return epIndex == episode.indexNumber;
+                },
+                orElse: () => {},
+              );
+
+              if (targetEpisode.isNotEmpty) {
+                matchedEpisode = targetEpisode;
+                debugPrint(
+                    '自动匹配到剧集: ${matchedEpisode['episodeTitle']}, episodeId=${matchedEpisode['episodeId']}');
+              } else {
+                debugPrint('无法自动匹配剧集，预匹配失败');
+                selectedMatch = null; // 预匹配失败
+              }
+            } else {
+              debugPrint('无法获取剧集列表或没有集数信息，预匹配失败');
+              selectedMatch = null; // 预匹配失败
+            }
+          } else {
+            debugPrint('预匹配：没有找到候选动画');
+          }
+        }
+      }
+
+      // 自动选择模式下，如果预搜索为空，则回退弹窗让用户手动搜索
+      if (selectedMatch == null && showMatchDialog && autoPickOnHashFail) {
+        debugPrint('自动选择失败（无候选项），回退弹幕匹配弹窗');
+        final dialogResult = await showInViewDialog<Map<String, dynamic>>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AnimeMatchDialog(
+            matches: animeMatches,
+            episodeInfo: episode,
+          ),
+        );
+        if (dialogResult?['__cancel__'] == true) {
+          debugPrint('用户关闭了弹幕匹配弹窗，彻底中断匹配流程');
+          return {'__cancel__': true};
+        }
+        if (dialogResult == null) {
+          debugPrint('用户跳过了匹配对话框');
+          return {};
+        }
+        selectedMatch = dialogResult;
+        if (dialogResult.containsKey('episodeId') &&
+            dialogResult['episodeId'] != null) {
+          matchedEpisode = dialogResult;
+          debugPrint(
+              '用户选择了动画和剧集: ${dialogResult['animeTitle']} - ${dialogResult['episodeTitle']}');
+        } else {
+          debugPrint('用户选择了动画: ${dialogResult['animeTitle']}，但没有选择具体剧集');
+        }
+      }
+
+      // If no match was selected (either dialog cancelled/skipped, or no auto-match)
+      if (selectedMatch == null) {
+        debugPrint('最终没有选择任何匹配项或用户跳过。');
+        return {
+          'isMatched': false,
+          'animeId': null,
+          'episodeId': null,
+          'animeTitle': episode.seriesName ??
+              episode.name, // Fallback to original Emby titles
+          'episodeTitle': episode.name,
+          'matches': [], // Keep structure consistent
+        };
+      }
+
+      // At this point, selectedMatch is not null.
+      // We need to determine matchedEpisode if it wasn't set by the dialog or if it's still null.
+      if (matchedEpisode == null) {
+        debugPrint('需要为动画 "${selectedMatch['animeTitle']}" 查找或确认剧集');
+        final episodesList = await _getAnimeEpisodes(
+            selectedMatch['animeId'], selectedMatch['animeTitle']);
+        if (episodesList.isNotEmpty) {
+          if (episode.indexNumber != null) {
+            // Try to match by episode.indexNumber
+            matchedEpisode = episodesList.firstWhere(
+                (ep) => ep['episodeNumber'] == episode.indexNumber, orElse: () {
+              debugPrint(
+                  '无法通过 indexNumber ${episode.indexNumber} 找到剧集，将尝试选择第一个剧集');
+              return episodesList[0];
+            });
+          } else {
+            // No indexNumber from Emby episode, default to the first episode of the matched anime
+            matchedEpisode = episodesList[0];
+            debugPrint('Emby剧集无indexNumber，默认为匹配动画的第一个剧集');
+          }
+        } else {
+          debugPrint('无法获取动画 "${selectedMatch['animeTitle']}" 的剧集列表');
+        }
+      }
+
+      if (matchedEpisode == null) {
+        debugPrint('无法找到或确定匹配的剧集 for anime "${selectedMatch['animeTitle']}"');
+        // We have an anime match, but no episode match.
+        return {
+          'isMatched': true, // Matched an anime
+          'animeId': selectedMatch['animeId'],
+          'animeTitle': selectedMatch['animeTitle'],
+          'episodeId': null,
+          'episodeTitle': episode.name, // Fallback to original episode name
+          'matches': [
+            {
+              'animeId': selectedMatch['animeId'],
+              'animeTitle': selectedMatch['animeTitle'],
+              'episodeId': null,
+              'episodeTitle': episode.name,
+            }
+          ]
+        };
+      }
+
+      // Successfully matched anime and episode
+      final dynamic episodeId = matchedEpisode['episodeId'];
+      // Ensure episodeTitle is a String, fallback to Emby's episode name if necessary
+      final String episodeTitle = (matchedEpisode['episodeTitle'] is String &&
+              matchedEpisode['episodeTitle'].isNotEmpty)
+          ? matchedEpisode['episodeTitle']
+          : episode.name;
+
+      if (episodeId == null) {
+        debugPrint('严重错误: 匹配过程结束但episodeId仍为空，弹幕功能可能无法正常工作');
+      } else {
+        debugPrint(
+            '匹配成功: animeId=${selectedMatch['animeId']}, episodeId=$episodeId, 标题=${selectedMatch['animeTitle']} - $episodeTitle');
+
+        // 保存映射关系到数据库
+        try {
+          await _saveMappingToDatabase(
+            episode: episode,
+            animeId: selectedMatch['animeId'],
+            animeTitle: selectedMatch['animeTitle'],
+            episodeId: episodeId,
+            episodeTitle: episodeTitle,
+          );
+        } catch (e) {
+          debugPrint('保存映射关系到数据库时出错: $e');
+          // 不影响主流程，继续返回匹配结果
+        }
+      }
+
+      return {
+        'isMatched': true,
+        'animeId': selectedMatch['animeId'],
+        'animeTitle': selectedMatch['animeTitle'],
+        'episodeId': episodeId,
+        'episodeTitle': episodeTitle,
+        'matches': [
+          {
+            'animeId': selectedMatch['animeId'],
+            'animeTitle': selectedMatch['animeTitle'],
+            'episodeId': episodeId,
+            'episodeTitle': episodeTitle,
+          }
+        ]
+      };
+    } catch (e) {
+      debugPrint('在 _matchWithDandanPlay 过程中发生错误: $e');
+      // Fallback for any unexpected error during the matching process
+      return {
+        'isMatched': false,
+        'animeId': null,
+        'episodeId': null,
+        'animeTitle': episode.seriesName ?? episode.name,
+        'episodeTitle': episode.name,
+        'matches': [],
+        'error': e.toString(),
+      };
+    }
+  }
+
+  /// 使用弹弹play的match API进行精确匹配
+  ///
+  /// [videoInfo] 包含文件哈希值、文件名和文件大小的Map
+  Future<Map<String, dynamic>> _matchWithDandanPlayAPI(
+      Map<String, dynamic> videoInfo) async {
+    try {
+      final String? hash = videoInfo['hash'] as String?;
+      final String? fileName = videoInfo['fileName'] as String?;
+      final int fileSize = (videoInfo['fileSize'] ?? 0) as int;
+
+      if ((hash == null || hash.isEmpty) &&
+          (fileName == null || fileName.isEmpty)) {
+        return {};
+      }
+
+      debugPrint(
+          '使用弹弹play的match API进行精确匹配: hash=$hash, fileName=$fileName, fileSize=$fileSize');
+
+      final appSecret = await DandanplayService.getAppSecret();
+      final timestamp =
+          (DateTime.now().toUtc().millisecondsSinceEpoch / 1000).round();
+      const apiPath = '/api/v2/match';
+
+      final headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-AppId': DandanplayService.appId,
+        'X-Signature': DandanplayService.generateSignature(
+            DandanplayService.appId, timestamp, apiPath, appSecret),
+        'X-Timestamp': '$timestamp',
+      };
+
+      final body = json.encode({
+        'fileName': fileName,
+        'fileHash': hash,
+        'fileSize': fileSize,
+        'matchMode': 'hashAndFileName',
+      });
+
+      debugPrint('发送匹配请求到弹弹play API');
+      final response = await http.post(
+        WebRemoteAccessService.proxyUri(
+          Uri.parse('${await DandanplayService.getApiBaseUrl()}/api/v2/match'),
+        ),
+        headers: headers,
+        body: body,
+      );
+
+      debugPrint('弹弹play match API响应状态: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['isMatched'] == true) {
+          return _normalizeMatchApiResult(data);
+        }
+      }
+    } catch (e) {
+      debugPrint('使用弹弹play match API时出错: $e');
+    }
+
+    return {};
+  }
+
+  Map<String, dynamic> _normalizeMatchApiResult(Map<String, dynamic> raw) {
+    final matches = raw['matches'];
+    final normalizedMatches = (matches is List)
+        ? matches
+            .whereType<Map<String, dynamic>>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+        : <Map<String, dynamic>>[];
+
+    if (normalizedMatches.isNotEmpty) {
+      final bestMatch = normalizedMatches.first;
+      final animeId = bestMatch['animeId'];
+      final episodeId = bestMatch['episodeId'];
+      final animeTitle = bestMatch['animeTitle'] ?? raw['animeTitle'];
+      final episodeTitle = bestMatch['episodeTitle'] ?? raw['episodeTitle'];
+
+      return {
+        'isMatched': true,
+        'animeId': animeId,
+        'animeTitle': animeTitle,
+        'episodeId': episodeId,
+        'episodeTitle': episodeTitle,
+        'matches': normalizedMatches,
+      };
+    }
+
+    return {
+      'isMatched': true,
+      'animeId': raw['animeId'],
+      'animeTitle': raw['animeTitle'],
+      'episodeId': raw['episodeId'],
+      'episodeTitle': raw['episodeTitle'],
+      'matches': normalizedMatches,
+    };
+  }
+
+  /// 搜索动画
+  ///
+  /// [keyword] 搜索关键词
+  ///
+  /// 返回匹配的动画列表
+  Future<List<Map<String, dynamic>>> _searchAnime(String keyword) async {
+    try {
+      // 移除常见的无关词汇
+      String cleanedKeyword = keyword
+          .replaceAll(RegExp(r'\s*\(\d+\)\s*'), '') // 移除年份
+          .replaceAll(RegExp(r'\s*第\d+季\s*'), '') // 移除季度信息
+          .replaceAll(RegExp(r'\s*S\d+\s*'), '') // 移除S1, S2等
+          .trim();
+
+      if (cleanedKeyword.isEmpty) {
+        cleanedKeyword = keyword; // 如果清理后为空，使用原始关键词
+      }
+
+      debugPrint('搜索动画关键词: "$cleanedKeyword"');
+      final results = await DandanplayService.searchAnime(cleanedKeyword);
+      if (results.any((anime) =>
+          anime.containsKey('animeId') && anime.containsKey('animeTitle'))) {
+        debugPrint('找到 ${results.length} 个匹配动画');
+        return results;
+      } else {
+        debugPrint('搜索结果为空或格式不正确');
+      }
+    } catch (e) {
+      debugPrint('搜索动画时出错: $e');
+    }
+
+    return [];
+  }
+
+  /// 获取动画的剧集列表
+  ///
+  /// [animeId] 动画ID
+  /// [animeTitle] 动画标题（用于日志）
+  ///
+  /// 返回剧集列表
+  Future<List<Map<String, dynamic>>> _getAnimeEpisodes(
+      int animeId, String animeTitle) async {
+    try {
+      debugPrint('获取动画剧集列表: animeId=$animeId, title="$animeTitle"');
+
+      final appSecret = await DandanplayService.getAppSecret();
+      final timestamp =
+          (DateTime.now().toUtc().millisecondsSinceEpoch / 1000).round();
+      final apiPath = '/api/v2/bangumi/$animeId';
+
+      final baseUrl = await DandanplayService.getApiBaseUrl();
+      final uri =
+          WebRemoteAccessService.proxyUri(Uri.parse('$baseUrl$apiPath'));
+
+      final headers = {
+        'Accept': 'application/json',
+        'X-AppId': DandanplayService.appId,
+        'X-Signature': DandanplayService.generateSignature(
+            DandanplayService.appId, timestamp, apiPath, appSecret),
+        'X-Timestamp': '$timestamp',
+      };
+
+      final response = await http.get(uri, headers: headers);
+
+      debugPrint('剧集列表请求状态码: ${response.statusCode}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data['bangumi'] != null && data['bangumi']['episodes'] != null) {
+          final episodes = data['bangumi']['episodes'] as List;
+          debugPrint('获取到 ${episodes.length} 个剧集');
+
+          return episodes
+              .map((episode) => {
+                    'episodeId': episode['episodeId'],
+                    'episodeTitle': episode['episodeTitle'],
+                    'episodeIndex': episode['episodeNumber'] is int
+                        ? episode['episodeNumber']
+                        : int.tryParse(
+                                episode['episodeNumber']?.toString() ?? '0') ??
+                            0, // 确保episodeIndex是数字
+                  })
+              .toList();
+        } else {
+          debugPrint('剧集数据格式不正确');
+        }
+      } else {
+        debugPrint('获取剧集列表失败: HTTP ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('获取剧集列表时出错: $e');
+    }
+
+    return [];
+  }
+
+  /// 从Emby流媒体URL中提取元数据
+  ///
+  /// [streamUrl]是Emby流媒体URL
+  ///
+  /// 返回包含视频元数据的Map
+  Future<Map<String, dynamic>> extractMetadataFromStreamUrl(
+      String streamUrl) async {
+    try {
+      // 尝试从URL中提取itemId
+      final RegExp regExp = RegExp(r'/Videos/([^/]+)/stream');
+      final match = regExp.firstMatch(streamUrl);
+
+      if (match != null && match.groupCount >= 1) {
+        final String itemId = match.group(1)!;
+        debugPrint('从流媒体URL中提取的itemId: $itemId');
+
+        // 从EmbyService获取更多详细信息
+        try {
+          // 尝试从服务获取剧集详情
+          final episodeDetails =
+              await EmbyService.instance.getEpisodeDetails(itemId);
+
+          if (episodeDetails != null) {
+            debugPrint(
+                '成功获取剧集详情: ${episodeDetails.seriesName} - ${episodeDetails.name}');
+
+            return {
+              'seriesName': episodeDetails.seriesName,
+              'episodeTitle': episodeDetails.name,
+              'episodeId': itemId,
+              'emby': true,
+              'success': true
+            };
+          }
+        } catch (detailsError) {
+          debugPrint('获取剧集详情时出错: $detailsError');
+        }
+      }
+    } catch (e) {
+      debugPrint('从流媒体URL中提取元数据时出错: $e');
+    }
+
+    return {'success': false};
+  }
+
+  /// 计算Emby流媒体视频的哈希值（使用前16MB数据）
+  /// 获取原始文件名和文件大小信息
+  ///
+  /// [episode] Emby剧集信息
+  ///
+  /// 返回包含哈希值、原始文件名和文件大小的Map
+  ///
+  /// 优先通过直连流+WebDAV首段策略自动计算哈希，失败时回退到手动匹配
+  Future<Map<String, dynamic>> calculateVideoHash(EmbyEpisodeInfo episode) {
+    final cached = _videoInfoCache[episode.id];
+    if (cached != null) {
+      debugPrint('命中Emby视频哈希缓存: ${episode.id}');
+      return Future.value(cached);
+    }
+
+    final runningTask = _videoInfoTasks[episode.id];
+    if (runningTask != null) {
+      debugPrint('复用进行中的Emby哈希任务: ${episode.id}');
+      return runningTask;
+    }
+
+    final task = _computeVideoHashInternal(episode).then((result) {
+      if (_isValidVideoInfo(result)) {
+        _videoInfoCache[episode.id] = result;
+      }
+      return result;
+    });
+
+    _videoInfoTasks[episode.id] = task;
+    task.whenComplete(() => _videoInfoTasks.remove(episode.id));
+    return task;
+  }
+
+  Future<Map<String, dynamic>> _computeVideoHashInternal(
+      EmbyEpisodeInfo episode) async {
+    final String seriesName = episode.seriesName ?? '未知剧集';
+    final String episodeName = episode.name.isNotEmpty ? episode.name : '未知标题';
+    final String fallbackFileName = '$seriesName - $episodeName.mp4';
+
+    try {
+      final streamUrl = EmbyService.instance
+          .getStreamUrlWithOptions(episode.id, forceDirectPlay: true);
+      debugPrint('Emby 哈希计算使用直连URL: $streamUrl');
+
+      final remoteHead =
+          await RemoteMediaFetcher.fetchHead(Uri.parse(streamUrl));
+      debugPrint(
+          'Emby 哈希计算成功，读取 ${remoteHead.bytesHashed} 字节，hash=${remoteHead.hash}');
+
+      final resolvedFileName = _resolveFileName(
+        remoteHead.fileName,
+        null,
+        fallbackFileName,
+      );
+
+      final resolvedFileSize = _resolveFileSize(
+        remoteHead.fileSize,
+        null,
+      );
+
+      return {
+        'hash': remoteHead.hash,
+        'fileName': resolvedFileName,
+        'fileSize': resolvedFileSize,
+      };
+    } catch (e, stackTrace) {
+      debugPrint('Emby 自动哈希失败，回退到手动匹配: $e');
+      debugPrint('错误堆栈: $stackTrace');
+      return {
+        'hash': '',
+        'fileName': fallbackFileName,
+        'fileSize': 0,
+      };
+    }
+  }
+
+  bool _isValidVideoInfo(Map<String, dynamic> info) {
+    final hash = (info['hash'] as String?)?.trim() ?? '';
+    final fileSize = info['fileSize'] as int? ?? 0;
+    return hash.isNotEmpty && fileSize > 0;
+  }
+
+  String _resolveFileName(
+    String remoteName,
+    Map<String, dynamic>? mediaInfo,
+    String fallback,
+  ) {
+    final trimmedRemote = remoteName.trim();
+    if (_looksLikeRealFileName(trimmedRemote)) {
+      return trimmedRemote;
+    }
+
+    final metadataName = mediaInfo?['fileName']?.toString();
+    if (metadataName != null && metadataName.trim().isNotEmpty) {
+      return metadataName.trim();
+    }
+
+    return fallback;
+  }
+
+  int _resolveFileSize(int remoteSize, dynamic metadataSize) {
+    if (remoteSize > 0) {
+      return remoteSize;
+    }
+
+    final parsed = _tryParseSize(metadataSize);
+    return parsed ?? 0;
+  }
+
+  bool _looksLikeRealFileName(String name) {
+    if (name.isEmpty) return false;
+    final lower = name.toLowerCase();
+    if (lower == 'stream' || lower == 'video' || lower == 'master.m3u8') {
+      return false;
+    }
+    return name.contains('.');
+  }
+
+  int? _tryParseSize(dynamic value) {
+    if (value is int) {
+      return value > 0 ? value : null;
+    }
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      return parsed != null && parsed > 0 ? parsed : null;
+    }
+    return null;
+  }
+
+  /// 保存映射关系到数据库
+  Future<void> _saveMappingToDatabase({
+    required EmbyEpisodeInfo episode,
+    required int animeId,
+    required String animeTitle,
+    required dynamic episodeId,
+    required String episodeTitle,
+  }) async {
+    try {
+      debugPrint('[Emby映射] 开始保存映射关系到数据库');
+
+      // 获取Emby系列和季节信息
+      final seriesId = episode.seriesId ?? '';
+      final seasonId = episode.seasonId;
+      final indexNumber = episode.indexNumber ?? 0;
+
+      if (seriesId.isEmpty) {
+        debugPrint('[Emby映射] 警告: 无法获取系列ID，跳过映射保存');
+        return;
+      }
+
+      // 创建或更新动画级映射
+      final mappingId =
+          await EmbyEpisodeMappingService.instance.createOrUpdateAnimeMapping(
+        embySeriesId: seriesId,
+        embySeriesName: episode.seriesName ?? '未知系列',
+        embySeasonId: seasonId,
+        dandanplayAnimeId: animeId,
+        dandanplayAnimeTitle: animeTitle,
+      );
+
+      debugPrint('[Emby映射] 动画映射已保存，映射ID: $mappingId');
+
+      // 记录剧集级映射
+      await EmbyEpisodeMappingService.instance.recordEpisodeMapping(
+        embyEpisodeId: episode.id,
+        embyIndexNumber: indexNumber,
+        dandanplayEpisodeId: int.tryParse(episodeId.toString()) ?? 0,
+        mappingId: mappingId,
+        confirmed: true, // 用户手动匹配的，标记为已确认
+      );
+
+      debugPrint(
+          '[Emby映射] 剧集映射已保存: Emby集$indexNumber -> DandanPlay集$episodeId');
+    } catch (e) {
+      debugPrint('[Emby映射] 保存映射关系到数据库时出错: $e');
+      rethrow;
+    }
+  }
+}
+
+/// 动画匹配对话框
+///
+/// 显示候选的动画匹配列表，让用户选择正确的匹配项，并提供手动搜索功能
+class AnimeMatchDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> matches;
+  final EmbyEpisodeInfo episodeInfo;
+
+  const AnimeMatchDialog({
+    super.key,
+    required this.matches,
+    required this.episodeInfo,
+  });
+
+  @override
+  State<AnimeMatchDialog> createState() => _AnimeMatchDialogState();
+}
+
+class _AnimeMatchDialogState extends State<AnimeMatchDialog> {
+  final TextEditingController _searchController = TextEditingController();
+  List<Map<String, dynamic>> _currentMatches = [];
+  List<Map<String, dynamic>> _currentEpisodes = [];
+  bool _isSearching = false;
+  bool _isLoadingEpisodes = false;
+  String _searchMessage = '';
+  String _episodesMessage = '';
+
+  // 匹配的动画和剧集状态
+  Map<String, dynamic>? _selectedAnime;
+  Map<String, dynamic>? _selectedEpisode;
+
+  // 视图状态
+  bool _showEpisodesView = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentMatches = widget.matches;
+
+    // 如果初始没有匹配结果，设置提示信息
+    if (_currentMatches.isEmpty) {
+      _searchMessage = '未找到匹配结果，请尝试手动搜索';
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  // 执行手动搜索动画
+  Future<void> _performSearch() async {
+    final searchText = _searchController.text.trim();
+    if (searchText.isEmpty) return;
+
+    setState(() {
+      _isSearching = true;
+      _searchMessage = '正在搜索...';
+      _showEpisodesView = false; // 返回到动画列表视图
+      _selectedAnime = null;
+      _selectedEpisode = null;
+      _currentEpisodes = [];
+    });
+
+    try {
+      // 使用已有的搜索动画功能
+      final results =
+          await EmbyDandanplayMatcher.instance._searchAnime(searchText);
+
+      setState(() {
+        _isSearching = false;
+        _currentMatches = results;
+
+        if (results.isEmpty) {
+          _searchMessage = '没有找到匹配"$searchText"的结果';
+        } else {
+          _searchMessage = '';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _isSearching = false;
+        _searchMessage = '搜索出错: $e';
+      });
+    }
+  }
+
+  // 加载动画的剧集列表
+  Future<void> _loadAnimeEpisodes(Map<String, dynamic> anime) async {
+    if (anime['animeId'] == null) {
+      setState(() {
+        _isLoadingEpisodes = false;
+        _episodesMessage = '错误：动画ID为空。';
+        _currentEpisodes = [];
+      });
+      return;
+    }
+    if (anime['animeTitle'] == null ||
+        (anime['animeTitle'] as String).isEmpty) {
+      setState(() {
+        _isLoadingEpisodes = false;
+        _episodesMessage = '错误：动画标题为空。';
+        _currentEpisodes = [];
+      });
+      return;
+    }
+
+    final int animeId = anime['animeId'];
+    final String animeTitle = anime['animeTitle'] as String;
+    debugPrint('开始加载动画ID $animeId (标题: "$animeTitle") 的剧集列表');
+
+    setState(() {
+      _isLoadingEpisodes = true;
+      _episodesMessage = '正在加载剧集...';
+      _currentEpisodes = []; // 清空旧列表
+      _selectedAnime = anime; // 存储选中的动画
+      _showEpisodesView = true;
+    });
+
+    try {
+      final episodes = await EmbyDandanplayMatcher.instance
+          ._getAnimeEpisodes(animeId, animeTitle);
+
+      if (!mounted) return; // 检查widget是否还在树中
+
+      debugPrint('加载到 ${episodes.length} 个剧集');
+
+      // 检查剧集是否有效
+      if (episodes.isNotEmpty) {
+        bool hasValidEpisodes = false;
+        for (var ep in episodes) {
+          if (ep.containsKey('episodeId') && ep['episodeId'] != null) {
+            hasValidEpisodes = true;
+            break;
+          }
+        }
+
+        if (!hasValidEpisodes) {
+          debugPrint('警告: 所有剧集都没有有效的episodeId');
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _isLoadingEpisodes = false;
+          _currentEpisodes = episodes;
+
+          if (episodes.isEmpty) {
+            _episodesMessage = '没有找到该动画的剧集信息';
+            debugPrint('动画 $animeId 没有剧集信息');
+          } else {
+            _episodesMessage = '';
+            debugPrint('成功加载剧集: ${episodes.length} 集');
+
+            // 尝试自动匹配当前集数
+            if (widget.episodeInfo.indexNumber != null) {
+              final int targetEpisode = widget.episodeInfo.indexNumber!;
+              debugPrint('尝试自动匹配第 $targetEpisode 集');
+              _tryAutoMatchEpisode(targetEpisode);
+            } else {
+              debugPrint('无法自动匹配剧集: 没有集数信息');
+              // 没有集数信息时，默认选择第一集
+              if (episodes.isNotEmpty) {
+                setState(() {
+                  _selectedEpisode = episodes.first;
+                  debugPrint('默认选择第一集: ${episodes.first['episodeTitle']}');
+                });
+              }
+            }
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('加载剧集列表出错: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingEpisodes = false;
+          _episodesMessage = '加载剧集出错: $e';
+        });
+      }
+    }
+  }
+
+  // 尝试自动匹配剧集
+  void _tryAutoMatchEpisode(int currentEpisodeIndex) {
+    try {
+      // 首先尝试精确匹配集数
+      final exactMatch = _currentEpisodes.firstWhere(
+        (ep) {
+          final episodeIndex = ep['episodeIndex'];
+          int epIndex = 0;
+          if (episodeIndex is int) {
+            epIndex = episodeIndex;
+          } else if (episodeIndex is String) {
+            epIndex = int.tryParse(episodeIndex) ?? 0;
+          }
+          return epIndex == currentEpisodeIndex;
+        },
+        orElse: () => {},
+      );
+
+      if (exactMatch.isNotEmpty) {
+        setState(() {
+          _selectedEpisode = exactMatch;
+          debugPrint(
+              '自动匹配到剧集: ${exactMatch['episodeTitle']}, episodeId=${exactMatch['episodeId']}');
+        });
+        return;
+      }
+
+      // 如果没有精确匹配，尝试查找接近的集数
+      final List<Map<String, dynamic>> sortedEpisodes =
+          List.from(_currentEpisodes);
+      sortedEpisodes.sort((a, b) {
+        final aIndexRaw = a['episodeIndex'] ?? 0;
+        final bIndexRaw = b['episodeIndex'] ?? 0;
+
+        int aIndex = 0;
+        int bIndex = 0;
+
+        if (aIndexRaw is int) {
+          aIndex = aIndexRaw;
+        } else if (aIndexRaw is String) {
+          aIndex = int.tryParse(aIndexRaw) ?? 0;
+        }
+
+        if (bIndexRaw is int) {
+          bIndex = bIndexRaw;
+        } else if (bIndexRaw is String) {
+          bIndex = int.tryParse(bIndexRaw) ?? 0;
+        }
+
+        return (aIndex - currentEpisodeIndex)
+            .abs()
+            .compareTo((bIndex - currentEpisodeIndex).abs());
+      });
+
+      if (sortedEpisodes.isNotEmpty) {
+        final closestMatch = sortedEpisodes.first;
+        setState(() {
+          _selectedEpisode = closestMatch;
+          final episodeIndexRaw = closestMatch['episodeIndex'];
+          final episodeIndex = episodeIndexRaw is int
+              ? episodeIndexRaw
+              : (int.tryParse(episodeIndexRaw?.toString() ?? '0') ?? 0);
+          debugPrint(
+              '找到最接近的剧集匹配: ${closestMatch['episodeTitle']}, 集数: $episodeIndex (目标集数: $currentEpisodeIndex)');
+        });
+      }
+    } catch (e) {
+      debugPrint('自动匹配剧集失败: $e');
+      // 失败时尝试选择第一集作为默认
+      if (_currentEpisodes.isNotEmpty) {
+        setState(() {
+          _selectedEpisode = _currentEpisodes.first;
+          debugPrint(
+              '无法精确匹配剧集，默认选择第一集: ${_currentEpisodes.first['episodeTitle']}');
+        });
+      }
+    }
+  }
+
+  // 返回动画选择列表
+  void _backToAnimeSelection() {
+    setState(() {
+      _showEpisodesView = false;
+      _selectedEpisode = null;
+    });
+  }
+
+  // 完成选择并返回结果
+  void _completeSelection() {
+    if (_selectedAnime == null) return;
+
+    // 创建最终结果对象
+    final result = Map<String, dynamic>.from(_selectedAnime!);
+
+    // 如果用户选择了剧集，添加剧集信息
+    if (_selectedEpisode != null && _selectedEpisode!.isNotEmpty) {
+      result['episodeId'] = _selectedEpisode!['episodeId'];
+      result['episodeTitle'] = _selectedEpisode!['episodeTitle'];
+      debugPrint(
+          '用户选择了剧集: ${_selectedEpisode!['episodeTitle']}, episodeId=${_selectedEpisode!['episodeId']}');
+    } else {
+      // 如果在剧集选择界面用户没有选择具体剧集，但有可用剧集，默认使用第一个
+      if (_showEpisodesView && _currentEpisodes.isNotEmpty) {
+        final firstEpisode = _currentEpisodes.first;
+        result['episodeId'] = firstEpisode['episodeId'];
+        result['episodeTitle'] = firstEpisode['episodeTitle'];
+        debugPrint(
+            '用户没有选择具体剧集，默认使用第一个: ${firstEpisode['episodeTitle']}, episodeId=${firstEpisode['episodeId']}');
+      } else {
+        debugPrint('警告: 没有匹配到任何剧集信息，episodeId可能为空');
+      }
+    }
+
+    Navigator.of(context).pop(result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BackdropFilter(
+      filter: ImageFilter.blur(sigmaX: 25, sigmaY: 25),
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.85,
+          height: MediaQuery.of(context).size.height * 0.75,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.3),
+              width: 0.5,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.2),
+                blurRadius: 5,
+                spreadRadius: 1,
+                offset: const Offset(1, 1),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 标题栏
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    _showEpisodesView ? '选择匹配的剧集' : '选择匹配的动画',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white70),
+                    onPressed: () =>
+                        Navigator.of(context).pop({'__cancel__': true}),
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
+                ],
+              ),
+              const Divider(color: Colors.white24),
+              const SizedBox(height: 8),
+              // 视频信息
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                        '正在播放: ${widget.episodeInfo.seriesName} - ${widget.episodeInfo.name}',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, color: Colors.white)),
+                    if (widget.episodeInfo.indexNumber != null)
+                      Text('第 ${widget.episodeInfo.indexNumber} 集',
+                          style: const TextStyle(
+                              color: Colors.blueAccent,
+                              fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 显示当前选择的动画（在剧集选择视图中）
+              if (_showEpisodesView && _selectedAnime != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('已选动画:',
+                                style: TextStyle(
+                                    color: Colors.white70, fontSize: 12)),
+                            Text(_selectedAnime!['animeTitle'] ?? '未知动画',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white)),
+                          ],
+                        ),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.arrow_back,
+                            size: 16, color: Colors.white70),
+                        label: const Text('返回',
+                            style:
+                                TextStyle(fontSize: 12, color: Colors.white70)),
+                        onPressed: _backToAnimeSelection,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 32),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              // 手动搜索区域（只在动画选择视图中显示）
+              if (!_showEpisodesView)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.white.withOpacity(0.2),
+                      width: 0.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TvOSRemoteTextInputControl(
+                          title: '手动搜索动画名称',
+                          child: TextField(
+                            controller: _searchController,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: '手动搜索动画名称',
+                              hintStyle: TextStyle(
+                                  color: Colors.white.withOpacity(0.6)),
+                              isDense: true,
+                              border: OutlineInputBorder(
+                                borderSide: BorderSide(
+                                    color: Colors.white.withOpacity(0.3)),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderSide: BorderSide(
+                                    color: Colors.white.withOpacity(0.3)),
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderSide: BorderSide(
+                                    color: Colors.white.withOpacity(0.6)),
+                              ),
+                            ),
+                            onSubmitted: (_) => _performSearch(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      BlurButton(
+                        icon: Icons.search,
+                        text: '搜索',
+                        onTap: _isSearching ? () {} : _performSearch,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 10),
+                        fontSize: 15,
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 16),
+              // 动画选择视图
+              if (!_showEpisodesView) ...[
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('请从以下匹配结果中选择动画:',
+                      style: TextStyle(color: Colors.white)),
+                ),
+                const SizedBox(height: 8),
+                if (_searchMessage.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      _searchMessage,
+                      style: TextStyle(
+                        color: _searchMessage.contains('出错')
+                            ? Colors.red
+                            : Colors.white70,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: _isSearching
+                      ? const Center(
+                          child: CircularProgressIndicator(color: Colors.white))
+                      : _currentMatches.isEmpty
+                          ? const Center(
+                              child: Text('没有匹配结果',
+                                  style: TextStyle(color: Colors.white70)))
+                          : ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: _currentMatches.length,
+                              itemBuilder: (context, index) {
+                                final match = _currentMatches[index];
+                                return Container(
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.05),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Material(
+                                    type: MaterialType.transparency,
+                                    child: ListTile(
+                                      title: Text(
+                                        match['animeTitle'] ?? '未知动画',
+                                        style: const TextStyle(
+                                            color: Colors.white),
+                                      ),
+                                      subtitle: match['typeDescription'] != null
+                                          ? Text(
+                                              match['typeDescription'],
+                                              style: const TextStyle(
+                                                  color: Colors.white70),
+                                            )
+                                          : null,
+                                      onTap: () => _loadAnimeEpisodes(match),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                ),
+              ],
+              // 剧集选择视图
+              if (_showEpisodesView) ...[
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child:
+                      Text('请选择匹配的剧集:', style: TextStyle(color: Colors.white)),
+                ),
+                const SizedBox(height: 8),
+                if (_episodesMessage.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      _episodesMessage,
+                      style: TextStyle(
+                        color: _episodesMessage.contains('出错')
+                            ? Colors.red
+                            : Colors.white70,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: _isLoadingEpisodes
+                      ? const Center(
+                          child: CircularProgressIndicator(color: Colors.white))
+                      : _currentEpisodes.isEmpty
+                          ? const Center(
+                              child: Text('没有找到剧集',
+                                  style: TextStyle(color: Colors.white70)))
+                          : ListView.builder(
+                              shrinkWrap: true,
+                              itemCount: _currentEpisodes.length,
+                              itemBuilder: (context, index) {
+                                final episode = _currentEpisodes[index];
+                                final bool isSelected =
+                                    _selectedEpisode != null &&
+                                        _selectedEpisode!['episodeId'] ==
+                                            episode['episodeId'];
+                                return Container(
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.05),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Material(
+                                    type: MaterialType.transparency,
+                                    child: ListTile(
+                                      title: Text(
+                                        '第${episode['episodeIndex'] ?? '?'}集: ${episode['episodeTitle'] ?? '未知剧集'}',
+                                        style: const TextStyle(
+                                            color: Colors.white),
+                                      ),
+                                      trailing: isSelected
+                                          ? const Icon(Icons.check_circle,
+                                              color: Colors.green)
+                                          : null,
+                                      selected: isSelected,
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedEpisode = episode;
+                                        });
+                                      },
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                ),
+                if (_currentEpisodes.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    alignment: Alignment.center,
+                    child: Text(
+                      _selectedEpisode == null
+                          ? '请选择一个剧集来获取正确的弹幕'
+                          : '已选择剧集，点击"确认选择"继续',
+                      style: TextStyle(
+                          color: _selectedEpisode == null
+                              ? Colors.white70
+                              : Colors.green),
+                    ),
+                  ),
+              ],
+              // 底部操作按钮
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8.0,
+                runSpacing: 8.0,
+                children: [
+                  if (!_showEpisodesView)
+                    TextButton(
+                      child: const Text('跳过匹配',
+                          style: TextStyle(color: Colors.white70)),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  if (_showEpisodesView) ...[
+                    TextButton(
+                      onPressed: _backToAnimeSelection,
+                      style: TextButton.styleFrom(
+                          foregroundColor: Colors.blueAccent),
+                      child: const Text('返回动画选择',
+                          style: TextStyle(color: Colors.white70)),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                      child: const Text('跳过匹配',
+                          style: TextStyle(color: Colors.white70)),
+                    ),
+                    if (_currentEpisodes.isNotEmpty)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.2),
+                                width: 0.5,
+                              ),
+                            ),
+                            child: TextButton(
+                              onPressed: _completeSelection,
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 8),
+                              ),
+                              child: Text(_selectedEpisode != null
+                                  ? '确认选择剧集'
+                                  : '使用第一集'),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

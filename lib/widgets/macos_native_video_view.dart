@@ -1,0 +1,540 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
+import 'package:nipaplay/player_abstraction/player_abstraction.dart';
+import 'package:nipaplay/utils/platform_utils.dart';
+
+const int _windowHostedPlatformSurfaceId = -1;
+const MethodChannel _macOSNativeVideoChannel =
+    MethodChannel('nipaplay/macos_native_video');
+const MethodChannel _windowsNativeVideoChannel =
+    MethodChannel('nipaplay/windows_native_video');
+final bool _nativeVideoSurfaceDebugLogsEnabled = !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows) &&
+    (Platform.environment['NIPAPLAY_MACOS_HDR_EXIT_TRACE'] == '1' ||
+        Platform.environment['NIPAPLAY_WINDOWS_HDR_EXIT_TRACE'] == '1');
+
+bool get _isWindowHostedNativeVideoPlatform =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.windows);
+
+MethodChannel get _platformNativeVideoChannel =>
+    defaultTargetPlatform == TargetPlatform.windows
+        ? _windowsNativeVideoChannel
+        : _macOSNativeVideoChannel;
+
+void _logMacOSHdrExitTrace(String message) {
+  if (_nativeVideoSurfaceDebugLogsEnabled) {
+    debugPrint('[NativeVideoSurface][Overlay] $message');
+  }
+}
+
+Duration _nativeVideoAttachRetryDelay(int attempt) {
+  if (attempt <= 0) {
+    return const Duration(milliseconds: 150);
+  }
+  if (attempt == 1) {
+    return const Duration(milliseconds: 300);
+  }
+  if (attempt == 2) {
+    return const Duration(milliseconds: 600);
+  }
+  if (attempt == 3) {
+    return const Duration(milliseconds: 1200);
+  }
+  return const Duration(seconds: 2);
+}
+
+Rect _transformedGlobalRectOf(RenderBox box) {
+  final topLeft = box.localToGlobal(Offset.zero);
+  final topRight = box.localToGlobal(Offset(box.size.width, 0));
+  final bottomLeft = box.localToGlobal(Offset(0, box.size.height));
+  final bottomRight = box.localToGlobal(
+    Offset(box.size.width, box.size.height),
+  );
+
+  final left = math.min(
+    math.min(topLeft.dx, topRight.dx),
+    math.min(bottomLeft.dx, bottomRight.dx),
+  );
+  final top = math.min(
+    math.min(topLeft.dy, topRight.dy),
+    math.min(bottomLeft.dy, bottomRight.dy),
+  );
+  final right = math.max(
+    math.max(topLeft.dx, topRight.dx),
+    math.max(bottomLeft.dx, bottomRight.dx),
+  );
+  final bottom = math.max(
+    math.max(topLeft.dy, topRight.dy),
+    math.max(bottomLeft.dy, bottomRight.dy),
+  );
+
+  return Rect.fromLTRB(left, top, right, bottom);
+}
+
+class MacOSNativeVideoView extends StatefulWidget {
+  const MacOSNativeVideoView({
+    super.key,
+    required this.player,
+    this.debugLabel,
+    this.onPlatformViewIdChanged,
+  });
+
+  final Player player;
+  final String? debugLabel;
+  final ValueChanged<int?>? onPlatformViewIdChanged;
+
+  @override
+  State<MacOSNativeVideoView> createState() => _MacOSNativeVideoViewState();
+}
+
+class _MacOSNativeVideoViewState extends State<MacOSNativeVideoView>
+    with WidgetsBindingObserver {
+  Timer? _retryTimer;
+  int _bindAttempts = 0;
+  bool _isBound = false;
+  int? _platformViewId;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didUpdateWidget(covariant MacOSNativeVideoView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.player != widget.player) {
+      _retryTimer?.cancel();
+      _bindAttempts = 0;
+      _isBound = false;
+      unawaited(
+        oldWidget.player.detachPlatformVideoSurface(
+          platformViewId: _platformViewId,
+        ),
+      );
+      unawaited(_bindPlatformVideoSurface());
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _retryTimer?.cancel();
+    final platformViewId = _platformViewId;
+    widget.onPlatformViewIdChanged?.call(null);
+    unawaited(
+      widget.player.detachPlatformVideoSurface(
+        platformViewId: platformViewId,
+      ),
+    );
+    super.dispose();
+  }
+
+  Future<void> _bindPlatformVideoSurface() async {
+    final platformViewId = _platformViewId;
+    if (!mounted ||
+        !widget.player.prefersPlatformVideoSurface ||
+        platformViewId == null) {
+      return;
+    }
+
+    try {
+      await widget.player.attachPlatformVideoSurface(
+        platformViewId: platformViewId,
+        viewHandle: 0,
+      );
+      _isBound = true;
+    } catch (error) {
+      debugPrint('MacOSNativeVideoView: bind failed: $error');
+      _scheduleRetry();
+    }
+  }
+
+  void _scheduleRetry() {
+    if (_isBound || !mounted) {
+      return;
+    }
+    final attempt = _bindAttempts;
+    _bindAttempts += 1;
+    final delay = _nativeVideoAttachRetryDelay(attempt);
+    _retryTimer?.cancel();
+    _retryTimer = Timer(
+      delay,
+      () => unawaited(_bindPlatformVideoSurface()),
+    );
+  }
+
+  void _handlePlatformViewCreated(int id) {
+    if (!mounted) {
+      return;
+    }
+    if (_platformViewId == id) {
+      return;
+    }
+    final previousViewId = _platformViewId;
+    _platformViewId = id;
+    widget.onPlatformViewIdChanged?.call(id);
+    if (previousViewId != null && previousViewId != id) {
+      unawaited(
+        widget.player.detachPlatformVideoSurface(
+          platformViewId: previousViewId,
+        ),
+      );
+    }
+    _retryTimer?.cancel();
+    _bindAttempts = 0;
+    _isBound = false;
+    unawaited(_bindPlatformVideoSurface());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.macOS ||
+        !widget.player.prefersPlatformVideoSurface) {
+      return const SizedBox.shrink();
+    }
+
+    return AppKitView(
+      viewType: 'nipaplay/macos_native_video_view',
+      layoutDirection: TextDirection.ltr,
+      creationParamsCodec: const StandardMessageCodec(),
+      creationParams: <String, dynamic>{
+        if (widget.debugLabel != null) 'debugLabel': widget.debugLabel,
+      },
+      onPlatformViewCreated: _handlePlatformViewCreated,
+    );
+  }
+}
+
+class MacOSWindowNativeVideoOverlaySurface extends StatefulWidget {
+  const MacOSWindowNativeVideoOverlaySurface({
+    super.key,
+    required this.player,
+    this.debugLabel,
+    this.onPlatformViewIdChanged,
+    this.onFrameRectChanged,
+    this.onPointerActivity,
+  });
+
+  final Player player;
+  final String? debugLabel;
+  final ValueChanged<int?>? onPlatformViewIdChanged;
+  final ValueChanged<Rect?>? onFrameRectChanged;
+  final ValueChanged<PointerEvent>? onPointerActivity;
+
+  @override
+  State<MacOSWindowNativeVideoOverlaySurface> createState() =>
+      _MacOSWindowNativeVideoOverlaySurfaceState();
+}
+
+class _MacOSWindowNativeVideoOverlaySurfaceState
+    extends State<MacOSWindowNativeVideoOverlaySurface>
+    with WidgetsBindingObserver {
+  static int _windowsPointerLogCount = 0;
+
+  Timer? _retryTimer;
+  Timer? _frameTimer;
+  int _bindAttempts = 0;
+  bool _isBound = false;
+  bool _frameUpdateScheduled = false;
+  bool _pendingFrameUpdateForce = false;
+  bool _frameUpdateInFlight = false;
+  bool _resendFrameAfterInFlight = false;
+  bool _resendFrameAfterInFlightForce = false;
+  late final int _surfaceGeneration;
+  String? _lastFrameSignature;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _surfaceGeneration = identityHashCode(this);
+    widget.onPlatformViewIdChanged?.call(_windowHostedPlatformSurfaceId);
+    _startFrameTimer();
+    _scheduleAttach();
+  }
+
+  @override
+  void didUpdateWidget(
+      covariant MacOSWindowNativeVideoOverlaySurface oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.player != widget.player) {
+      _retryTimer?.cancel();
+      _bindAttempts = 0;
+      _isBound = false;
+      _lastFrameSignature = null;
+      unawaited(
+        oldWidget.player.detachPlatformVideoSurface(
+          platformViewId: _windowHostedPlatformSurfaceId,
+        ),
+      );
+      widget.onPlatformViewIdChanged?.call(_windowHostedPlatformSurfaceId);
+      _scheduleAttach();
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    _scheduleFrameUpdate(force: true);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _retryTimer?.cancel();
+    _frameTimer?.cancel();
+    _logMacOSHdrExitTrace(
+      'dispose state=${identityHashCode(this)} label=${widget.debugLabel}',
+    );
+    widget.onPlatformViewIdChanged?.call(null);
+    widget.onFrameRectChanged?.call(null);
+    unawaited(_hideOverlayFrame());
+    super.dispose();
+  }
+
+  void _startFrameTimer() {
+    _frameTimer?.cancel();
+    final interval = defaultTargetPlatform == TargetPlatform.windows
+        ? const Duration(milliseconds: 16)
+        : const Duration(milliseconds: 250);
+    _frameTimer = Timer.periodic(
+      interval,
+      (_) => _scheduleFrameUpdate(),
+    );
+  }
+
+  void _scheduleAttach() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_attachOverlaySurface());
+      _scheduleFrameUpdate(force: true);
+    });
+  }
+
+  Future<void> _attachOverlaySurface() async {
+    if (!mounted ||
+        _isBound ||
+        !widget.player.prefersPlatformVideoSurface ||
+        !_isWindowHostedNativeVideoPlatform) {
+      return;
+    }
+
+    try {
+      _logMacOSHdrExitTrace(
+        'attachOverlaySurface state=${identityHashCode(this)} label=${widget.debugLabel}',
+      );
+      await widget.player.attachPlatformVideoSurface(
+        platformViewId: _windowHostedPlatformSurfaceId,
+        viewHandle: 0,
+      );
+      _isBound = true;
+      _scheduleFrameUpdate(force: true);
+    } catch (error) {
+      debugPrint('MacOSWindowNativeVideoOverlaySurface: bind failed: $error');
+      _scheduleRetry();
+    }
+  }
+
+  void _scheduleRetry() {
+    if (_isBound || !mounted) {
+      return;
+    }
+    final attempt = _bindAttempts;
+    _bindAttempts += 1;
+    final delay = _nativeVideoAttachRetryDelay(attempt);
+    _retryTimer?.cancel();
+    _retryTimer = Timer(
+      delay,
+      () => unawaited(_attachOverlaySurface()),
+    );
+  }
+
+  void _scheduleFrameUpdate({bool force = false}) {
+    _pendingFrameUpdateForce = _pendingFrameUpdateForce || force;
+    if (_frameUpdateScheduled) {
+      return;
+    }
+    _frameUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _frameUpdateScheduled = false;
+      final sendForce = _pendingFrameUpdateForce;
+      _pendingFrameUpdateForce = false;
+      if (!mounted) {
+        return;
+      }
+      unawaited(_sendOverlayFrame(visible: true, force: sendForce));
+    });
+  }
+
+  Future<void> _sendOverlayFrame({
+    required bool visible,
+    bool force = false,
+  }) async {
+    if (kIsWeb ||
+        !_isWindowHostedNativeVideoPlatform ||
+        (!Platform.isMacOS && !Platform.isWindows)) {
+      return;
+    }
+
+    final Rect platformRect;
+    final Rect? cutoutRect;
+    int? flutterViewId;
+    if (visible) {
+      if (!mounted) {
+        return;
+      }
+      final renderObject = context.findRenderObject();
+      if (renderObject is! RenderBox) {
+        return;
+      }
+      final box = renderObject;
+      if (!box.hasSize || box.size.isEmpty) {
+        return;
+      }
+      final origin = box.localToGlobal(Offset.zero);
+      platformRect = _transformedGlobalRectOf(box);
+      cutoutRect = origin & box.size;
+      flutterViewId = View.of(context).viewId;
+    } else {
+      platformRect = Rect.zero;
+      cutoutRect = null;
+    }
+
+    final signature = [
+      visible,
+      platformRect.left.toStringAsFixed(2),
+      platformRect.top.toStringAsFixed(2),
+      platformRect.width.toStringAsFixed(2),
+      platformRect.height.toStringAsFixed(2),
+      flutterViewId ?? -1,
+    ].join('|');
+    if (!force && signature == _lastFrameSignature) {
+      return;
+    }
+    if (visible && _frameUpdateInFlight) {
+      _resendFrameAfterInFlight = true;
+      _resendFrameAfterInFlightForce = _resendFrameAfterInFlightForce || force;
+      return;
+    }
+    _lastFrameSignature = signature;
+    if (!visible || force) {
+      _logMacOSHdrExitTrace(
+        'setOverlayFrame state=${identityHashCode(this)} visible=$visible force=$force rect=$platformRect label=${widget.debugLabel}',
+      );
+    }
+
+    _frameUpdateInFlight = visible;
+    try {
+      await _platformNativeVideoChannel.invokeMethod<void>(
+        'setOverlayFrame',
+        <String, dynamic>{
+          'viewId': _windowHostedPlatformSurfaceId,
+          if (flutterViewId != null) 'flutterViewId': flutterViewId,
+          'generation': _surfaceGeneration,
+          'x': platformRect.left,
+          'y': platformRect.top,
+          'width': platformRect.width,
+          'height': platformRect.height,
+          'visible': visible,
+          if (widget.debugLabel != null) 'debugLabel': widget.debugLabel,
+        },
+      );
+      if (!mounted ||
+          (flutterViewId != null &&
+              View.maybeOf(context)?.viewId != flutterViewId)) {
+        return;
+      }
+      widget.onFrameRectChanged?.call(cutoutRect);
+    } catch (error) {
+      _lastFrameSignature = null;
+      debugPrint(
+        'MacOSWindowNativeVideoOverlaySurface: frame update failed: $error',
+      );
+    } finally {
+      if (visible) {
+        _frameUpdateInFlight = false;
+        if (_resendFrameAfterInFlight && mounted) {
+          final resendForce = _resendFrameAfterInFlightForce;
+          _resendFrameAfterInFlight = false;
+          _resendFrameAfterInFlightForce = false;
+          _scheduleFrameUpdate(force: resendForce);
+        }
+      }
+    }
+  }
+
+  Future<void> _hideOverlayFrame() async {
+    _logMacOSHdrExitTrace(
+      'hideOverlayFrame state=${identityHashCode(this)} label=${widget.debugLabel}',
+    );
+    try {
+      await _platformNativeVideoChannel.invokeMethod<void>(
+        'setOverlayFrame',
+        <String, dynamic>{
+          'viewId': _windowHostedPlatformSurfaceId,
+          'generation': _surfaceGeneration,
+          'x': 0.0,
+          'y': 0.0,
+          'width': 0.0,
+          'height': 0.0,
+          'visible': false,
+          if (widget.debugLabel != null) 'debugLabel': widget.debugLabel,
+        },
+      );
+    } catch (error) {
+      debugPrint(
+        'MacOSWindowNativeVideoOverlaySurface: hide overlay failed: $error',
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (kIsWeb ||
+        !_isWindowHostedNativeVideoPlatform ||
+        !widget.player.prefersPlatformVideoSurface) {
+      return const SizedBox.shrink();
+    }
+
+    _scheduleFrameUpdate();
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      return Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: _handleWindowsPointerEvent,
+        onPointerMove: _handleWindowsPointerEvent,
+        onPointerHover: _handleWindowsPointerEvent,
+        onPointerUp: _handleWindowsPointerEvent,
+        onPointerCancel: _handleWindowsPointerEvent,
+        onPointerSignal: _handleWindowsPointerEvent,
+        child: const ColoredBox(
+          color: Color(0x00000000),
+          child: SizedBox.expand(),
+        ),
+      );
+    }
+    return const SizedBox.expand();
+  }
+
+  void _handleWindowsPointerEvent(PointerEvent event) {
+    if (!kReleaseMode && _windowsPointerLogCount < 16) {
+      _windowsPointerLogCount += 1;
+      debugPrint(
+        '[NativeVideoSurface][Overlay] FLUTTER_TRANSPARENT_VIDEO_REGION_POINTER '
+        'type=${event.runtimeType} position=${event.position} '
+        'local=${event.localPosition} buttons=${event.buttons} '
+        'label=${widget.debugLabel}',
+      );
+    }
+    widget.onPointerActivity?.call(event);
+  }
+}

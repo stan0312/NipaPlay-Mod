@@ -1,0 +1,60 @@
+ext.android_ndk_version = '29.0.14206865'
+
+buildscript {
+    ext.kotlin_version = '2.3.21'
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://jitpack.io" }
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.9.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url "https://jitpack.io" }
+    }
+
+    configurations.all {
+        resolutionStrategy {
+            force 'org.bouncycastle:bcprov-jdk18on:1.77'
+            force 'org.bouncycastle:bcpkix-jdk18on:1.77'
+            force 'org.bouncycastle:bcutil-jdk18on:1.77'
+            force 'net.bytebuddy:byte-buddy:1.14.12'
+            force 'net.bytebuddy:byte-buddy-agent:1.14.12'
+        }
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects { subproject ->
+    subproject.afterEvaluate {
+        if (subproject.plugins.hasPlugin("com.android.application") ||
+                subproject.plugins.hasPlugin("com.android.library")) {
+            subproject.android.ndkVersion = rootProject.ext.android_ndk_version
+        }
+    }
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+subprojects {
+    tasks.withType(JavaCompile).configureEach {
+        if (!options.compilerArgs.contains("-Xlint:-options")) {
+            options.compilerArgs.add("-Xlint:-options")
+        }
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}

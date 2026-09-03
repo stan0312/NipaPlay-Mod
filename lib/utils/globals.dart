@@ -1,0 +1,290 @@
+// globals.dart
+library globals;
+
+import 'dart:math' as math;
+import 'dart:io' if (dart.library.io) 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:nipaplay/plugins/plugin_service.dart';
+import 'package:nipaplay/utils/platform_identity.dart' as platform_identity;
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+double get strokeWidth => isPhone ? 0.7 : 1.0;
+//////全局变量/////
+double mobileThreshold = 550;
+// ignore: non_constant_identifier_names
+String Appversion = "1.0.0";
+String backgroundImageMode = "关闭"; // 添加背景图像模式变量
+String customBackgroundPath = 'assets/images/main_image.png'; // 添加自定义背景图片路径变量
+//////全局变量/////
+///
+//////设备类型判断/////
+const MethodChannel _deviceProfileChannel =
+    MethodChannel('nipaplay/device_profile');
+
+bool _startupDeviceProfileInitialized = false;
+bool _startupTabletLike = false;
+bool _startupAndroidTv = false;
+bool _startupIPad = false;
+
+class _DisplayMetrics {
+  const _DisplayMetrics({
+    required this.widthDp,
+    required this.heightDp,
+  });
+
+  final double widthDp;
+  final double heightDp;
+
+  double get shortestSideDp => math.min(widthDp, heightDp);
+  double get longestSideDp => math.max(widthDp, heightDp);
+  bool get isLandscape => widthDp > heightDp;
+  double get aspectRatio => longestSideDp / math.max(shortestSideDp, 1.0);
+}
+
+_DisplayMetrics _readDisplayMetrics() {
+  // ignore: deprecated_member_use
+  final window = WidgetsBinding.instance.window;
+  final size = window.physicalSize / window.devicePixelRatio;
+  return _DisplayMetrics(widthDp: size.width, heightDp: size.height);
+}
+
+bool _looksLikeLargeAndroidLandscapeDisplay(_DisplayMetrics metrics) {
+  if (!metrics.isLandscape) return false;
+  return metrics.shortestSideDp >= 520 &&
+      metrics.longestSideDp >= 900 &&
+      metrics.aspectRatio >= 1.6;
+}
+
+bool _resolveTabletLike({
+  required bool isAndroidTv,
+  required _DisplayMetrics metrics,
+}) {
+  if (isAndroidTv) return true;
+  if (metrics.shortestSideDp >= 600) return true;
+  if (!kIsWeb && Platform.isAndroid) {
+    return _looksLikeLargeAndroidLandscapeDisplay(metrics);
+  }
+  return false;
+}
+
+Future<void> initializeStartupDeviceProfile() async {
+  if (_startupDeviceProfileInitialized) return;
+
+  final metrics = _readDisplayMetrics();
+  var startupMetrics = metrics;
+  var isAndroidTv = false;
+
+  var isIPad = false;
+
+  if (!kIsWeb &&
+      (Platform.isAndroid || (Platform.isIOS && !platform_identity.isTvOS))) {
+    try {
+      final profile = await _deviceProfileChannel
+          .invokeMapMethod<String, dynamic>('getStartupDeviceProfile');
+      if (profile != null) {
+        isAndroidTv = profile['isAndroidTv'] == true;
+        isIPad = profile['isIPad'] == true;
+        final screenWidthDp = (profile['screenWidthDp'] as num?)?.toDouble();
+        final screenHeightDp = (profile['screenHeightDp'] as num?)?.toDouble();
+        final smallestWidthDp =
+            (profile['smallestScreenWidthDp'] as num?)?.toDouble();
+
+        if (screenWidthDp != null && screenHeightDp != null) {
+          startupMetrics =
+              _DisplayMetrics(widthDp: screenWidthDp, heightDp: screenHeightDp);
+        } else if (smallestWidthDp != null) {
+          startupMetrics = _DisplayMetrics(
+            widthDp: metrics.longestSideDp,
+            heightDp: smallestWidthDp,
+          );
+        }
+      }
+    } catch (_) {
+      // Fallback to Flutter-reported metrics if the platform channel is unavailable.
+    }
+  }
+
+  _startupAndroidTv = isAndroidTv;
+  _startupTabletLike = _resolveTabletLike(
+    isAndroidTv: isAndroidTv,
+    metrics: startupMetrics,
+  );
+  _startupIPad = isIPad ||
+      (!kIsWeb &&
+          Platform.isIOS &&
+          !platform_identity.isTvOS &&
+          _startupTabletLike);
+  _startupDeviceProfileInitialized = true;
+}
+
+bool get isMobilePlatform {
+  if (kIsWeb) {
+    return defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.android;
+  }
+  return (Platform.isIOS && !isTvOS) || Platform.isAndroid || isHarmonyOS;
+}
+
+/// Uses the operating-system string so this source remains analyzable with
+/// both upstream Flutter and the OpenHarmony Flutter fork.
+bool get isHarmonyOS => !kIsWeb && platform_identity.isHarmonyOS;
+
+/// tvOS reports itself as iOS for plugin compatibility. Keep this separate
+/// from [isMobilePlatform] because Apple TV has no touch interface.
+bool get isTvOS => !kIsWeb && platform_identity.isTvOS;
+
+bool get isMobile {
+  // 获取屏幕宽度
+  // ignore: deprecated_member_use
+  double screenWidth = WidgetsBinding.instance.window.physicalSize.width /
+      WidgetsBinding.instance.window.devicePixelRatio;
+  // 排除平板设备，通常平板设备的宽度大于 600
+  return screenWidth < mobileThreshold;
+}
+
+bool get isPhone {
+  return isMobilePlatform && !isTablet;
+}
+
+// 判断是否为平板设备（移动设备短边 >= 600）
+bool get isTablet {
+  if (!isMobilePlatform) return false;
+  if (_startupDeviceProfileInitialized) {
+    return _startupTabletLike;
+  }
+  return _resolveTabletLike(
+    isAndroidTv: false,
+    metrics: _readDisplayMetrics(),
+  );
+}
+
+bool get isTabletLikeMobile => isMobilePlatform && isTablet;
+bool get isAndroidTv => _startupAndroidTv;
+bool get isTelevision => isAndroidTv || isTvOS;
+
+/// Native bootstrap capabilities stay centralized because tvOS uses a
+/// different Flutter/plugin graph while Android TV uses Android runtimes.
+bool get supportsRustNativeBridge => !isTvOS;
+bool get supportsMediaKitNativeRuntime => !isHarmonyOS && !isTvOS;
+bool get supportsGamepadInput => !isHarmonyOS;
+
+bool get isIPad {
+  if (kIsWeb) {
+    return defaultTargetPlatform == TargetPlatform.iOS && isTablet;
+  }
+  if (!Platform.isIOS || isTvOS) return false;
+  if (_startupDeviceProfileInitialized) return _startupIPad;
+  return isTablet;
+}
+
+bool get isDownloaderSupportedPlatform {
+  if (isTelevision) return false;
+  if (!kIsWeb && Platform.isIOS) {
+    return PluginService.forceEnableDownloader;
+  }
+  return true;
+}
+
+bool get isTouch {
+  //移动平台
+  if (kIsWeb) {
+    return defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.android;
+  } else {
+    return isMobilePlatform && !isTelevision;
+  }
+}
+
+bool get noMenuButton {
+  if (kIsWeb) {
+    return true;
+  }
+  //没有三大键的设备
+  return !Platform.isWindows && !Platform.isLinux && !Platform.isMacOS;
+}
+
+bool get winLinDesktop {
+  //windows和linux桌面平台
+  return !kIsWeb && (Platform.isWindows || Platform.isLinux);
+}
+
+bool get isDesktop {
+  //windows和linux和macOS桌面平台
+  return !kIsWeb &&
+      (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+}
+
+bool get isDesktopOrTablet {
+  //桌面、平板或电视大屏设备
+  return isDesktop || isTablet || isTelevision;
+}
+
+//////设备类型判断/////
+///
+/// 对话框尺寸管理
+class DialogSizes {
+  static double _screenHeight = 0.0;
+  static double _screenWidth = 0.0;
+  static bool _initialized = false;
+
+  /// 预设的对话框高度 - 在应用启动时计算
+  static double loginDialogHeight = 400.0;
+  static double serverDialogHeight = 500.0;
+  static double generalDialogHeight = 350.0;
+
+  /// 初始化对话框尺寸（在应用启动时调用）
+  static void initialize(double screenWidth, double screenHeight) {
+    if (_initialized) return;
+
+    _screenWidth = screenWidth;
+    _screenHeight = screenHeight;
+    _initialized = true;
+
+    // 计算适合的对话框高度
+    final isLandscape = screenWidth > screenHeight;
+    final shortestSide =
+        screenWidth < screenHeight ? screenWidth : screenHeight;
+    final isPhone = shortestSide < 600;
+
+    if (isPhone) {
+      // 手机设备
+      if (isLandscape) {
+        // 手机横屏：确保不超过屏幕高度的90%
+        final maxHeight = screenHeight * 0.9;
+        loginDialogHeight = (screenHeight * 0.70).clamp(250.0, maxHeight);
+        serverDialogHeight = (screenHeight * 0.80).clamp(300.0, maxHeight);
+        generalDialogHeight = (screenHeight * 0.65).clamp(220.0, maxHeight);
+      } else {
+        // 手机竖屏：标准高度，有足够空间
+        loginDialogHeight = (screenHeight * 0.5).clamp(380.0, 450.0);
+        serverDialogHeight = (screenHeight * 0.6).clamp(500.0, 600.0);
+        generalDialogHeight = (screenHeight * 0.45).clamp(350.0, 400.0);
+      }
+    } else {
+      // 平板/桌面设备：固定高度
+      loginDialogHeight = 450.0;
+      serverDialogHeight = 600.0;
+      generalDialogHeight = 400.0;
+    }
+  }
+
+  /// 获取适合的对话框宽度
+  static double getDialogWidth(double screenWidth) {
+    final shortestSide =
+        screenWidth < _screenHeight ? screenWidth : _screenHeight;
+    final isPhone = shortestSide < 600;
+
+    if (isPhone) {
+      return (screenWidth * 0.9).clamp(300.0, 450.0);
+    } else if (shortestSide < 900) {
+      return (screenWidth * 0.7).clamp(400.0, 600.0);
+    } else {
+      return 500.0;
+    }
+  }
+
+  /// 检查是否已初始化
+  static bool get isInitialized => _initialized;
+}

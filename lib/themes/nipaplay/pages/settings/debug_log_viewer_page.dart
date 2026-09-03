@@ -1,0 +1,986 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:file_selector/file_selector.dart';
+import 'package:intl/intl.dart';
+import 'package:nipaplay/services/debug_log_service.dart';
+import 'package:nipaplay/services/log_share_service.dart';
+import 'package:nipaplay/utils/settings_storage.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/keyboard_activatable.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/bounce_hover_scale.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/fluent_settings_switch.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/glass_bottom_sheet.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tvos_remote_text_input_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_view_container.dart';
+import 'package:kmbal_ionicons/kmbal_ionicons.dart';
+import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
+import 'package:nipaplay/utils/app_accent_color.dart';
+
+/// 调试日志查看器页面
+/// 提供日志查看、搜索、过滤和导出功能
+class DebugLogViewerPage extends StatefulWidget {
+  const DebugLogViewerPage({super.key});
+
+  @override
+  State<DebugLogViewerPage> createState() => _DebugLogViewerPageState();
+}
+
+class _DebugLogViewerPageState extends State<DebugLogViewerPage>
+    with TickerProviderStateMixin {
+  late ScrollController _scrollController;
+  late TextEditingController _searchController;
+  late GlobalKey<State> _levelDropdownKey;
+  late GlobalKey<State> _tagDropdownKey;
+
+  bool _showTimestamp = true;
+  bool _autoScroll = false;
+  bool _isMoreOptionsHovered = false;
+  bool _isMoreOptionsFocused = false;
+  String _selectedLevel = '全部';
+  String _selectedTag = '全部';
+  String _searchQuery = '';
+  List<String> _availableTags = ['全部'];
+  final List<String> _logLevels = ['全部', 'DEBUG', 'INFO', 'WARN', 'ERROR'];
+
+  bool get _isLargeScreen => NipaplayLargeScreenModeScope.isActiveOf(context);
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+    _searchController = TextEditingController();
+    _levelDropdownKey = GlobalKey();
+    _tagDropdownKey = GlobalKey();
+    _searchController.addListener(_onSearchChanged);
+
+    // 获取可用的标签
+    _updateAvailableTags();
+
+    // 加载保存的设置
+    _loadSettings();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged() {
+    setState(() {
+      _searchQuery = _searchController.text;
+    });
+  }
+
+  // 加载保存的设置
+  Future<void> _loadSettings() async {
+    final showTimestamp = await SettingsStorage.loadBool(
+        'debug_log_show_timestamp',
+        defaultValue: true);
+    final autoScroll = await SettingsStorage.loadBool('debug_log_auto_scroll',
+        defaultValue: false);
+
+    if (mounted) {
+      setState(() {
+        _showTimestamp = showTimestamp;
+        _autoScroll = autoScroll;
+      });
+    }
+  }
+
+  void _updateAvailableTags() {
+    final logService = DebugLogService();
+    final tags =
+        logService.logEntries.map((entry) => entry.tag).toSet().toList();
+    tags.sort();
+
+    setState(() {
+      _availableTags = ['全部', ...tags];
+      if (!_availableTags.contains(_selectedTag)) {
+        _selectedTag = '全部';
+      }
+    });
+  }
+
+  List<LogEntry> _getFilteredLogs() {
+    final logService = DebugLogService();
+    var logs = logService.logEntries;
+
+    // 按级别过滤
+    if (_selectedLevel != '全部') {
+      logs = logs.where((log) => log.level == _selectedLevel).toList();
+    }
+
+    // 按标签过滤
+    if (_selectedTag != '全部') {
+      logs = logs.where((log) => log.tag == _selectedTag).toList();
+    }
+
+    // 按搜索关键词过滤
+    if (_searchQuery.isNotEmpty) {
+      logs = logs
+          .where((log) =>
+              log.message.toLowerCase().contains(_searchQuery.toLowerCase()))
+          .toList();
+    }
+
+    return logs;
+  }
+
+  Color _getLevelColor(String level) {
+    switch (level) {
+      case 'ERROR':
+        return Colors.red;
+      case 'WARN':
+        return Colors.orange;
+      case 'INFO':
+        return Colors.blue;
+      case 'DEBUG':
+      default:
+        return Colors.grey;
+    }
+  }
+
+  /// 构建日志条目内容，支持不同设备的布局
+  Widget _buildLogEntryContent(LogEntry entry) {
+    final colorScheme = Theme.of(context).colorScheme;
+    // 检查是否为手机设备
+    final screenSize = MediaQuery.of(context).size;
+    final shortestSide = screenSize.width < screenSize.height
+        ? screenSize.width
+        : screenSize.height;
+    final bool isRealPhone = globals.isPhone && shortestSide < 600;
+
+    if (isRealPhone) {
+      // 手机设备：垂直布局，时间-info-标签分三排显示在左侧
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 第一行：时间戳
+          if (_showTimestamp)
+            Text(
+              '${entry.timestamp.hour.toString().padLeft(2, '0')}:'
+              '${entry.timestamp.minute.toString().padLeft(2, '0')}:'
+              '${entry.timestamp.second.toString().padLeft(2, '0')}',
+              style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.54),
+                fontSize: 12,
+                fontFamily: 'monospace',
+              ),
+            ),
+
+          if (_showTimestamp) SizedBox(height: 4),
+
+          // 第二行：级别标签
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: _getLevelColor(entry.level),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              entry.level,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+
+          SizedBox(height: 4),
+
+          // 第三行：标签
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: colorScheme.onSurface.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              entry.tag,
+              style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.7),
+                fontSize: 10,
+              ),
+            ),
+          ),
+
+          SizedBox(height: 8),
+
+          // 第四行：消息内容
+          Text(
+            entry.message,
+            style: TextStyle(
+              color: colorScheme.onSurface,
+              fontSize: 13,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
+      );
+    } else {
+      // 非手机设备：保持原有的水平布局
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 时间戳
+          if (_showTimestamp)
+            SizedBox(
+              width: 80,
+              child: Text(
+                '${entry.timestamp.hour.toString().padLeft(2, '0')}:'
+                '${entry.timestamp.minute.toString().padLeft(2, '0')}:'
+                '${entry.timestamp.second.toString().padLeft(2, '0')}',
+                style: TextStyle(
+                  color: colorScheme.onSurface.withOpacity(0.54),
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+
+          if (_showTimestamp) SizedBox(width: 8),
+
+          // 级别标签
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: _getLevelColor(entry.level),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              entry.level,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+
+          SizedBox(width: 8),
+
+          // 标签
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: colorScheme.onSurface.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              entry.tag,
+              style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.7),
+                fontSize: 10,
+              ),
+            ),
+          ),
+
+          SizedBox(width: 8),
+
+          // 消息内容
+          Expanded(
+            child: Text(
+              entry.message,
+              style: TextStyle(
+                color: colorScheme.onSurface,
+                fontSize: 13,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
+  void _clearLogs() {
+    final colorScheme = Theme.of(context).colorScheme;
+    BlurDialog.show(
+      context: context,
+      title: '确认清空',
+      content: '确定要清空所有日志吗？此操作无法撤销。',
+      actions: [
+        HoverScaleTextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('取消',
+              style: TextStyle(color: colorScheme.onSurface.withOpacity(0.7))),
+        ),
+        HoverScaleTextButton(
+          onPressed: () {
+            Navigator.pop(context);
+            DebugLogService().clearLogs();
+            BlurSnackBar.show(context, '日志已清空');
+          },
+          child: const Text('确认', style: TextStyle(color: Colors.red)),
+        ),
+      ],
+    );
+  }
+
+  void _exportLogs() {
+    final logService = DebugLogService();
+    final exportText = logService.exportLogs();
+
+    Clipboard.setData(ClipboardData(text: exportText));
+    BlurSnackBar.show(context, '日志已复制到剪贴板');
+  }
+
+  Future<void> _exportLogsToFile() async {
+    try {
+      final logService = DebugLogService();
+      final exportText = logService.exportLogs();
+
+      // 生成文件名：NipaPlay_YYYY-MM-DD_HH-mm-ss.txt
+      final now = DateTime.now();
+      final formatter = DateFormat('yyyy-MM-dd_HH-mm-ss');
+      final fileName = 'NipaPlay_${formatter.format(now)}.txt';
+
+      // 使用file_selector弹出保存对话框
+      final savePath = await getSaveLocation(
+        suggestedName: fileName,
+        acceptedTypeGroups: [
+          const XTypeGroup(
+            label: '文本文件',
+            extensions: ['txt'],
+          ),
+        ],
+      );
+
+      if (savePath != null) {
+        // 写入文件
+        final file = File(savePath.path);
+        await file.writeAsString(exportText, encoding: utf8);
+
+        if (mounted) {
+          BlurSnackBar.show(context, '日志已导出到: ${savePath.path}');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        BlurSnackBar.show(context, '导出失败: $e');
+      }
+    }
+  }
+
+  void _copyLogEntry(LogEntry entry) {
+    Clipboard.setData(ClipboardData(text: entry.toFormattedString()));
+    BlurSnackBar.show(context, '日志条目已复制');
+  }
+
+  void _showLogStatistics() {
+    final logService = DebugLogService();
+    final stats = logService.getLogStatistics();
+    final colorScheme = Theme.of(context).colorScheme;
+
+    final contentBuffer = StringBuffer();
+    contentBuffer.writeln('总计: ${stats['total'] ?? 0} 条\n');
+
+    final levelStats = stats.entries
+        .where((entry) => entry.key.startsWith('level_'))
+        .map((entry) => '${entry.key.substring(6)}: ${entry.value} 条')
+        .join('\n');
+
+    contentBuffer.write(levelStats);
+
+    BlurDialog.show(
+      context: context,
+      title: '日志统计',
+      content: contentBuffer.toString(),
+      actions: [
+        HoverScaleTextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('关闭', style: TextStyle(color: colorScheme.onSurface)),
+        ),
+      ],
+    );
+  }
+
+  // 显示更多选项对话框
+  void _showMoreOptions(BuildContext context) {
+    if (_isLargeScreen) {
+      NipaplayLargeScreenViewContainer.show<void>(
+        context: context,
+        title: '终端输出选项',
+        subtitle: '选择日志显示、导出与清理操作',
+        maxWidth: 760,
+        maxHeightFactor: 0.82,
+        autofocusClose: false,
+        builder: (_) => SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: _buildMoreOptionsContent(context),
+        ),
+      );
+      return;
+    }
+    GlassBottomSheet.show(
+      context: context,
+      title: '终端输出选项',
+      height: MediaQuery.of(context).size.height * 0.6,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: _buildMoreOptionsContent(context),
+      ),
+    );
+  }
+
+  Widget _buildMoreOptionsContent(BuildContext context) {
+    return Column(
+      children: [
+        // 显示时间戳开关
+        _buildOptionItem(
+          icon: Icons.access_time,
+          title: '显示时间戳',
+          isSwitch: true,
+          switchValue: _showTimestamp,
+          onSwitchChanged: (value) {
+            setState(() {
+              _showTimestamp = value;
+            });
+            SettingsStorage.saveBool('debug_log_show_timestamp', value);
+            Navigator.pop(context);
+          },
+        ),
+
+        SizedBox(height: 12),
+
+        // 自动滚动开关
+        _buildOptionItem(
+          icon: Icons.auto_awesome,
+          title: '自动滚动',
+          isSwitch: true,
+          switchValue: _autoScroll,
+          onSwitchChanged: (value) {
+            setState(() {
+              _autoScroll = value;
+            });
+            SettingsStorage.saveBool('debug_log_auto_scroll', value);
+            Navigator.pop(context);
+          },
+        ),
+
+        SizedBox(height: 20),
+
+        // 分隔线
+        Divider(
+            color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3)),
+
+        SizedBox(height: 12),
+
+        // 统计信息
+        _buildOptionItem(
+          icon: Icons.bar_chart,
+          title: '统计信息',
+          onTap: () {
+            Navigator.pop(context);
+            _showLogStatistics();
+          },
+        ),
+
+        SizedBox(height: 12),
+
+        // 导出全部
+        _buildOptionItem(
+          icon: Icons.copy_all,
+          title: Platform.isWindows || Platform.isMacOS || Platform.isLinux
+              ? '导出到文件'
+              : '导出全部',
+          onTap: () {
+            Navigator.pop(context);
+            if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) {
+              _exportLogsToFile();
+            } else {
+              _exportLogs();
+            }
+          },
+        ),
+
+        // PC端额外显示复制到剪贴板选项
+        if (Platform.isWindows || Platform.isMacOS || Platform.isLinux) ...[
+          SizedBox(height: 12),
+          _buildOptionItem(
+            icon: Icons.content_copy,
+            title: '复制到剪贴板',
+            onTap: () {
+              Navigator.pop(context);
+              _exportLogs();
+            },
+          ),
+        ],
+
+        SizedBox(height: 12),
+
+        // 分享二维码选项
+        _buildOptionItem(
+          icon: Icons.qr_code,
+          title: '分享二维码',
+          onTap: () {
+            Navigator.pop(context);
+            Future.microtask(() {
+              if (mounted) {
+                _showQRCode();
+              }
+            });
+          },
+        ),
+
+        SizedBox(height: 12),
+
+        // 清空日志
+        _buildOptionItem(
+          icon: Icons.clear_all,
+          title: '清空日志',
+          iconColor: Colors.red,
+          textColor: Colors.red,
+          onTap: () {
+            Navigator.pop(context);
+            _clearLogs();
+          },
+        ),
+
+        // 添加底部边距，确保最后一项可以完全显示
+        SizedBox(height: 16),
+      ],
+    );
+  }
+
+  Widget _buildOptionItem({
+    required IconData icon,
+    required String title,
+    Color? iconColor,
+    Color? textColor,
+    bool isSwitch = false,
+    bool? switchValue,
+    Function(bool)? onSwitchChanged,
+    VoidCallback? onTap,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final item = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: isSwitch ? null : onTap,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                color: iconColor ?? colorScheme.onSurface.withOpacity(0.7),
+                size: 20,
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: textColor ?? colorScheme.onSurface,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+              if (isSwitch)
+                FluentSettingsSwitch(
+                  value: switchValue ?? false,
+                  onChanged: onSwitchChanged,
+                )
+              else
+                Icon(
+                  Icons.chevron_right,
+                  color: colorScheme.onSurface.withOpacity(0.54),
+                  size: 20,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!_isLargeScreen) return item;
+    return NipaplayLargeScreenFocusableAction(
+      onActivate: isSwitch
+          ? () => onSwitchChanged?.call(!(switchValue ?? false))
+          : onTap,
+      borderRadius: BorderRadius.circular(10),
+      focusScale: 1,
+      child: ExcludeFocus(child: item),
+    );
+  }
+
+  // 显示二维码对话框
+  Future<void> _showQRCode() async {
+    if (!mounted) return;
+    debugPrint('[QRCode] 开始生成二维码...');
+
+    try {
+      debugPrint('[QRCode] 开始上传日志');
+      // 上传日志并获取URL
+      final url = await LogShareService.uploadLogs();
+      debugPrint('[QRCode] 获取到URL: $url');
+
+      if (!mounted) return;
+
+      debugPrint('[QRCode] 显示二维码对话框');
+      final colorScheme = Theme.of(context).colorScheme;
+      await BlurDialog.show(
+        context: context,
+        title: '扫描二维码查看日志',
+        contentWidget: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: QrImageView(
+                data: url,
+                version: QrVersions.auto,
+                size: 200.0,
+                backgroundColor: Colors.white,
+              ),
+            ),
+            SizedBox(height: 20),
+            Text(
+              '日志将在1小时后自动删除',
+              style: TextStyle(
+                color: colorScheme.onSurface.withOpacity(0.7),
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          HoverScaleTextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: url));
+              if (mounted) {
+                BlurSnackBar.show(context, '链接已复制到剪贴板');
+              }
+            },
+            child: Text('复制链接', style: TextStyle(color: colorScheme.onSurface)),
+          ),
+        ],
+      );
+      debugPrint('[QRCode] 二码对话框显示完成');
+    } catch (e) {
+      debugPrint('[QRCode] 发生错误: $e');
+      if (!mounted) return;
+
+      BlurSnackBar.show(context, '生成二维码失败: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return ChangeNotifierProvider.value(
+      value: DebugLogService(),
+      child: Column(
+        children: [
+          // 工具栏
+          Container(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                // 搜索框
+                TvOSRemoteTextInputControl(
+                  title: '搜索日志内容',
+                  child: TextField(
+                    controller: _searchController,
+                    cursorColor: AppAccentColors.current,
+                    style: TextStyle(color: colorScheme.onSurface),
+                    decoration: InputDecoration(
+                      hintText: '搜索日志内容...',
+                      hintStyle: TextStyle(
+                          color: colorScheme.onSurface.withOpacity(0.54)),
+                      prefixIcon: Icon(Icons.search,
+                          color: colorScheme.onSurface.withOpacity(0.54)),
+                      border: OutlineInputBorder(
+                        borderSide: BorderSide(
+                            color: colorScheme.onSurface.withOpacity(0.3)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderSide: BorderSide(
+                            color: AppAccentColors.current, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(height: 12),
+
+                // 过滤器和控制按钮
+                Row(
+                  children: [
+                    // 级别过滤
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Text(
+                            '级别: ',
+                            style: TextStyle(
+                                color: colorScheme.onSurface.withOpacity(0.7),
+                                fontSize: 14),
+                          ),
+                          Consumer<DebugLogService>(
+                            builder: (context, logService, child) {
+                              return BlurDropdown<String>(
+                                dropdownKey: _levelDropdownKey,
+                                items: _logLevels
+                                    .map((level) => DropdownMenuItemData(
+                                          title: level,
+                                          value: level,
+                                          isSelected: _selectedLevel == level,
+                                        ))
+                                    .toList(),
+                                onItemSelected: (level) {
+                                  setState(() {
+                                    _selectedLevel = level;
+                                  });
+                                },
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    SizedBox(width: 16),
+
+                    // 标签过滤
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Text(
+                            '标签: ',
+                            style: TextStyle(
+                                color: colorScheme.onSurface.withOpacity(0.7),
+                                fontSize: 14),
+                          ),
+                          Consumer<DebugLogService>(
+                            builder: (context, logService, child) {
+                              // 更新可用标签
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                _updateAvailableTags();
+                              });
+
+                              return BlurDropdown<String>(
+                                dropdownKey: _tagDropdownKey,
+                                items: _availableTags
+                                    .map((tag) => DropdownMenuItemData(
+                                          title: tag,
+                                          value: tag,
+                                          isSelected: _selectedTag == tag,
+                                        ))
+                                    .toList(),
+                                onItemSelected: (tag) {
+                                  setState(() {
+                                    _selectedTag = tag;
+                                  });
+                                },
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    SizedBox(width: 16),
+
+                    // 选项按钮
+                    KeyboardActivatable(
+                      onActivate: () => _showMoreOptions(context),
+                      onFocusChange: (focused) =>
+                          setState(() => _isMoreOptionsFocused = focused),
+                      child: MouseRegion(
+                        onEnter: (_) =>
+                            setState(() => _isMoreOptionsHovered = true),
+                        onExit: (_) =>
+                            setState(() => _isMoreOptionsHovered = false),
+                        cursor: SystemMouseCursors.click,
+                        child: GestureDetector(
+                          onTap: () => _showMoreOptions(context),
+                          child: BounceHoverScale(
+                            isHovered:
+                                _isMoreOptionsHovered || _isMoreOptionsFocused,
+                            isPressed: false,
+                            child: Icon(
+                              Ionicons.ellipsis_vertical,
+                              color: (_isMoreOptionsHovered ||
+                                      _isMoreOptionsFocused)
+                                  ? AppAccentColors.current
+                                  : colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // 日志状态栏 - 使用Consumer监听状态
+          Consumer<DebugLogService>(
+            builder: (context, logService, child) {
+              final filteredLogs = _getFilteredLogs();
+
+              return Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                color: colorScheme.onSurface.withOpacity(0.1),
+                child: Row(
+                  children: [
+                    Icon(
+                      logService.isCollecting
+                          ? Icons.fiber_manual_record
+                          : Icons.stop,
+                      color:
+                          logService.isCollecting ? Colors.green : Colors.red,
+                      size: 12,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      logService.isCollecting ? '正在收集日志' : '日志收集已停止',
+                      style: TextStyle(
+                          color: colorScheme.onSurface.withOpacity(0.7),
+                          fontSize: 12),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '显示 ${filteredLogs.length}/${logService.logCount} 条',
+                      style: TextStyle(
+                          color: colorScheme.onSurface.withOpacity(0.7),
+                          fontSize: 12),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+
+          // 日志列表 - 使用Consumer监听内容变化
+          Expanded(
+            child: Consumer<DebugLogService>(
+              builder: (context, logService, child) {
+                final filteredLogs = _getFilteredLogs();
+
+                // 自动滚动到底部
+                if (_autoScroll && filteredLogs.isNotEmpty) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    _scrollToBottom();
+                  });
+                }
+
+                return filteredLogs.isEmpty
+                    ? Center(
+                        child: Text(
+                          '暂无日志',
+                          style: TextStyle(
+                              color: colorScheme.onSurface.withOpacity(0.54),
+                              fontSize: 16),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scrollController,
+                        itemCount: filteredLogs.length,
+                        itemBuilder: (context, index) {
+                          final entry = filteredLogs[index];
+                          final entryContent = Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(
+                                  color: colorScheme.onSurface.withOpacity(0.1),
+                                  width: 0.5,
+                                ),
+                              ),
+                            ),
+                            child: _buildLogEntryContent(entry),
+                          );
+                          if (_isLargeScreen) {
+                            return Padding(
+                              padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
+                              child: NipaplayLargeScreenFocusableAction(
+                                onActivate: () => _copyLogEntry(entry),
+                                borderRadius: BorderRadius.circular(8),
+                                focusScale: 1,
+                                child: entryContent,
+                              ),
+                            );
+                          }
+
+                          return InkWell(
+                            onTap: () => _copyLogEntry(entry),
+                            onLongPress: () {
+                              // 显示详细信息
+                              final detailsContent = '时间: ${entry.timestamp}\n'
+                                  '级别: ${entry.level}\n'
+                                  '标签: ${entry.tag}\n'
+                                  '内容: ${entry.message}';
+
+                              BlurDialog.show(
+                                context: context,
+                                title: '日志详细信息',
+                                content: detailsContent,
+                                actions: [
+                                  HoverScaleTextButton(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: Text('关闭',
+                                        style: TextStyle(
+                                            color: colorScheme.onSurface)),
+                                  ),
+                                  HoverScaleTextButton(
+                                    onPressed: () {
+                                      Navigator.pop(context);
+                                      _copyLogEntry(entry);
+                                    },
+                                    child: Text('复制',
+                                        style: TextStyle(
+                                            color: colorScheme.onSurface)),
+                                  ),
+                                ],
+                              );
+                            },
+                            child: entryContent,
+                          );
+                        },
+                      );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

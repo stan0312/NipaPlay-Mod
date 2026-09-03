@@ -1,0 +1,118 @@
+name: 'Build iOS IPA'
+description: '构建 iOS 应用并生成 IPA 文件'
+inputs:
+  app-version:
+    description: '应用版本号'
+    required: true
+outputs:
+  ipa-path:
+    description: '生成的 IPA 文件路径'
+    value: ${{ steps.build.outputs.ipa_path }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup iOS environment
+      shell: bash
+      run: |
+        echo "=== 系统环境检查 ==="
+        echo "运行的机器类型: $(sw_vers -productName) $(sw_vers -productVersion)"
+        echo "CPU架构: $(uname -m)"
+        echo "可用磁盘空间:"
+        df -h
+
+        MACOS_VERSION="$(sw_vers -productVersion)"
+        if [[ "${MACOS_VERSION}" != 26.* ]]; then
+          echo "❌ 错误：iOS IPA 构建必须运行在 macOS 26，当前系统为 ${MACOS_VERSION}"
+          exit 1
+        fi
+        
+        echo "=== Xcode环境检查 ==="
+        if command -v xcodebuild &> /dev/null; then
+          echo "✅ Xcode已安装"
+          xcodebuild -version
+        else
+          echo "❌ 错误：未发现Xcode"
+          exit 1
+        fi
+        
+        echo "=== iOS SDK检查 ==="
+        echo "可用的iOS SDK:"
+        xcodebuild -showsdks | grep ios || echo "❌ 未发现iOS SDK"
+        
+        echo "=== 可用destinations检查 ==="
+        echo "可用的iOS构建目标:"
+        xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -showdestinations 2>/dev/null | grep "platform:iOS" || echo "❌ 无可用iOS目标"
+        
+        echo "设置iOS构建环境完成"
+    
+    - name: Build Web and copy assets
+      shell: bash
+      run: |
+        chmod +x build_and_copy_web.sh
+        ./build_and_copy_web.sh
+    
+    - name: Build iOS
+      id: build
+      shell: bash
+      env:
+        IPHONEOS_DEPLOYMENT_TARGET: '13.0'
+        FLUTTER_XCODE_IPHONEOS_DEPLOYMENT_TARGET: '13.0'
+        XCODE_SDK: 'iphoneos'
+      run: |
+        echo "开始iOS构建流程..."
+        echo "当前工作目录: $(pwd)"
+
+        echo "预下载 Flutter iOS 构建依赖..."
+        flutter precache --ios
+        
+        echo "更新CocoaPods依赖..."
+        cd ios
+        pod update --repo-update || echo "Pod update警告，继续构建..."
+        
+        # 修改Xcode项目设置，强制使用可用的iOS SDK
+        echo "修改Xcode项目配置..."
+        # 获取可用的iOS SDK版本号
+        AVAILABLE_SDK_VERSION=$(xcodebuild -showsdks | grep iphoneos | tail -1 | sed 's/.*iphoneos//' | tr -d ' ')
+        if [ ! -z "$AVAILABLE_SDK_VERSION" ]; then
+          echo "强制设置iOS SDK版本为: $AVAILABLE_SDK_VERSION"
+          # 使用sed修改project.pbxproj中的IPHONEOS_DEPLOYMENT_TARGET
+          sed -i.bak "s/IPHONEOS_DEPLOYMENT_TARGET = [^;]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g" Runner.xcodeproj/project.pbxproj
+        fi
+        
+        cd ..
+        
+        echo "开始Flutter iOS构建..."
+        # 获取系统上实际可用的最高iOS SDK版本
+        AVAILABLE_SDK=$(xcodebuild -showsdks | grep iphoneos | tail -1 | awk '{print $NF}')
+        echo "系统可用的iOS SDK: $AVAILABLE_SDK"
+        
+        # --obfuscate + --split-debug-info：Dart 代码混淆 + 分离调试符号（体积↓ + 反逆向）
+        # symbol map 由 workflow 的 dart-symbols-* artifact 上传，用于 crash stack 反混淆
+        # 兼容性：与 iOS dSYM 不冲突（dSYM 是原生层，obfuscate 是 Dart 层，独立）
+        # 如果检测到SDK，显式设置使用该SDK
+        if [ ! -z "$AVAILABLE_SDK" ]; then
+          echo "使用SDK: $AVAILABLE_SDK"
+          export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+          # 强制Flutter使用检测到的SDK版本
+          echo "开始第一次构建尝试..."
+          if ! flutter build ios --release --no-codesign --verbose \
+            --dart-define=FLUTTER_XCODE_SDK=$AVAILABLE_SDK \
+            --obfuscate --split-debug-info=build/symbols-ios; then
+            echo "⚠️ 第一次构建失败，等待30秒后重试..."
+            sleep 30
+            echo "开始第二次构建尝试..."
+            flutter build ios --release --no-codesign --verbose \
+              --obfuscate --split-debug-info=build/symbols-ios
+          fi
+        else
+          echo "未检测到iOS SDK，使用默认构建..."
+          flutter build ios --release --no-codesign --verbose \
+            --obfuscate --split-debug-info=build/symbols-ios
+        fi
+        sh thin-payload.sh build/ios/iphoneos/*.app
+        cd build
+        mkdir -p Payload
+        mv ios/iphoneos/*.app Payload
+        ipa_name="NipaPlay_${{ inputs.app-version }}_iOS_arm64.ipa"
+        zip -9 "$ipa_name" -r Payload
+        echo "ipa_path=build/$ipa_name" >> $GITHUB_OUTPUT

@@ -1,0 +1,471 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:shelf/shelf.dart';
+import 'package:shelf_router/shelf_router.dart';
+
+import 'local_media_share_service.dart';
+
+class LocalMediaShareApi {
+  LocalMediaShareApi() {
+    router.get('/animes', _handleListAnimes);
+    router.get('/animes/<animeId|[0-9]+>', _handleAnimeDetail);
+    router.get('/history', _handleWatchHistory);
+    router.get('/episodes/<shareId>/stream', _handleEpisodeStream);
+    router.add('HEAD', '/episodes/<shareId>/stream', _handleEpisodeStreamHead);
+    router.get('/episodes/<shareId>/subtitles', _handleEpisodeSubtitles);
+    router.get('/episodes/<shareId>/subtitle', _handleEpisodeSubtitleStream);
+    router.add('HEAD', '/episodes/<shareId>/subtitle', _handleEpisodeSubtitleStreamHead);
+    router.get('/episodes/<shareId>/audio', _handleEpisodeExternalAudio);
+    router.get('/episodes/<shareId>/audio_file', _handleEpisodeAudioFileStream);
+    router.add('HEAD', '/episodes/<shareId>/audio_file', _handleEpisodeAudioFileStreamHead);
+    router.get('/episodes/<shareId>/fonts', _handleEpisodeFonts);
+    router.get('/episodes/<shareId>/font', _handleEpisodeFontStream);
+    router.add('HEAD', '/episodes/<shareId>/font', _handleEpisodeFontStreamHead);
+    router.post('/episodes/<shareId>/progress', _handleUpdateEpisodeProgress);
+    router.post('/episodes/<shareId>/thumbnail', _handleUpdateEpisodeThumbnail);
+  }
+
+  final LocalMediaShareService _service = LocalMediaShareService.instance;
+  final Router router = Router();
+
+  Future<Response> _handleListAnimes(Request request) async {
+    try {
+      final items = await _service.getAnimeSummaries();
+      return Response.ok(
+        json.encode({'success': true, 'items': items}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: 'Error listing shared animes: $e');
+    }
+  }
+
+  Future<Response> _handleAnimeDetail(Request request) async {
+    final animeIdStr = request.params['animeId'];
+    final animeId = int.tryParse(animeIdStr ?? '');
+    if (animeId == null) {
+      return Response.badRequest(body: 'Invalid animeId');
+    }
+
+    try {
+      final detail = await _service.getAnimeDetail(animeId);
+      if (detail == null) {
+        return Response.notFound('Anime not found');
+      }
+      return Response.ok(
+        json.encode({'success': true, 'data': detail}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: 'Error loading shared anime detail: $e');
+    }
+  }
+
+  Future<Response> _handleWatchHistory(Request request) async {
+    int limit = 100;
+    final rawLimit = request.url.queryParameters['limit'];
+    if (rawLimit != null) {
+      limit = int.tryParse(rawLimit) ?? limit;
+    }
+    limit = limit.clamp(1, 500);
+
+    try {
+      final items = await _service.getWatchHistory(limit: limit);
+      return Response.ok(
+        json.encode({'success': true, 'items': items}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: 'Error listing shared watch history: $e',
+      );
+    }
+  }
+
+  Future<Response> _handleEpisodeStream(Request request) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      return await _service.buildStreamResponse(request, episode);
+    } catch (e) {
+      return Response.internalServerError(body: 'Error streaming shared episode: $e');
+    }
+  }
+
+  Future<Response> _handleEpisodeStreamHead(Request request) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      return await _service.buildStreamResponse(
+        request,
+        episode,
+        headOnly: true,
+      );
+    } catch (e) {
+      return Response.internalServerError(body: 'Error streaming shared episode: $e');
+    }
+  }
+
+  Future<Response> _handleEpisodeSubtitles(Request request) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      final items = await _service.listEpisodeSubtitles(episode);
+      return Response.ok(
+        json.encode({'success': true, 'items': items}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: 'Error listing shared episode subtitles: $e',
+      );
+    }
+  }
+
+  Future<Response> _handleEpisodeSubtitleStream(Request request) async {
+    return _handleEpisodeSubtitleStreamInternal(request, headOnly: false);
+  }
+
+  Future<Response> _handleEpisodeSubtitleStreamHead(Request request) async {
+    return _handleEpisodeSubtitleStreamInternal(request, headOnly: true);
+  }
+
+  Future<Response> _handleEpisodeSubtitleStreamInternal(
+    Request request, {
+    required bool headOnly,
+  }) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final subtitleName = request.url.queryParameters['name']?.trim();
+    if (subtitleName == null || subtitleName.isEmpty) {
+      return Response.badRequest(body: 'Missing subtitle name');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      return await _service.buildSubtitleResponse(
+        request,
+        episode,
+        subtitleName: subtitleName,
+        headOnly: headOnly,
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: 'Error streaming shared subtitle: $e',
+      );
+    }
+  }
+
+
+  Future<Response> _handleEpisodeExternalAudio(Request request) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      final items = await _service.listEpisodeExternalAudio(episode);
+      return Response.ok(
+        json.encode({'success': true, 'items': items}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: 'Error listing shared episode external audio: $e',
+      );
+    }
+  }
+
+  Future<Response> _handleEpisodeAudioFileStream(Request request) async {
+    return _handleEpisodeAudioFileStreamInternal(request, headOnly: false);
+  }
+
+  Future<Response> _handleEpisodeAudioFileStreamHead(Request request) async {
+    return _handleEpisodeAudioFileStreamInternal(request, headOnly: true);
+  }
+
+  Future<Response> _handleEpisodeAudioFileStreamInternal(
+    Request request, {
+    required bool headOnly,
+  }) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final audioName = request.url.queryParameters['name']?.trim();
+    if (audioName == null || audioName.isEmpty) {
+      return Response.badRequest(body: 'Missing audio name');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      return await _service.buildExternalAudioResponse(
+        request,
+        episode,
+        audioName: audioName,
+        headOnly: headOnly,
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: 'Error streaming shared external audio: $e',
+      );
+    }
+  }
+
+  Future<Response> _handleEpisodeFonts(Request request) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      final items = await _service.listEpisodeFonts(episode);
+      return Response.ok(
+        json.encode({'success': true, 'items': items}),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: 'Error listing shared episode fonts: $e',
+      );
+    }
+  }
+
+  Future<Response> _handleEpisodeFontStream(Request request) async {
+    return _handleEpisodeFontStreamInternal(request, headOnly: false);
+  }
+
+  Future<Response> _handleEpisodeFontStreamHead(Request request) async {
+    return _handleEpisodeFontStreamInternal(request, headOnly: true);
+  }
+
+  Future<Response> _handleEpisodeFontStreamInternal(
+    Request request, {
+    required bool headOnly,
+  }) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    final fontName = request.url.queryParameters['name']?.trim();
+    if (fontName == null || fontName.isEmpty) {
+      return Response.badRequest(body: 'Missing font name');
+    }
+
+    final episode = _service.getEpisodeByShareId(shareId);
+    if (episode == null) {
+      return Response.notFound('Episode not found');
+    }
+
+    try {
+      return await _service.buildFontResponse(
+        request,
+        episode,
+        fontName: fontName,
+        headOnly: headOnly,
+      );
+    } catch (e) {
+      return Response.internalServerError(
+        body: 'Error streaming shared font: $e',
+      );
+    }
+  }
+
+  Future<Response> _handleUpdateEpisodeProgress(Request request) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    Map<String, dynamic> payload = const {};
+    try {
+      final rawBody = await request.readAsString();
+      if (rawBody.isNotEmpty) {
+        payload = json.decode(rawBody) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      return Response.badRequest(body: 'Invalid JSON payload');
+    }
+
+    double? progress;
+    final progressValue = payload['progress'];
+    if (progressValue is num) {
+      progress = progressValue.toDouble();
+    }
+
+    int? positionMs;
+    final positionValue = payload['positionMs'] ?? payload['position'];
+    if (positionValue is num) {
+      positionMs = positionValue.toInt();
+    }
+
+    int? durationMs;
+    final durationValue = payload['durationMs'] ?? payload['duration'];
+    if (durationValue is num) {
+      durationMs = durationValue.toInt();
+    }
+
+    DateTime? clientUpdatedAt;
+    final clientTime = payload['clientUpdatedAt'] ?? payload['clientTime'];
+    if (clientTime is String) {
+      clientUpdatedAt = DateTime.tryParse(clientTime);
+    }
+
+    try {
+      final updatedHistory = await _service.updateEpisodeProgress(
+        shareId: shareId,
+        progress: progress,
+        positionMs: positionMs,
+        durationMs: durationMs,
+        clientUpdatedAt: clientUpdatedAt,
+      );
+
+      if (updatedHistory == null) {
+        return Response.notFound('Episode not found');
+      }
+
+      return Response.ok(
+        json.encode({
+          'success': true,
+          'data': {
+            'progress': updatedHistory.watchProgress,
+            'lastPosition': updatedHistory.lastPosition,
+            'duration': updatedHistory.duration,
+            'lastWatchTime': updatedHistory.lastWatchTime.toIso8601String(),
+          },
+        }),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: 'Failed to update progress: $e');
+    }
+  }
+
+  Future<Response> _handleUpdateEpisodeThumbnail(Request request) async {
+    final shareId = request.params['shareId'];
+    if (shareId == null || shareId.isEmpty) {
+      return Response.badRequest(body: 'Missing shareId');
+    }
+
+    Map<String, dynamic> payload = const {};
+    try {
+      final rawBody = await request.readAsString();
+      if (rawBody.isNotEmpty) {
+        payload = json.decode(rawBody) as Map<String, dynamic>;
+      }
+    } catch (_) {
+      return Response.badRequest(body: 'Invalid JSON payload');
+    }
+
+    final thumbnailValue =
+        payload['thumbnailBase64'] ?? payload['thumbnail'] ?? payload['imageBase64'];
+    if (thumbnailValue is! String || thumbnailValue.trim().isEmpty) {
+      return Response.badRequest(body: 'Missing thumbnailBase64');
+    }
+
+    String base64Payload = thumbnailValue.trim();
+    if (base64Payload.startsWith('data:')) {
+      final commaIndex = base64Payload.indexOf(',');
+      if (commaIndex != -1 && commaIndex + 1 < base64Payload.length) {
+        base64Payload = base64Payload.substring(commaIndex + 1);
+      }
+    }
+
+    List<int> thumbnailBytes;
+    try {
+      thumbnailBytes = base64Decode(base64Payload);
+    } catch (_) {
+      return Response.badRequest(body: 'Invalid thumbnailBase64');
+    }
+
+    if (thumbnailBytes.isEmpty) {
+      return Response.badRequest(body: 'Empty thumbnail payload');
+    }
+
+    DateTime? clientUpdatedAt;
+    final clientTime = payload['clientUpdatedAt'] ?? payload['clientTime'];
+    if (clientTime is String) {
+      clientUpdatedAt = DateTime.tryParse(clientTime);
+    }
+
+    String? format;
+    final formatValue = payload['format'] ?? payload['mimeType'];
+    if (formatValue is String) {
+      format = formatValue;
+    }
+
+    try {
+      final updatedHistory = await _service.updateEpisodeThumbnail(
+        shareId: shareId,
+        thumbnailBytes: Uint8List.fromList(thumbnailBytes),
+        clientUpdatedAt: clientUpdatedAt,
+        format: format,
+      );
+
+      if (updatedHistory == null) {
+        return Response.notFound('Episode not found');
+      }
+
+      return Response.ok(
+        json.encode({
+          'success': true,
+          'data': {
+            'thumbnailPath': updatedHistory.thumbnailPath,
+            'lastWatchTime': updatedHistory.lastWatchTime.toIso8601String(),
+          },
+        }),
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: 'Failed to update thumbnail: $e');
+    }
+  }
+}

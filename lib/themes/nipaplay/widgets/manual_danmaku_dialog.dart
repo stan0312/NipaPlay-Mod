@@ -1,0 +1,826 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:nipaplay/services/danmaku_matching_service.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/nipaplay_window.dart';
+import 'package:nipaplay/utils/global_hotkey_manager.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
+import 'package:nipaplay/utils/chinese_converter.dart';
+import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:nipaplay/media_library/adaptive_media_library_primitives.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+
+/// 手动弹幕匹配对话框
+///
+/// 显示搜索动画和选择剧集的界面
+class ManualDanmakuMatchDialog extends StatefulWidget {
+  final String? initialVideoTitle;
+  final bool embedded;
+
+  const ManualDanmakuMatchDialog({
+    super.key,
+    this.initialVideoTitle,
+    this.embedded = false,
+  });
+
+  @override
+  State<ManualDanmakuMatchDialog> createState() =>
+      _ManualDanmakuMatchDialogState();
+}
+
+class _ManualDanmakuMatchDialogState extends State<ManualDanmakuMatchDialog>
+    with GlobalHotkeyManagerMixin {
+  static Color get _accentColor => AppAccentColors.current;
+
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode(
+    debugLabel: 'manual_danmaku_search',
+  );
+  bool _requestedInitialTelevisionFocus = false;
+
+  bool _isSearching = false;
+  bool _showEpisodesView = false;
+  bool _isLoadingEpisodes = false;
+
+  String _searchMessage = '';
+  String _episodesMessage = '';
+
+  List<Map<String, dynamic>> _currentMatches = [];
+  List<Map<String, dynamic>> _currentEpisodes = [];
+
+  Map<String, dynamic>? _selectedAnime;
+  Map<String, dynamic>? _selectedEpisode;
+
+  bool get _isDarkMode => Theme.of(context).brightness == Brightness.dark;
+  Color get _textColor => Theme.of(context).colorScheme.onSurface;
+  Color get _subTextColor => _textColor.withOpacity(0.7);
+  Color get _mutedTextColor => _textColor.withOpacity(0.5);
+  Color get _borderColor => _textColor.withOpacity(_isDarkMode ? 0.12 : 0.2);
+  Color get _surfaceColor =>
+      _isDarkMode ? const Color(0xFF1E1E1E) : const Color(0xFFF2F2F2);
+  Color get _panelColor =>
+      _isDarkMode ? const Color(0xFF262626) : const Color(0xFFE8E8E8);
+  Color get _panelAltColor =>
+      _isDarkMode ? const Color(0xFF2B2B2B) : const Color(0xFFF7F7F7);
+
+  TextSelectionThemeData get _selectionTheme => TextSelectionThemeData(
+        cursorColor: _accentColor,
+        selectionColor: _accentColor.withOpacity(0.3),
+        selectionHandleColor: _accentColor,
+      );
+
+  // 实现GlobalHotkeyManagerMixin要求的方法
+  @override
+  String get hotkeyDisableReason => 'manual_danmaku_dialog';
+
+  @override
+  void initState() {
+    super.initState();
+    debugPrint('=== ManualDanmakuMatchDialog 初始化 ===');
+    if (widget.initialVideoTitle != null) {
+      _searchController.text = widget.initialVideoTitle!;
+    }
+    // 禁用全局热键
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      disableHotkeys();
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_requestedInitialTelevisionFocus ||
+        !NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      return;
+    }
+    _requestedInitialTelevisionFocus = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _searchFocusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    // 启用全局热键
+    disposeHotkeys();
+    super.dispose();
+  }
+
+  /// 执行搜索
+  Future<void> _performSearch() async {
+    final keyword = _searchController.text.trim();
+    if (keyword.isEmpty) {
+      setState(() {
+        _searchMessage = '请输入搜索关键词';
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+      _searchMessage = '正在搜索...';
+      _currentMatches.clear();
+    });
+
+    try {
+      final results =
+          await DanmakuMatchingService.instance.searchAnime(keyword);
+
+      // 检查是否需要转换为繁体中文（不使用context，避免异步间隙问题）
+      final isTraditional =
+          await ChineseConverter.isTraditionalChineseEnvironment(null);
+      if (isTraditional) {
+        // 转换搜索结果
+        for (var result in results) {
+          if (result.containsKey('animeTitle')) {
+            result['animeTitle'] =
+                ChineseConverter.convert(result['animeTitle']);
+          }
+          if (result.containsKey('typeDescription')) {
+            result['typeDescription'] =
+                ChineseConverter.convert(result['typeDescription']);
+          }
+        }
+      }
+
+      setState(() {
+        _isSearching = false;
+        _currentMatches = results;
+        if (results.isEmpty) {
+          _searchMessage = '没有找到匹配的动画';
+        } else {
+          _searchMessage = '找到 ${results.length} 个结果';
+        }
+      });
+    } catch (e) {
+      setState(() {
+        _isSearching = false;
+        _searchMessage = '搜索出错: $e';
+        _currentMatches.clear();
+      });
+    }
+  }
+
+  /// 加载动画剧集
+  Future<void> _loadAnimeEpisodes(Map<String, dynamic> anime) async {
+    if (anime['animeId'] == null) {
+      setState(() {
+        _isLoadingEpisodes = false;
+        _episodesMessage = '错误：动画ID为空。';
+      });
+      return;
+    }
+
+    if (anime['animeTitle'] == null || anime['animeTitle'].toString().isEmpty) {
+      setState(() {
+        _isLoadingEpisodes = false;
+        _episodesMessage = '错误：动画标题为空。';
+      });
+      return;
+    }
+
+    setState(() {
+      _selectedAnime = anime;
+      _showEpisodesView = true;
+      _isLoadingEpisodes = true;
+      _episodesMessage = '正在加载剧集...';
+      _currentEpisodes.clear();
+      _selectedEpisode = null;
+    });
+
+    try {
+      // 确保animeId是整数类型
+      final animeId = anime['animeId'] is int
+          ? anime['animeId']
+          : int.tryParse(anime['animeId'].toString());
+      if (animeId == null) {
+        setState(() {
+          _isLoadingEpisodes = false;
+          _episodesMessage = '错误：动画ID格式不正确。';
+        });
+        return;
+      }
+
+      final episodes =
+          await DanmakuMatchingService.instance.getAnimeEpisodes(animeId);
+      final isTraditional =
+          await ChineseConverter.isTraditionalChineseEnvironment(null);
+      if (isTraditional) {
+        for (final episode in episodes) {
+          final title = episode['episodeTitle'];
+          if (title != null) {
+            episode['episodeTitle'] =
+                ChineseConverter.convert(title.toString());
+          }
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _isLoadingEpisodes = false;
+        _currentEpisodes = episodes;
+        _episodesMessage = episodes.isEmpty ? '该动画暂无剧集信息' : '';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingEpisodes = false;
+        _episodesMessage = '加载剧集时出错: $e';
+      });
+    }
+  }
+
+  /// 返回动画选择
+  void _backToAnimeSelection() {
+    setState(() {
+      _showEpisodesView = false;
+      _selectedAnime = null;
+      _selectedEpisode = null;
+      _currentEpisodes.clear();
+      _episodesMessage = '';
+    });
+  }
+
+  /// 完成选择
+  void _completeSelection() {
+    Map<String, dynamic> result = {};
+
+    if (_selectedAnime != null) {
+      // 添加动画信息到结果中
+      result['anime'] = _selectedAnime;
+      result['animeId'] = _selectedAnime!['animeId'];
+      result['animeTitle'] = _selectedAnime!['animeTitle'];
+
+      // 确定要使用的剧集
+      Map<String, dynamic>? episodeToUse;
+      if (_selectedEpisode != null) {
+        episodeToUse = _selectedEpisode;
+      } else if (_currentEpisodes.isNotEmpty) {
+        episodeToUse = _currentEpisodes.first;
+      }
+
+      if (episodeToUse != null) {
+        result['episode'] = episodeToUse;
+        result['episodeId'] = episodeToUse['episodeId'];
+        result['episodeTitle'] = episodeToUse['episodeTitle'];
+      } else {
+        debugPrint('警告: 没有匹配到任何剧集信息，episodeId可能为空');
+      }
+    }
+
+    Navigator.of(context).pop(result);
+  }
+
+  /// 处理ESC键事件
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        debugPrint('[ManualDanmakuDialog] ESC键被按下，关闭对话框');
+        Navigator.of(context).pop();
+        return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Widget _buildHeader() {
+    final title = _showEpisodesView ? '选择匹配的剧集' : '手动匹配弹幕';
+    final subtitle = _showEpisodesView ? '选择对应的剧集以获取正确的弹幕' : '搜索动画并选择要匹配的剧集';
+
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: _accentColor.withOpacity(0.18),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(
+            Icons.subtitles,
+            color: _accentColor,
+            size: 20,
+          ),
+        ),
+        SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: _textColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: _subTextColor,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Row(
+      children: [
+        Expanded(
+          child: AdaptiveMediaTextField(
+            controller: _searchController,
+            focusNode: _searchFocusNode,
+            remoteInputTitle: '搜索番剧',
+            remoteInputFieldId: 'manual_danmaku_search',
+            showClearButton: true,
+            cursorColor: _accentColor,
+            style: TextStyle(color: _textColor),
+            decoration: InputDecoration(
+              hintText: '输入动画名称',
+              hintStyle: TextStyle(color: _mutedTextColor),
+              prefixIcon: Icon(
+                Icons.search,
+                color: _mutedTextColor,
+                size: 18,
+              ),
+              filled: true,
+              fillColor: _panelAltColor,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: _borderColor),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: _borderColor),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide(color: _accentColor),
+              ),
+            ),
+            onSubmitted: (_) => _performSearch(),
+          ),
+        ),
+        SizedBox(width: 12),
+        AdaptiveMediaActionButton(
+          label: '搜索',
+          onPressed: _isSearching ? null : _performSearch,
+          desktopIcon: Icons.search,
+          phoneIcon: Icons.search,
+          emphasis: AdaptiveMediaActionEmphasis.primary,
+          compact: true,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Text(
+      title,
+      style: TextStyle(
+        color: _textColor,
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+
+  Widget _buildStatusBanner(String message, {bool isError = false}) {
+    final backgroundColor = isError
+        ? Colors.red.withOpacity(_isDarkMode ? 0.2 : 0.12)
+        : _accentColor.withOpacity(_isDarkMode ? 0.18 : 0.12);
+    final borderColor = isError
+        ? Colors.redAccent.withOpacity(0.4)
+        : _accentColor.withOpacity(0.35);
+    final iconColor = isError ? Colors.redAccent : _accentColor;
+    final textColor = isError ? Colors.redAccent : _textColor;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isError ? Icons.error_outline : Icons.info_outline,
+            size: 16,
+            color: iconColor,
+          ),
+          SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: textColor, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState(String title, {String? subtitle}) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.inbox_outlined, color: _mutedTextColor, size: 32),
+          SizedBox(height: 8),
+          Text(
+            title,
+            style: TextStyle(color: _subTextColor, fontSize: 13),
+          ),
+          if (subtitle != null) ...[
+            SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: TextStyle(color: _mutedTextColor, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAnimeItem(Map<String, dynamic> match) {
+    final title = match['animeTitle'] ?? '未知动画';
+    final typeDescription = match['typeDescription'] ?? '未知类型';
+    final episodeCount = match['episodeCount'] ?? 0;
+
+    final content = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: _panelAltColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: _textColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: 4),
+                Text(
+                  '$typeDescription | ${episodeCount}集',
+                  style: TextStyle(
+                    color: _subTextColor,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(
+            Icons.chevron_right,
+            size: 18,
+            color: _mutedTextColor,
+          ),
+        ],
+      ),
+    );
+
+    if (NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      return NipaplayLargeScreenFocusableAction(
+        onActivate: () => _loadAnimeEpisodes(match),
+        borderRadius: BorderRadius.circular(10),
+        focusScale: 1.01,
+        child: content,
+      );
+    }
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => _loadAnimeEpisodes(match),
+        child: content,
+      ),
+    );
+  }
+
+  Widget _buildEpisodeItem(Map<String, dynamic> episode) {
+    final isSelected = _selectedEpisode != null &&
+        _selectedEpisode!['episodeId'] == episode['episodeId'];
+    final episodeNumber = episode['episodeNumber'];
+    final label = episodeNumber != null
+        ? '第$episodeNumber话  ${episode['episodeTitle'] ?? ''}'
+        : episode['episodeTitle'] ?? '第${episode['episodeId']}话';
+
+    final backgroundColor = isSelected
+        ? _accentColor.withOpacity(_isDarkMode ? 0.2 : 0.15)
+        : _panelAltColor;
+    final borderColor =
+        isSelected ? _accentColor.withOpacity(0.6) : _borderColor;
+
+    final content = Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderColor),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: _textColor,
+                  fontSize: 13,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (isSelected)
+              Icon(
+                Icons.check_circle,
+                color: _accentColor,
+                size: 18,
+              ),
+          ],
+        ),
+      ),
+    );
+    void selectEpisode() {
+      setState(() {
+        _selectedEpisode = episode;
+      });
+    }
+
+    if (NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      return NipaplayLargeScreenFocusableAction(
+        onActivate: selectEpisode,
+        borderRadius: BorderRadius.circular(10),
+        focusScale: 1.01,
+        child: content,
+      );
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: selectEpisode,
+      child: content,
+    );
+  }
+
+  Widget _buildResultsPanel(BuildContext context) {
+    final windowHeight = MediaQuery.of(context).size.height;
+    final panelHeight = windowHeight * 0.4;
+
+    final bool isError = _searchMessage.contains('出错');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitle('搜索结果'),
+        if (_searchMessage.isNotEmpty) ...[
+          SizedBox(height: 8),
+          _buildStatusBanner(_searchMessage, isError: isError),
+        ],
+        SizedBox(height: 8),
+        Container(
+          height: panelHeight,
+          decoration: BoxDecoration(
+            color: _panelColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _borderColor),
+          ),
+          child: _isSearching
+              ? Center(
+                  child: AdaptiveMediaActivityIndicator(color: _accentColor),
+                )
+              : _currentMatches.isEmpty
+                  ? _buildEmptyState('暂无搜索结果')
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _currentMatches.length,
+                      separatorBuilder: (_, __) => SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final match = _currentMatches[index];
+                        return _buildAnimeItem(match);
+                      },
+                    ),
+        )
+      ],
+    );
+  }
+
+  Widget _buildSelectedAnimePanel() {
+    final title = _selectedAnime?['animeTitle'] ?? '未知动画';
+    final typeDescription = _selectedAnime?['typeDescription'] ?? '未知类型';
+    final episodeCount = _selectedAnime?['episodeCount'] ?? 0;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _panelColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '已选动画',
+            style: TextStyle(color: _subTextColor, fontSize: 12),
+          ),
+          SizedBox(height: 6),
+          Text(
+            title,
+            style: TextStyle(
+              color: _textColor,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          SizedBox(height: 6),
+          Text(
+            '$typeDescription | ${episodeCount}集',
+            style: TextStyle(color: _mutedTextColor, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEpisodesPanel(BuildContext context) {
+    final windowHeight = MediaQuery.of(context).size.height;
+    final panelHeight = windowHeight * 0.4;
+
+    final bool isError =
+        _episodesMessage.contains('出错') || _episodesMessage.contains('失败');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitle('剧集列表'),
+        if (_episodesMessage.isNotEmpty) ...[
+          SizedBox(height: 8),
+          _buildStatusBanner(_episodesMessage, isError: isError),
+        ],
+        SizedBox(height: 8),
+        Container(
+          height: panelHeight,
+          decoration: BoxDecoration(
+            color: _panelColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _borderColor),
+          ),
+          child: _isLoadingEpisodes
+              ? Center(
+                  child: AdaptiveMediaActivityIndicator(color: _accentColor),
+                )
+              : _currentEpisodes.isEmpty
+                  ? _buildEmptyState('暂无剧集')
+                  : ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _currentEpisodes.length,
+                      separatorBuilder: (_, __) => SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        final episode = _currentEpisodes[index];
+                        return _buildEpisodeItem(episode);
+                      },
+                    ),
+        )
+      ],
+    );
+  }
+
+  Widget _buildEpisodesContent(bool isWideLayout, BuildContext context) {
+    if (isWideLayout) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 280,
+            child: _buildSelectedAnimePanel(),
+          ),
+          SizedBox(width: 16),
+          Expanded(
+            child: _buildEpisodesPanel(context),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        _buildSelectedAnimePanel(),
+        SizedBox(height: 12),
+        _buildEpisodesPanel(context),
+      ],
+    );
+  }
+
+  Widget _buildActionButtons() {
+    final canConfirm = _currentEpisodes.isNotEmpty && !_isLoadingEpisodes;
+    final confirmText = _selectedEpisode != null ? '确认匹配' : '使用第一集';
+
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        AdaptiveMediaActionButton(
+          label: '返回搜索',
+          onPressed: _backToAnimeSelection,
+          compact: true,
+        ),
+        SizedBox(width: 8),
+        AdaptiveMediaActionButton(
+          label: confirmText,
+          onPressed: canConfirm ? _completeSelection : null,
+          emphasis: AdaptiveMediaActionEmphasis.primary,
+          compact: true,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = MediaQuery.of(context).size;
+    final dialogWidth = screenSize.width >= 960
+        ? 900.0
+        : globals.DialogSizes.getDialogWidth(screenSize.width);
+    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    final sheetScope = CupertinoBottomSheetScope.maybeOf(context);
+    final topPadding = widget.embedded && sheetScope != null
+        ? sheetScope.contentTopInset / 1.3 + sheetScope.contentTopSpacing + 8
+        : 16.0;
+
+    final isLargeScreen = NipaplayLargeScreenModeScope.isActiveOf(context);
+    final content = SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(24, topPadding, 24, 24 + keyboardHeight),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (!widget.embedded) ...[
+            _buildHeader(),
+            SizedBox(height: 16),
+          ],
+          if (!_showEpisodesView) ...[
+            _buildSearchBar(),
+            SizedBox(height: 12),
+          ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final isWideLayout = constraints.maxWidth >= 720;
+              return _showEpisodesView
+                  ? _buildEpisodesContent(isWideLayout, context)
+                  : _buildResultsPanel(context);
+            },
+          ),
+          if (_showEpisodesView) ...[
+            SizedBox(height: 12),
+            _buildActionButtons(),
+          ],
+        ],
+      ),
+    );
+    final body = Focus(
+      autofocus: !isLargeScreen,
+      onKeyEvent: _handleKeyEvent,
+      child: TextSelectionTheme(
+        data: _selectionTheme,
+        child: content,
+      ),
+    );
+    if (isLargeScreen && widget.embedded) return body;
+    return NipaplayWindowScaffold(
+      embedded: widget.embedded,
+      maxWidth: dialogWidth,
+      maxHeightFactor: 0.9,
+      onClose: () => Navigator.of(context).maybePop(),
+      backgroundColor: _surfaceColor,
+      child: body,
+    );
+  }
+}

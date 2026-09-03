@@ -1,0 +1,20 @@
+name: Build iOS Unsigned (TrollStore)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-unsigned-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  Build-iOS-unsigned:
+    name: Build iOS IPA (unsigned)
+    uses: ./.github/workflows/build-ios.yml
+    with:
+      upload-to-app-store: false

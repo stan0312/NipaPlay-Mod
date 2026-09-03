@@ -1,0 +1,68 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/control_shadow.dart';
+import 'package:nipaplay/widgets/context_menu/context_menu.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/shadow_action_button.dart';
+
+void main() {
+  test('top action buttons match the 28px back icon', () {
+    final button = ShadowActionButton(
+      tooltip: 'test',
+      icon: Icons.share,
+      onPressed: () {},
+    );
+
+    expect(button.iconSize, 28);
+    expect(button.padding, const EdgeInsets.all(8));
+  });
+
+  test('player icon shadows stay centered on the glyph', () {
+    const shadow = ControlIconShadow(child: SizedBox.shrink());
+
+    expect(shadow.shadows, isNotEmpty);
+    expect(
+      shadow.shadows.every((item) => item.offset == Offset.zero),
+      isTrue,
+    );
+  });
+
+  testWidgets('player context menu uses compact item spacing', (tester) async {
+    ContextMenuStyle? style;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            style = ContextMenuStyles.playerOverlay(context);
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+
+    expect(style?.itemHeight, 36);
+  });
+
+  test('portrait controls rebuild unscaled and danmaku receives portrait scale', () {
+    final player = File('lib/pages/play_video_page.dart').readAsStringSync();
+
+    expect(
+      player,
+      contains('key: ValueKey<bool>(portraitUiScale < 0.999)'),
+    );
+    expect(
+      player,
+      contains('isCompactPortrait ? 1.0 : portraitUiScale'),
+    );
+    expect(
+      RegExp(r'scale: topControlsScale').allMatches(player).length,
+      2,
+    );
+    expect(player, contains('Positioned.fill('));
+    expect(
+      player,
+      contains('child: VideoPlayerWidget(danmakuScale: portraitUiScale)'),
+    );
+  });
+}

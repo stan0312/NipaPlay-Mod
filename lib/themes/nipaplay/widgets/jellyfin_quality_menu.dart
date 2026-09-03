@@ -1,0 +1,620 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'base_settings_menu.dart';
+import 'player_menu_theme.dart';
+import 'settings_hint_text.dart';
+import 'blur_snackbar.dart';
+import 'fluent_settings_switch.dart';
+import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
+import 'package:nipaplay/providers/jellyfin_transcode_provider.dart';
+import 'package:nipaplay/providers/emby_transcode_provider.dart';
+import 'package:nipaplay/utils/video_player_state.dart';
+import 'package:nipaplay/services/jellyfin_service.dart';
+import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/models/media_server_playback.dart';
+import 'package:nipaplay/models/emby_media_selection.dart';
+import 'package:nipaplay/services/emby_player_menu_selection.dart';
+import 'package:nipaplay/services/emby_media_source_selection.dart';
+import 'package:nipaplay/widgets/emby_media_source_selector.dart';
+
+class JellyfinQualityMenu extends StatefulWidget {
+  final VoidCallback onClose;
+  final ValueChanged<bool>? onHoverChanged;
+
+  const JellyfinQualityMenu({
+    super.key,
+    required this.onClose,
+    this.onHoverChanged,
+  });
+
+  @override
+  State<JellyfinQualityMenu> createState() => _JellyfinQualityMenuState();
+}
+
+class _JellyfinQualityMenuState extends State<JellyfinQualityMenu> {
+  JellyfinVideoQuality? _currentQuality;
+  bool _isLoading = false;
+  List<Map<String, dynamic>> _serverSubtitles = [];
+  int? _selectedServerSubtitleIndex; // null 表示不指定
+  bool _burnIn = false; // 转码时是否烧录字幕
+  List<PlaybackMediaSource> _mediaSources = const [];
+  String? _selectedMediaSourceId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCurrentQuality();
+  }
+
+  Future<void> _loadCurrentQuality() async {
+    try {
+      // 根据当前播放协议使用对应 provider，保证两端持久化与默认值独立
+      final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+      if (videoState.currentVideoPath != null &&
+          videoState.currentVideoPath!.startsWith('emby://')) {
+        final session = videoState.currentPlaybackSession;
+        _mediaSources = session?.mediaSources ?? const [];
+        _selectedMediaSourceId = session?.mediaSourceId;
+        final embyProv =
+            Provider.of<EmbyTranscodeProvider>(context, listen: false);
+        await embyProv.initialize();
+        if (!mounted) return;
+        setState(() {
+          _currentQuality = embyProv.currentVideoQuality;
+        });
+      } else {
+        final transcodeProvider =
+            Provider.of<JellyfinTranscodeProvider>(context, listen: false);
+        await transcodeProvider.initialize();
+        if (!mounted) return;
+        setState(() {
+          _currentQuality = transcodeProvider.currentVideoQuality;
+        });
+      }
+
+      // 读取当前播放的 jellyfin:// 或 emby:// itemId 并获取服务器字幕列表
+      final vp = Provider.of<VideoPlayerState>(context, listen: false);
+      final path = vp.currentVideoPath;
+      if (path != null && path.startsWith('jellyfin://')) {
+        final itemId = path.replaceFirst('jellyfin://', '');
+        final tracks = await JellyfinService.instance.getSubtitleTracks(itemId);
+        final bool hasSavedSelection =
+            vp.hasJellyfinServerSubtitleSelection(itemId);
+        int? resolvedSelection = hasSavedSelection
+            ? vp.getJellyfinServerSubtitleSelection(itemId)
+            : null;
+        bool resolvedBurnIn = hasSavedSelection
+            ? vp.getJellyfinServerSubtitleBurnIn(itemId)
+            : false;
+        if (resolvedSelection != null &&
+            !tracks.any((t) => t['index'] == resolvedSelection)) {
+          resolvedSelection = null;
+          resolvedBurnIn = false;
+        }
+        if (!hasSavedSelection) {
+          final def = tracks.firstWhere(
+            (t) => (t['isDefault'] == true),
+            orElse: () => {},
+          );
+          resolvedSelection = def.isEmpty ? null : def['index'] as int?;
+        }
+        if (!mounted) return;
+        setState(() {
+          _serverSubtitles = tracks;
+          _selectedServerSubtitleIndex = resolvedSelection;
+          _burnIn = resolvedBurnIn;
+        });
+      } else if (path != null && path.startsWith('emby://')) {
+        final itemId = path.replaceFirst('emby://', '').split('/').last;
+        final tracks = await EmbyService.instance.getSubtitleTracks(
+          itemId,
+          mediaSourceId: _selectedMediaSourceId,
+        );
+        final bool hasSavedSelection =
+            vp.hasEmbyServerSubtitleSelection(itemId);
+        int? resolvedSelection = hasSavedSelection
+            ? vp.getEmbyServerSubtitleSelection(itemId)
+            : null;
+        bool resolvedBurnIn =
+            hasSavedSelection ? vp.getEmbyServerSubtitleBurnIn(itemId) : false;
+        if (resolvedSelection != null &&
+            !tracks.any((t) => t['index'] == resolvedSelection)) {
+          resolvedSelection = null;
+          resolvedBurnIn = false;
+        }
+        if (!hasSavedSelection) {
+          final def = tracks.firstWhere(
+            (t) => (t['isDefault'] == true),
+            orElse: () => {},
+          );
+          resolvedSelection = def.isEmpty ? null : def['index'] as int?;
+        }
+        if (!mounted) return;
+        setState(() {
+          _serverSubtitles = tracks;
+          _selectedServerSubtitleIndex = resolvedSelection;
+          _burnIn = resolvedBurnIn;
+        });
+      }
+    } catch (e) {
+      debugPrint('加载当前转码质量失败: $e');
+      if (!mounted) return;
+      setState(() {
+        _currentQuality = JellyfinVideoQuality.bandwidth5m; // 默认值
+      });
+    }
+  }
+
+  void _changeQuality(JellyfinVideoQuality quality) {
+    if (_currentQuality == quality) return;
+
+    // 仅更新本地状态，不直接重载播放器
+    setState(() {
+      _currentQuality = quality;
+    });
+  }
+
+  Future<void> _selectMediaSource(PlaybackMediaSource source) async {
+    if (_selectedMediaSourceId == source.id) return;
+    setState(() {
+      _selectedMediaSourceId = source.id;
+      _selectedServerSubtitleIndex = null;
+      _burnIn = false;
+      _serverSubtitles = [];
+      _isLoading = true;
+    });
+
+    final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    final path = videoState.currentVideoPath;
+    if (path != null && path.startsWith('emby://')) {
+      final itemId = path.replaceFirst('emby://', '').split('/').last;
+      try {
+        final tracks = await EmbyService.instance
+            .getSubtitleTracks(itemId, mediaSourceId: source.id);
+        if (!mounted || _selectedMediaSourceId != source.id) return;
+        final defaultTrack = tracks.firstWhere(
+          (track) => track['isDefault'] == true,
+          orElse: () => <String, dynamic>{},
+        );
+        setState(() {
+          _serverSubtitles = tracks;
+          _selectedServerSubtitleIndex =
+              defaultTrack.isEmpty ? null : defaultTrack['index'] as int?;
+          _isLoading = false;
+        });
+      } catch (_) {
+        if (!mounted || _selectedMediaSourceId != source.id) return;
+        setState(() => _isLoading = false);
+      }
+    } else if (mounted) {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _applySelection() async {
+    if (_currentQuality == null) return;
+
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
+
+    try {
+      // 先保存默认清晰度设置
+      // 根据当前播放协议选择对应的 provider（保证两者持久化独立且行为一致）
+      final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+      if (videoState.currentVideoPath != null &&
+          videoState.currentVideoPath!.startsWith('emby://')) {
+        final embyProv =
+            Provider.of<EmbyTranscodeProvider>(context, listen: false);
+        await embyProv.initialize();
+        await embyProv.setDefaultVideoQuality(_currentQuality!);
+
+        // 当选择非原画质量时，自动启用转码
+        if (_currentQuality! != JellyfinVideoQuality.original) {
+          await embyProv.setTranscodeEnabled(true);
+        }
+      } else {
+        final transcodeProvider =
+            Provider.of<JellyfinTranscodeProvider>(context, listen: false);
+        await transcodeProvider.setDefaultVideoQuality(_currentQuality!);
+
+        // 当选择非原画质量时，自动启用转码
+        if (_currentQuality! != JellyfinVideoQuality.original) {
+          await transcodeProvider.setTranscodeEnabled(true);
+        }
+      }
+
+      // 然后重载播放器
+      if (!mounted) return;
+      final vp = Provider.of<VideoPlayerState>(context, listen: false);
+      final path = vp.currentVideoPath;
+      if (path != null && path.startsWith('jellyfin://')) {
+        final itemId = path.replaceFirst('jellyfin://', '');
+        await runMediaServerMenuSelection(
+          MediaServerMenuSurface.nipaplaySource,
+          false,
+          () async {
+            vp.setJellyfinServerSubtitleSelection(
+              itemId,
+              _selectedServerSubtitleIndex,
+              burnIn: _burnIn,
+            );
+            await vp.reloadCurrentJellyfinStream(
+              quality: _currentQuality!,
+              serverSubtitleIndex: _selectedServerSubtitleIndex,
+              burnInSubtitle: _burnIn,
+            );
+          },
+          () async => false,
+        );
+      } else if (path != null && path.startsWith('emby://')) {
+        final itemId = path.replaceFirst('emby://', '').split('/').last;
+        final normalizedSourceId = _selectedMediaSourceId?.trim();
+        final selectedSourceId =
+            normalizedSourceId?.isNotEmpty == true ? normalizedSourceId : null;
+        final sourceChanged = selectedSourceId?.isNotEmpty == true &&
+            vp.currentPlaybackSession?.mediaSourceId != selectedSourceId;
+        final selectedSource = sourceChanged
+            ? vp.embyMediaSourceDescriptor(selectedSourceId)
+            : vp.embyMediaSourceDescriptor();
+        if (sourceChanged && selectedSource == null) {
+          throw StateError(
+              'Selected Emby media source is no longer available.');
+        }
+        final resolvedTracks = sourceChanged && selectedSource != null
+            ? await vp.resolveCurrentEmbyTracksForSource(selectedSource)
+            : vp.currentEmbyTrackSelection;
+        final resolvedAudioIndex =
+            resolvedTracks?.audio.mode == EmbyResolvedTrackMode.track
+                ? resolvedTracks!.audio.sourceIndex
+                : null;
+        final resolvedSubtitleIndex =
+            resolvedTracks?.subtitle.mode == EmbyResolvedTrackMode.track
+                ? resolvedTracks!.subtitle.sourceIndex
+                : null;
+        final audioStreamIndex = sourceChanged
+            ? resolvedAudioIndex
+            : vp.getEmbyServerAudioSelection(itemId);
+        final subtitleStreamIndex = sourceChanged
+            ? resolvedSubtitleIndex
+            : _selectedServerSubtitleIndex;
+        final burnInSubtitle = _burnIn ||
+            (resolvedTracks != null &&
+                requiresEmbySubtitleBurnIn(resolvedTracks.subtitle));
+        await runMediaServerMenuSelection(
+          MediaServerMenuSurface.nipaplaySource,
+          true,
+          () async {
+            await vp.reloadCurrentEmbyStream(
+              quality: _currentQuality!,
+              serverSubtitleIndex: subtitleStreamIndex,
+              burnInSubtitle: burnInSubtitle,
+              mediaSourceId: selectedSourceId,
+              audioStreamIndex: audioStreamIndex,
+              embyTrackSelection: resolvedTracks,
+            );
+            vp.setEmbyServerSubtitleSelection(
+              itemId,
+              subtitleStreamIndex,
+              burnIn: burnInSubtitle,
+            );
+            if (sourceChanged) {
+              vp.setEmbyServerAudioSelection(itemId, audioStreamIndex);
+            }
+          },
+          () async {
+            if (!sourceChanged || selectedSource == null) return false;
+            return vp.persistCurrentEmbyManualPatch(
+              EmbyManualSelectionPatch(source: selectedSource),
+              currentSource: selectedSource,
+            );
+          },
+        );
+      }
+
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+
+      // 显示成功通知并关闭菜单
+      if (mounted) {
+        final qualityName = _getQualityDisplayName(_currentQuality!);
+        String message = '已切换到$qualityName清晰度';
+
+        // 添加字幕信息到通知
+        if (_selectedServerSubtitleIndex != null) {
+          final selectedSubtitle = _serverSubtitles.firstWhere(
+            (s) => s['index'] == _selectedServerSubtitleIndex,
+            orElse: () => <String, dynamic>{},
+          );
+          if (selectedSubtitle.isNotEmpty) {
+            final subtitleName = selectedSubtitle['display'] as String? ??
+                selectedSubtitle['title']?.toString() ??
+                '字幕 ${selectedSubtitle['index']}';
+            message += '\n字幕: $subtitleName';
+            if (_burnIn) {
+              message += ' (烧录)';
+            }
+          }
+        }
+
+        BlurSnackBar.show(context, message);
+        widget.onClose();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+      debugPrint('应用清晰度/字幕选择失败: $e');
+      if (mounted) {
+        BlurSnackBar.show(context, '设置失败: $e');
+      }
+    }
+  }
+
+  String _getQualityDisplayName(JellyfinVideoQuality quality) {
+    switch (quality) {
+      case JellyfinVideoQuality.auto:
+        return '自动';
+      case JellyfinVideoQuality.original:
+        return '原画 (不转码)';
+      case JellyfinVideoQuality.bandwidth40m:
+        return '4K (40 Mbps)';
+      case JellyfinVideoQuality.bandwidth20m:
+        return '超清 (20 Mbps)';
+      case JellyfinVideoQuality.bandwidth10m:
+        return '全高清 (10 Mbps)';
+      case JellyfinVideoQuality.bandwidth5m:
+        return '高清 (5 Mbps)';
+      case JellyfinVideoQuality.bandwidth2m:
+        return '标清 (2 Mbps)';
+      case JellyfinVideoQuality.bandwidth1m:
+        return '省流 (1 Mbps)';
+    }
+  }
+
+  String _getQualityDescription(JellyfinVideoQuality quality) {
+    switch (quality) {
+      case JellyfinVideoQuality.auto:
+        return '让服务器根据网络情况自动选择';
+      case JellyfinVideoQuality.original:
+        return '直接播放原始文件，无转码';
+      case JellyfinVideoQuality.bandwidth40m:
+        return '超高清画质，需要高速网络';
+      case JellyfinVideoQuality.bandwidth20m:
+        return '1080p超清画质，网络要求较高';
+      case JellyfinVideoQuality.bandwidth10m:
+        return '1080p全高清画质，网络要求适中';
+      case JellyfinVideoQuality.bandwidth5m:
+        return '720p高清画质，流畅播放';
+      case JellyfinVideoQuality.bandwidth2m:
+        return '480p标清画质，省流量';
+      case JellyfinVideoQuality.bandwidth1m:
+        return '360p低清画质，最省流量';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final menuColors = PlayerMenuTheme.colorsOf(context);
+    return BaseSettingsMenu(
+      title: '清晰度设置',
+      onClose: widget.onClose,
+      onHoverChanged: widget.onHoverChanged,
+      extraButton: TextButton(
+        onPressed: _isLoading ? null : _applySelection,
+        child: Text(
+          '应用',
+          locale: Locale("zh-Hans", "zh"),
+          style: TextStyle(color: menuColors.accent),
+        ),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_isLoading)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Center(
+                child: CircularProgressIndicator(color: menuColors.accent),
+              ),
+            )
+          else ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_mediaSources.length > 1) ...[
+                    const SettingsHintText('媒体源'),
+                    const SizedBox(height: 8),
+                    EmbyMediaSourceSelector(
+                      sources: _mediaSources,
+                      selectedSourceId: _selectedMediaSourceId,
+                      onSelected: _selectMediaSource,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                  const SettingsHintText('选择视频播放质量'),
+                  const SizedBox(height: 16),
+                  ...JellyfinVideoQuality.values.map((quality) {
+                    final isSelected = _currentQuality == quality;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => _changeQuality(quality),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? menuColors.selectedBackground
+                                  : menuColors.controlBackground,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: isSelected
+                                    ? menuColors.selectedBorder
+                                    : menuColors.controlBorder,
+                                width: 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  isSelected
+                                      ? Icons.radio_button_checked
+                                      : Icons.radio_button_unchecked,
+                                  color: isSelected
+                                      ? menuColors.selectedForeground
+                                      : menuColors.foreground,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _getQualityDisplayName(quality),
+                                        locale: Locale("zh-Hans", "zh"),
+                                        style: TextStyle(
+                                          color: isSelected
+                                              ? menuColors.selectedForeground
+                                              : menuColors.foreground,
+                                          fontSize: 14,
+                                          fontWeight: isSelected
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        _getQualityDescription(quality),
+                                        locale: Locale("zh-Hans", "zh"),
+                                        style: TextStyle(
+                                          color: menuColors.secondaryForeground,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+
+                  const SizedBox(height: 16),
+                  const SettingsHintText('服务器字幕（用于转码时选择/烧录）'),
+                  const SizedBox(height: 8),
+                  // “不指定字幕”选项
+                  _buildSubtitleOption(
+                    title: '不指定字幕（沿用播放器选择或无）',
+                    selected: _selectedServerSubtitleIndex == null,
+                    onTap: () =>
+                        setState(() => _selectedServerSubtitleIndex = null),
+                  ),
+                  const SizedBox(height: 6),
+                  ..._serverSubtitles.map((t) => _buildSubtitleOption(
+                        title: (t['display'] as String?) ??
+                            (t['title']?.toString() ?? '字幕 ${t['index']}'),
+                        selected: _selectedServerSubtitleIndex == t['index'],
+                        onTap: () => setState(() =>
+                            _selectedServerSubtitleIndex = t['index'] as int),
+                      )),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '转码时烧录字幕',
+                        locale: Locale("zh-Hans", "zh"),
+                        style: TextStyle(
+                          color: menuColors.foreground,
+                          fontSize: 13,
+                        ),
+                      ),
+                      FluentSettingsSwitch(
+                        value: _burnIn,
+                        onChanged: (v) => setState(() => _burnIn = v),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSubtitleOption(
+      {required String title,
+      required bool selected,
+      required VoidCallback onTap}) {
+    final menuColors = PlayerMenuTheme.colorsOf(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: selected
+                ? menuColors.selectedBackground
+                : menuColors.controlBackground,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected
+                  ? menuColors.selectedBorder
+                  : menuColors.controlBorder,
+              width: 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                selected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                color: selected
+                    ? menuColors.selectedForeground
+                    : menuColors.foreground,
+                size: 18,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  locale: Locale("zh-Hans", "zh"),
+                  style: TextStyle(
+                    color: selected
+                        ? menuColors.selectedForeground
+                        : menuColors.foreground,
+                    fontSize: 13,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

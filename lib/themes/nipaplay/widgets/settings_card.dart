@@ -1,0 +1,120 @@
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:nipaplay/providers/appearance_settings_provider.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_page_scaffold.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/settings_no_ripple_theme.dart';
+
+/// 设置页面专用的毛玻璃卡片容器
+///
+/// 统一了设置页面中重复使用的毛玻璃卡片样式，包括：
+/// - 圆角：12px
+/// - 毛玻璃效果：根据设置决定是否启用
+/// - 半透明背景：白色30%透明度
+/// - 边框：白色20%透明度，0.5px宽度
+/// - 内边距：16px
+class SettingsCard extends StatelessWidget {
+  /// 卡片的子内容
+  final Widget child;
+
+  /// 自定义内边距，如果不提供则使用默认的 16px
+  final EdgeInsetsGeometry? padding;
+
+  /// 自定义圆角半径，如果不提供则使用默认的 12px
+  final double? borderRadius;
+
+  /// 自定义外边距
+  final EdgeInsetsGeometry? margin;
+
+  /// 自定义背景透明度，如果不提供则使用默认的 0.3
+  final double? backgroundOpacity;
+
+  /// 自定义边框透明度，如果不提供则使用默认的 0.2
+  final double? borderOpacity;
+
+  const SettingsCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.borderRadius,
+    this.margin,
+    this.backgroundOpacity,
+    this.borderOpacity,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      final cardContent = NipaplayLargeScreenPanel(
+        padding: padding ?? const EdgeInsets.all(18.0),
+        borderRadius: (borderRadius ?? 8.0).clamp(0.0, 8.0).toDouble(),
+        child: child,
+      );
+
+      if (margin != null) {
+        return Container(
+          margin: margin,
+          child: cardContent,
+        );
+      }
+      return cardContent;
+    }
+
+    final appearanceProvider = context.watch<AppearanceSettingsProvider>();
+    final blurDisabledInSettingsScope =
+        SettingsVisualScope.isBlurDisabled(context);
+    final isBlurEnabled = appearanceProvider.enableWidgetBlurEffect &&
+        !blurDisabledInSettingsScope;
+
+    final effectiveBorderRadius = borderRadius ?? 12.0;
+    final effectivePadding = padding ?? const EdgeInsets.all(16.0);
+    final effectiveBackgroundOpacity = backgroundOpacity ?? 0.3;
+    final effectiveBorderOpacity = borderOpacity ?? 0.2;
+
+    final cardBody = Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(effectiveBorderRadius),
+        color: Theme.of(context)
+            .colorScheme
+            .surface
+            .withOpacity(effectiveBackgroundOpacity),
+        border: Border.all(
+          color: Theme.of(context)
+              .colorScheme
+              .onSurface
+              .withOpacity(effectiveBorderOpacity),
+          width: 0.5,
+        ),
+      ),
+      padding: effectivePadding,
+      child: Material(
+        type: MaterialType.transparency,
+        child: child,
+      ),
+    );
+
+    Widget cardContent = ClipRRect(
+      borderRadius: BorderRadius.circular(effectiveBorderRadius),
+      child: isBlurEnabled
+          ? BackdropFilter(
+              filter: ImageFilter.blur(
+                sigmaX: 25.0,
+                sigmaY: 25.0,
+              ),
+              child: cardBody,
+            )
+          : cardBody,
+    );
+
+    // 如果有外边距，包装在Container中
+    if (margin != null) {
+      cardContent = Container(
+        margin: margin,
+        child: cardContent,
+      );
+    }
+
+    return cardContent;
+  }
+}

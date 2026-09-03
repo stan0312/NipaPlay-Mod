@@ -1,0 +1,54 @@
+// widgets/responsive_container.dart
+// ignore_for_file: sized_box_for_whitespace
+
+import 'package:flutter/material.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
+
+class ResponsiveContainer extends StatelessWidget {
+  final Widget child;
+  final Widget currentPage; // 接收当前显示的页面
+
+  const ResponsiveContainer({super.key, required this.child, required this.currentPage});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 如果是桌面设备或平板设备，使用左右分区布局；手机设备使用单页布局
+        if (globals.isDesktop || globals.isTablet) {
+          const double leftPaneFraction = 0.25;
+          const double dividerWidth = 1.0;
+          final double leftWidth = constraints.maxWidth * leftPaneFraction;
+          final double rightWidth =
+              constraints.maxWidth - leftWidth - dividerWidth;
+          final dividerColor =
+              Theme.of(context).colorScheme.onSurface.withOpacity(0.2);
+          return Row(
+            children: [
+              // 左侧部分，显示 SettingsPage
+              Container(
+                width: leftWidth,
+                child: child,
+              ),
+              VerticalDivider(
+                color: dividerColor, // 竖线的颜色
+                thickness: 1, // 竖线的宽度
+                width: dividerWidth, // 竖线的间距
+                indent: 0,
+                endIndent: 0,
+              ),
+              // 右侧部分，根据 currentPage 显示不同内容
+              Container(
+                width: rightWidth,
+                child: currentPage,  // 显示传递过来的页面
+              ),
+            ],
+          );
+        } else {
+          // 手机设备使用单页布局
+          return child;
+        }
+      },
+    );
+  }
+}

@@ -1,0 +1,320 @@
+import 'dart:convert';
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nipaplay/models/search_model.dart';
+import './dandanplay_service.dart';
+import 'package:nipaplay/services/web_remote_access_service.dart';
+
+class SearchService {
+  static final SearchService instance = SearchService._();
+  static const String _configCacheKey = 'search_config_cache';
+  static const Duration _configCacheDuration = Duration(days: 1);
+
+  SearchConfig? _cachedConfig;
+  DateTime? _configCacheTime;
+
+  SearchService._();
+
+  /// 获取搜索配置（用于高级搜索）
+  Future<SearchConfig> getSearchConfig({String source = 'anidb'}) async {
+    // Web环境下的实现
+    if (kIsWeb) {
+      try {
+        final apiUri =
+            WebRemoteAccessService.apiUri('/api/search/config');
+        if (apiUri == null) {
+          throw Exception('未配置远程访问地址');
+        }
+        final response = await http.get(apiUri);
+        if (response.statusCode == 200) {
+          final data = json.decode(utf8.decode(response.bodyBytes));
+          return SearchConfig.fromJson(data);
+        } else {
+          throw Exception(
+              'Failed to load search config from API: ${response.statusCode}');
+        }
+      } catch (e) {
+        debugPrint('[SearchService] Web API不可用，回退到直连弹弹play: $e');
+      }
+    }
+
+    // 检查内存缓存
+    if (_cachedConfig != null &&
+        _configCacheTime != null &&
+        DateTime.now().difference(_configCacheTime!) < _configCacheDuration) {
+      return _cachedConfig!;
+    }
+
+    // 检查本地缓存
+    final prefs = await SharedPreferences.getInstance();
+    final cachedString = prefs.getString(_configCacheKey);
+    if (cachedString != null) {
+      try {
+        final data = json.decode(cachedString);
+        final timestamp = data['timestamp'] as int;
+        final now = DateTime.now().millisecondsSinceEpoch;
+
+        if (now - timestamp <= _configCacheDuration.inMilliseconds) {
+          _cachedConfig = SearchConfig.fromJson(data['config']);
+          _configCacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+          return _cachedConfig!;
+        }
+      } catch (_) {
+      }
+    }
+
+    // 从网络获取
+    try {
+      final baseUrl = await DandanplayService.getApiBaseUrl();
+      final url = '$baseUrl/api/v2/search/adv/config?source=$source';
+      final response = await _makeAuthenticatedRequest(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _cachedConfig = SearchConfig.fromJson(data);
+          _configCacheTime = DateTime.now();
+
+          // 保存到本地缓存
+          final cacheData = {
+            'timestamp': _configCacheTime!.millisecondsSinceEpoch,
+            'config': data,
+          };
+          await prefs.setString(_configCacheKey, json.encode(cacheData));
+
+          return _cachedConfig!;
+        } else {
+          throw Exception('API返回错误: ${data['errorMessage']}');
+        }
+      } else {
+        throw Exception('HTTP错误: ${response.statusCode}');
+      }
+    } catch (_) {
+      rethrow;
+    }
+  }
+
+  /// 根据文本标签搜索动画
+  Future<SearchResult> searchAnimeByTags(List<String> tags) async {
+    // Web环境下的实现
+    if (kIsWeb) {
+      try {
+        final apiUri =
+            WebRemoteAccessService.apiUri('/api/search/by-tags');
+        if (apiUri == null) {
+          throw Exception('未配置远程访问地址');
+        }
+        final response = await http.post(
+          apiUri,
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode({'tags': tags}),
+        );
+        if (response.statusCode == 200) {
+          final data = json.decode(utf8.decode(response.bodyBytes));
+          return SearchResult.fromTagSearchJson(data);
+        } else {
+          throw Exception(
+              'Failed to search by tags from API: ${response.statusCode}');
+        }
+      } catch (e) {
+        debugPrint('[SearchService] Web API不可用，回退到直连弹弹play: $e');
+      }
+    }
+
+    if (tags.isEmpty) {
+      throw ArgumentError('标签列表不能为空');
+    }
+
+    if (tags.length > 10) {
+      throw ArgumentError('标签数量不能超过10个');
+    }
+
+    for (String tag in tags) {
+      if (tag.length > 50) {
+        throw ArgumentError('单个标签长度不能超过50个字符');
+      }
+    }
+
+    try {
+      final tagsString = tags.join(',');
+      final baseUrl = await DandanplayService.getApiBaseUrl();
+      final url =
+          '$baseUrl/api/v2/search/tag?tags=${Uri.encodeComponent(tagsString)}';
+      final response = await _makeAuthenticatedRequest(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          final result = SearchResult.fromTagSearchJson(data);
+          return result;
+        } else {
+          throw Exception('API返回错误: ${data['errorMessage']}');
+        }
+      } else {
+        throw Exception('HTTP错误: ${response.statusCode}');
+      }
+    } catch (_) {
+      rethrow;
+    }
+  }
+
+  /// 高级搜索（使用标签ID）
+  Future<SearchResult> searchAnimeAdvanced({
+    String source = 'anidb',
+    String? keyword,
+    int? type,
+    List<int>? tagIds,
+    int? year,
+    int? month,
+    int minRate = 0,
+    int maxRate = 10,
+    bool? restricted,
+    int sort = 0,
+  }) async {
+    // Web环境下的实现
+    if (kIsWeb) {
+      try {
+        final body = {
+          'keyword': keyword,
+          'type': type,
+          'tagIds': tagIds,
+          'year': year,
+          'minRate': minRate,
+          'maxRate': maxRate,
+          'sort': sort,
+        };
+        final apiUri =
+            WebRemoteAccessService.apiUri('/api/search/advanced');
+        if (apiUri == null) {
+          throw Exception('未配置远程访问地址');
+        }
+        final response = await http.post(
+          apiUri,
+          headers: {'Content-Type': 'application/json'},
+          body: json.encode(body),
+        );
+        if (response.statusCode == 200) {
+          final data = json.decode(utf8.decode(response.bodyBytes));
+          return SearchResult.fromAdvancedSearchJson(data);
+        } else {
+          throw Exception(
+              'Failed to perform advanced search from API: ${response.statusCode}');
+        }
+      } catch (e) {
+        debugPrint('[SearchService] Web API不可用，回退到直连弹弹play: $e');
+      }
+    }
+
+    try {
+      final queryParams = <String, String>{
+        'source': source,
+        'minRate': minRate.toString(),
+        'maxRate': maxRate.toString(),
+        'sort': sort.toString(),
+      };
+
+      if (keyword != null && keyword.isNotEmpty) {
+        queryParams['keyword'] = keyword;
+      }
+
+      if (type != null) {
+        queryParams['type'] = type.toString();
+      }
+
+      if (tagIds != null && tagIds.isNotEmpty) {
+        queryParams['tags'] = tagIds.join(',');
+      }
+
+      if (year != null) {
+        queryParams['year'] = year.toString();
+      }
+
+      if (month != null) {
+        queryParams['month'] = month.toString();
+      }
+
+      if (restricted != null) {
+        queryParams['restricted'] = restricted.toString();
+      }
+
+      final baseUrl = await DandanplayService.getApiBaseUrl();
+      final uri = Uri.parse('$baseUrl/api/v2/search/adv')
+          .replace(queryParameters: queryParams);
+      final response = await _makeAuthenticatedRequest(uri.toString());
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          final result = SearchResult.fromAdvancedSearchJson(data);
+          return result;
+        } else {
+          throw Exception('API返回错误: ${data['errorMessage']}');
+        }
+      } else {
+        throw Exception('HTTP错误: ${response.statusCode}');
+      }
+    } catch (_) {
+      rethrow;
+    }
+  }
+
+  /// 发送经过认证的HTTP请求（使用DanDanPlay标准认证）
+  Future<http.Response> _makeAuthenticatedRequest(String url) async {
+    try {
+      const String appId = DandanplayService.appId;
+      final String appSecret = await DandanplayService.getAppSecret();
+      final int timestamp =
+          (DateTime.now().toUtc().millisecondsSinceEpoch / 1000).round();
+
+      final Uri parsedUri = Uri.parse(url);
+      final String apiPath = parsedUri.path;
+      final String signature = DandanplayService.generateSignature(
+          appId, timestamp, apiPath, appSecret);
+
+      final headers = {
+        'Accept': 'application/json',
+        'User-Agent': 'NipaPlay/1.0',
+        'X-AppId': appId,
+        'X-Signature': signature,
+        'X-Timestamp': timestamp.toString(),
+      };
+
+      // 如果已登录，添加Authorization头
+      if (DandanplayService.isLoggedIn) {
+        final prefs = await SharedPreferences.getInstance();
+        final token = prefs.getString('dandanplay_token');
+        if (token != null) {
+          headers['Authorization'] = 'Bearer $token';
+        }
+      }
+
+
+      final response = await http
+          .get(
+        WebRemoteAccessService.proxyUri(Uri.parse(url)),
+        headers: headers,
+      )
+          .timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          throw TimeoutException('请求超时');
+        },
+      );
+
+      return response;
+    } catch (_) {
+      rethrow;
+    }
+  }
+
+  /// 清除缓存
+  Future<void> clearCache() async {
+    _cachedConfig = null;
+    _configCacheTime = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_configCacheKey);
+  }
+}

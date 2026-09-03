@@ -1,0 +1,325 @@
+name: Build tvOS
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        description: Application version from pubspec.yaml
+        value: ${{ jobs.build.outputs.version }}
+      artifact-name:
+        description: Uploaded tvOS build artifact
+        value: ${{ jobs.build.outputs.artifact-name }}
+  pull_request:
+    paths:
+      - '.flutter-version-tvos'
+      - '.github/workflows/build-tvos.yml'
+      - 'lib/**'
+      - 'packages/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+      - 'pubspec_overrides.tvos.yaml'
+      - 'third_party/**'
+      - 'tool/**'
+      - 'tvos/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-tvos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ERIKA_PREBUILT: "1"
+  ERIKA_PREBUILT_TAG: v0.1.6
+
+jobs:
+  build:
+    name: Build tvOS package
+    runs-on: macos-26
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.project.outputs.version }}
+      artifact-name: ${{ steps.artifact.outputs.name }}
+    steps:
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Read project versions
+        id: project
+        shell: bash
+        run: |
+          echo "flutter-tvos=$(tr -d '[:space:]' < .flutter-version-tvos)" >> "$GITHUB_OUTPUT"
+          echo "version=$(awk '/^version:/ {print $2; exit}' pubspec.yaml)" >> "$GITHUB_OUTPUT"
+          echo "FLUTTER_TVOS_ROOT=$RUNNER_TEMP/flutter-tvos" >> "$GITHUB_ENV"
+
+      - name: Cache flutter-tvos artifacts and Pub packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/flutter-tvos/engine_artifacts
+            ${{ runner.temp }}/flutter-tvos/flutter/bin/cache
+            ~/.pub-cache
+          key: tvos-${{ runner.os }}-${{ steps.project.outputs.flutter-tvos }}-${{ hashFiles('pubspec.lock', 'pubspec_overrides.tvos.yaml') }}-v1
+          restore-keys: |
+            tvos-${{ runner.os }}-${{ steps.project.outputs.flutter-tvos }}-
+
+      - name: Install pinned flutter-tvos SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$FLUTTER_TVOS_ROOT"
+          if [[ ! -d "$FLUTTER_TVOS_ROOT/.git" ]]; then
+            git -C "$FLUTTER_TVOS_ROOT" init
+            git -C "$FLUTTER_TVOS_ROOT" remote add origin \
+              https://github.com/fluttertv/flutter-tvos.git
+          else
+            git -C "$FLUTTER_TVOS_ROOT" remote set-url origin \
+              https://github.com/fluttertv/flutter-tvos.git
+          fi
+          git -C "$FLUTTER_TVOS_ROOT" fetch \
+            --depth 1 \
+            origin \
+            'refs/tags/${{ steps.project.outputs.flutter-tvos }}'
+          git -C "$FLUTTER_TVOS_ROOT" checkout --detach --force FETCH_HEAD
+
+          # The cache restores flutter/bin/cache without the Flutter checkout.
+          # Recreate the pinned checkout in place so flutter-tvos can reuse the
+          # cached artifacts instead of rejecting flutter/ as a non-Git folder.
+          flutter_revision="$(tr -d '[:space:]' < \
+            "$FLUTTER_TVOS_ROOT/bin/internal/flutter.version")"
+          flutter_sdk_root="$FLUTTER_TVOS_ROOT/flutter"
+          mkdir -p "$flutter_sdk_root"
+          if [[ ! -d "$flutter_sdk_root/.git" ]]; then
+            git -C "$flutter_sdk_root" init
+            git -C "$flutter_sdk_root" remote add origin \
+              https://github.com/flutter/flutter.git
+          else
+            git -C "$flutter_sdk_root" remote set-url origin \
+              https://github.com/flutter/flutter.git
+          fi
+          # Flutter derives its SDK version from Git tags. Match the upstream
+          # flutter-tvos bootstrap so pub does not see 0.0.0-unknown.
+          git -C "$flutter_sdk_root" fetch \
+            --depth 1 --quiet --tags origin "$flutter_revision"
+          git -C "$flutter_sdk_root" checkout --detach --force FETCH_HEAD
+          test "$(git -C "$flutter_sdk_root" rev-parse HEAD)" = \
+            "$flutter_revision"
+
+          "$FLUTTER_TVOS_ROOT/bin/flutter-tvos" precache
+          "$FLUTTER_TVOS_ROOT/bin/flutter-tvos" --version
+
+      - name: Resolve dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$FLUTTER_TVOS_ROOT/flutter/bin/dart" \
+            run tool/configure_flutter_dependencies.dart tvos
+          "$FLUTTER_TVOS_ROOT/bin/flutter-tvos" pub get
+
+      - name: Keep Erika prebuilt path independent of Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          erika_root="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from urllib.parse import unquote, urlparse
+
+          config_path = Path('.dart_tool/package_config.json').resolve()
+          config = json.loads(config_path.read_text(encoding='utf-8'))
+          package = next(
+              item for item in config['packages'] if item['name'] == 'erika_flutter'
+          )
+          uri = urlparse(package['rootUri'])
+          if uri.scheme == 'file':
+              root = Path(unquote(uri.path))
+          elif not uri.scheme:
+              root = (config_path.parent / unquote(uri.path)).resolve()
+          else:
+              raise SystemExit(f"Unsupported Erika package URI: {package['rootUri']}")
+          print(root)
+          PY
+          )"
+          podspec="$erika_root/tvos/erika_flutter.podspec"
+          test -f "$podspec"
+          python3 - "$podspec" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding='utf-8')
+          old = '''if ! command -v rustup >/dev/null 2>&1; then
+            echo "error: rustup is required to build Erika for tvOS" >&2
+            exit 1
+          fi
+          if ! rustup run nightly rustc --version >/dev/null 2>&1; then
+            rustup toolchain install nightly --profile minimal --component rust-src
+          elif ! rustup component list --toolchain nightly --installed | grep -q '^rust-src'; then
+            rustup component add rust-src --toolchain nightly
+          fi
+          '''
+          new = '''if [ "${ERIKA_PREBUILT:-0}" != "1" ] || [ "${ERIKA_FORCE_SOURCE_BUILD:-0}" = "1" ]; then
+            if ! command -v rustup >/dev/null 2>&1; then
+              echo "error: rustup is required to build Erika for tvOS" >&2
+              exit 1
+            fi
+            if ! rustup run nightly rustc --version >/dev/null 2>&1; then
+              rustup toolchain install nightly --profile minimal --component rust-src
+            elif ! rustup component list --toolchain nightly --installed | grep -q '^rust-src'; then
+              rustup component add rust-src --toolchain nightly
+            fi
+          fi
+          '''
+          old_count = source.count(old)
+          new_count = source.count(new)
+          if old_count == 1 and new_count == 0:
+              path.write_text(source.replace(old, new), encoding='utf-8')
+          elif old_count == 0 and new_count == 1:
+              print('Erika v0.1.6 tvOS podspec is already patched.')
+          else:
+              raise SystemExit('Unexpected Erika v0.1.6 tvOS podspec layout')
+          PY
+
+          python3 - "$podspec" <<'PY'
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          source = path.read_text(encoding='utf-8')
+          old = (
+              '      if [ -n "${SLICE:-}" ] && [ -f "$SLICE/liberika_capi.a" ]; then\n'
+              '        PREBUILT_LIB="$SLICE/liberika_capi.a"\n'
+              '        echo "Erika: using prebuilt $PREBUILT_TAG -> $PREBUILT_LIB"\n'
+              '      fi\n'
+          )
+          new = (
+              '      if [ -n "${SLICE:-}" ]; then\n'
+              '        # The tvOS release names the simulator archive\n'
+              '        # `liberika_capi-sim.a`, while the device slice uses\n'
+              '        # `liberika_capi.a`. Both are valid static libraries for the\n'
+              '        # corresponding XCFramework slice.\n'
+              '        if [ -f "$SLICE/liberika_capi.a" ]; then\n'
+              '          PREBUILT_LIB="$SLICE/liberika_capi.a"\n'
+              '        elif [ -f "$SLICE/liberika_capi-sim.a" ]; then\n'
+              '          PREBUILT_LIB="$SLICE/liberika_capi-sim.a"\n'
+              '        fi\n'
+              '        if [ -n "$PREBUILT_LIB" ]; then\n'
+              '          echo "Erika: using prebuilt $PREBUILT_TAG -> $PREBUILT_LIB"\n'
+              '        fi\n'
+              '      fi\n'
+          )
+          old_count = source.count(old)
+          new_count = source.count(new)
+          if old_count == 1 and new_count == 0:
+              path.write_text(source.replace(old, new), encoding='utf-8')
+          elif old_count == 0 and new_count == 1:
+              print('Erika v0.1.6 tvOS prebuilt slice-name patch is already applied.')
+          else:
+              raise SystemExit('Unexpected Erika v0.1.6 tvOS prebuilt slice layout')
+          PY
+
+      - name: Build tvOS simulator application
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$FLUTTER_TVOS_ROOT/bin/flutter-tvos" \
+            build tvos --simulator --debug --no-pub
+
+      - name: Build unsigned tvOS device application
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unsigned_config="$RUNNER_TEMP/NipaPlay-tvOS-unsigned.xcconfig"
+          printf '%s\n' \
+            'CODE_SIGNING_ALLOWED = NO' \
+            'CODE_SIGNING_REQUIRED = NO' \
+            'CODE_SIGN_IDENTITY =' \
+            'DEVELOPMENT_TEAM =' \
+            'PROVISIONING_PROFILE_SPECIFIER =' \
+            > "$unsigned_config"
+
+          XCODE_XCCONFIG_FILE="$unsigned_config" \
+            "$FLUTTER_TVOS_ROOT/bin/flutter-tvos" \
+            build tvos --release --no-pub
+
+      - name: Prepare tvOS artifact
+        id: artifact
+        shell: bash
+        env:
+          VERSION: ${{ steps.project.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            app_path="$(find build/tvos -path '*-appletvsimulator/*.app' -type d -print -quit)"
+            if [[ -z "$app_path" ]]; then
+              echo "No tvOS simulator .app was produced." >&2
+              find build -maxdepth 5 -print
+              exit 1
+            fi
+            echo "name=release-tvOS-simulator" >> "$GITHUB_OUTPUT"
+            echo "path=$app_path" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          app_path="$(find build/tvos/Release-appletvos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [[ -z "$app_path" ]]; then
+            echo "No tvOS device .app was produced." >&2
+            find build -maxdepth 5 -print
+            exit 1
+          fi
+
+          executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Info.plist")"
+          executable="$app_path/$executable_name"
+          if ! lipo -archs "$executable" | tr ' ' '\n' | grep -qx arm64; then
+            echo "tvOS device executable is not arm64: $(lipo -archs "$executable")" >&2
+            exit 1
+          fi
+          if ! xcrun vtool -show-build "$executable" | grep -q 'platform TVOS'; then
+            echo "tvOS package does not target physical Apple TV devices." >&2
+            xcrun vtool -show-build "$executable" || true
+            exit 1
+          fi
+
+          mkdir -p dist/Payload
+          /usr/bin/ditto "$app_path" "dist/Payload/$(basename "$app_path")"
+          ipa_name="NipaPlay-${VERSION}-tvOS-arm64-sideload.ipa"
+          (
+            cd dist
+            /usr/bin/ditto -c -k --keepParent Payload "$ipa_name"
+          )
+          test -s "dist/$ipa_name"
+          shasum -a 256 "dist/$ipa_name" > dist/SHA256SUMS-tvOS
+
+          echo "name=release-tvOS-sideload" >> "$GITHUB_OUTPUT"
+          echo "path=dist/$ipa_name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tvOS simulator application
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tvOS-simulator
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload tvOS sideload package
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tvOS-sideload
+          path: |
+            ${{ steps.artifact.outputs.path }}
+            dist/SHA256SUMS-tvOS
+          if-no-files-found: error
+          retention-days: 14

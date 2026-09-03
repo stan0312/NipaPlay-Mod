@@ -1,0 +1,137 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+android {
+    namespace = "com.aimessoft.nipaplay"
+    compileSdk = flutter.compileSdkVersion
+    // Erika、应用 C++ 模块与打包的 libc++_shared.so 统一使用同一 NDK。
+    ndkVersion = rootProject.ext.android_ndk_version
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    packagingOptions {
+        jniLibs {
+            // Native runtimes intentionally share one C++ runtime. Other duplicate
+            // libraries are build errors and must not be hidden by a broad *.so rule.
+            pickFirsts += ["**/libc++_shared.so"]
+        }
+        resources {
+            pickFirsts += ["META-INF/*.version"]
+            excludes += ["META-INF/*.kotlin_module", "META-INF/LICENSE*", "META-INF/NOTICE*"]
+        }
+    }
+    
+    defaultConfig {
+        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId = "com.aimessoft.nipaplay"
+        // You can update the following values to match your application needs.
+        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        minSdkVersion 26
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        
+        // 启用MultiDex支持
+        multiDexEnabled = true
+        
+        // 设置低内存启动模式
+        manifestPlaceholders = [
+            usesCleartextTraffic:"true",
+            applicationName:"androidx.multidex.MultiDexApplication"
+        ]
+        
+        // 设置较大的Java堆内存
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = ['room.incremental': 'true']
+            }
+        }
+        
+        // 注释掉 ndk abiFilters，避免与 Flutter splits 配置冲突
+        // ndk {
+        //     abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        // }
+
+        // CMake arguments/flags (path and version are set in android.externalNativeBuild below)
+        externalNativeBuild {
+            cmake {
+                arguments "-DNP_LIB_TYPE=SHARED"
+                // cFlags / cppFlags 已移除：-std=c++20, -fno-rtti, -fvisibility=hidden,
+                // -DNIPAPLAY_NATIVE_BUILDING 均已在 cpp_native/CMakeLists.txt 中设置，
+                // 此处重复指定会导致覆盖冲突且增加维护负担。
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // TODO: Add your own signing config for the release build.
+            // Signing with the debug keys for now, so `flutter run --release` works.
+
+            // R8 代码收缩 + 资源压缩（release 构建优化：体积↓20-50% + 死代码消除 + 反逆向）
+            // proguard-rules.pro 已健全（保留 Flutter/media_kit/FRB/Kotlin/JNI native/自定义类）
+            // 配合 gradle.properties 的 android.enableR8.fullMode=true
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        
+        debug {
+            // 调试模式不启用代码收缩，保持快速构建与可调试性
+            minifyEnabled = false
+            shrinkResources = false
+            // 调试模式启用MultiDex
+            multiDexEnabled = true
+        }
+    }
+    
+    // 配置aaptOptions减少资源内存消耗
+    aaptOptions {
+        cruncherEnabled = false
+    }
+
+    // ──── cpp_native: CMake path & version (must be outside defaultConfig for AGP 8.x) ────
+    // ──── cpp_native: CMake path (version auto-detected from SDK, minimum 3.16 required) ────
+    externalNativeBuild {
+        cmake {
+            path = file("../../cpp_native/CMakeLists.txt")
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    implementation "androidx.multidex:multidex:2.0.1"
+    
+    // 添加Kotlin协程库
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4"
+    
+    // 增加OpenGL ES库以支持硬件加速
+    implementation "androidx.core:core:1.10.1"
+    implementation "androidx.annotation:annotation:1.6.0"
+    implementation "androidx.documentfile:documentfile:1.0.1"
+    
+    // 添加MediaKit需要的库
+    implementation "androidx.media:media:1.6.0"
+    implementation "androidx.media2:media2-session:1.2.1"
+    implementation "androidx.media2:media2-player:1.2.1"
+    
+    // GPU加速相关
+    implementation "androidx.core:core-ktx:1.10.1"
+    implementation "com.google.android.material:material:1.8.0"
+}

@@ -1,0 +1,1050 @@
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:io' if (dart.library.io) 'dart:io';
+import 'package:path/path.dart' as p;
+import 'package:nipaplay/models/watch_history_model.dart';
+import 'package:nipaplay/services/concurrent_video_processor.dart';
+import 'package:nipaplay/services/rust_file_scan_service.dart';
+import 'package:nipaplay/services/android_saf_service.dart';
+import 'package:nipaplay/utils/ios_container_path_fixer.dart';
+import 'dart:convert';
+// Import Provider if ScanService needs to directly refresh other providers,
+// otherwise it will be refreshed by UI listening to this service.
+// import 'package:provider/provider.dart';
+// import 'package:nipaplay/providers/watch_history_provider.dart';
+
+/// 文件夹变化信息
+class FolderChangeInfo {
+  final String folderPath;
+  final String changeType; // 'modified', 'new', 'deleted'
+  final List<String> changedFiles;
+  final List<String> newFiles;
+  final List<String> deletedFiles;
+  final DateTime detectedAt;
+
+  FolderChangeInfo({
+    required this.folderPath,
+    required this.changeType,
+    this.changedFiles = const [],
+    this.newFiles = const [],
+    this.deletedFiles = const [],
+    required this.detectedAt,
+  });
+
+  String get displayName => p.basename(folderPath);
+
+  String get changeDescription {
+    if (changeType == 'new') {
+      return '新文件夹';
+    } else if (changeType == 'deleted') {
+      return '文件夹已删除';
+    } else {
+      List<String> changes = [];
+      if (newFiles.isNotEmpty) {
+        changes.add('新增${newFiles.length}个文件');
+      }
+      if (deletedFiles.isNotEmpty) {
+        changes.add('删除${deletedFiles.length}个文件');
+      }
+      if (changedFiles.isNotEmpty) {
+        changes.add('修改${changedFiles.length}个文件');
+      }
+      return changes.isEmpty ? '内容有变化' : changes.join('，');
+    }
+  }
+}
+
+/// 扫描失败文件信息
+class ScanFailedFile {
+  final String folderPath;
+  final String filePath;
+  final String? errorMessage;
+
+  const ScanFailedFile({
+    required this.folderPath,
+    required this.filePath,
+    this.errorMessage,
+  });
+
+  String get folderName => folderPath.isEmpty ? '' : p.basename(folderPath);
+
+  String get relativePath {
+    if (folderPath.isEmpty) return filePath;
+    final relative = p.relative(filePath, from: folderPath);
+    return relative;
+  }
+
+  String get displayPath {
+    if (folderPath.isEmpty) return filePath;
+    final relative = relativePath;
+    if (relative.startsWith('..')) {
+      return filePath;
+    }
+    final name = folderName;
+    if (name.isEmpty) return relative;
+    return p.join(name, relative);
+  }
+}
+
+class _FolderFileDiff {
+  final int currentCount;
+  final int cachedCount;
+  final List<String> currentFiles;
+  final List<String> newFiles;
+  final List<String> modifiedFiles;
+  final List<String> deletedFiles;
+  final Map<String, String>? currentHashes;
+  final Map<String, String>? filePathsByRelativePath;
+
+  _FolderFileDiff({
+    required this.currentCount,
+    required this.cachedCount,
+    required this.currentFiles,
+    required this.newFiles,
+    required this.modifiedFiles,
+    required this.deletedFiles,
+    this.currentHashes,
+    this.filePathsByRelativePath,
+  });
+
+  List<String> get filesToProcess => [...newFiles, ...modifiedFiles];
+
+  bool get hasChanges =>
+      newFiles.isNotEmpty ||
+      modifiedFiles.isNotEmpty ||
+      deletedFiles.isNotEmpty;
+}
+
+class ScanService with ChangeNotifier {
+  static const String _scannedFoldersPrefsKey = 'nipaplay_scanned_folders';
+  static const String _subFolderHashCachePrefsKey =
+      'nipaplay_subfolder_hash_cache';
+  // _lastScannedDirectoryPickerPathKey will likely remain in UI as it's picker-specific
+
+  List<String> _scannedFolders = [];
+  List<String> get scannedFolders => List.unmodifiable(_scannedFolders);
+
+  // 文件hash缓存由 Rust 扫描结果维护，用于精确定位新增、修改、删除文件。
+  Map<String, Map<String, String>> _subFolderHashCache = {};
+
+  // 批量刷新阶段已经算出的 diff，避免正式扫描时重复遍历目录。
+  final Map<String, _FolderFileDiff> _precomputedFolderDiffs = {};
+
+  // 启动时检测到的变化信息
+  final List<FolderChangeInfo> _detectedChanges = [];
+  List<FolderChangeInfo> get detectedChanges =>
+      List.unmodifiable(_detectedChanges);
+
+  // 最近一次扫描失败的文件列表
+  final List<ScanFailedFile> _failedScanFiles = [];
+  List<ScanFailedFile> get failedScanFiles =>
+      List.unmodifiable(_failedScanFiles);
+
+  bool _isScanning = false;
+  bool get isScanning => _isScanning;
+
+  double _scanProgress = 0.0;
+  double get scanProgress => _scanProgress;
+
+  String _scanMessage = "";
+  String get scanMessage => _scanMessage;
+
+  // To allow UI to react to scan completion for specific actions like refreshing MediaLibraryPage
+  bool _scanJustCompleted = false;
+  bool get scanJustCompleted => _scanJustCompleted;
+  void acknowledgeScanCompleted() {
+    // UI calls this after reacting
+    if (_scanJustCompleted) {
+      _scanJustCompleted = false;
+      // notifyListeners(); // Optional: if UI needs to rebuild based on this acknowledgement
+    }
+  }
+
+  // 扫描是否刚结束的标志，用于检查扫描结果
+  bool _justFinishedScanning = false;
+  bool get justFinishedScanning => _justFinishedScanning;
+
+  // 重置刚完成扫描的标志
+  void resetJustFinishedScanning() {
+    _justFinishedScanning = false;
+  }
+
+  // 扫描找到的文件数量
+  int _totalFilesFound = 0;
+  int get totalFilesFound => _totalFilesFound;
+
+  ScanService() {
+    _loadScannedFolders();
+    _loadSubFolderHashCache();
+    // 启动时自动检测变化
+    _performStartupChangeDetection();
+  }
+
+  bool _isAndroidSafPath(String path) {
+    return !kIsWeb && Platform.isAndroid && AndroidSafService.isSafUri(path);
+  }
+
+  Future<void> _loadScannedFolders() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      List<String> rawFolders =
+          prefs.getStringList(_scannedFoldersPrefsKey) ?? [];
+
+      // iOS平台：使用工具类修复容器路径变化并清理失效路径
+      if (Platform.isIOS && rawFolders.isNotEmpty) {
+        List<String> validFolders = [];
+        int fixedCount = 0;
+        int removedCount = 0;
+
+        for (String folder in rawFolders) {
+          final validPath =
+              await iOSContainerPathFixer.validateAndFixDirectoryPath(folder);
+          if (validPath != null) {
+            validFolders.add(validPath);
+            if (validPath != folder) {
+              fixedCount++;
+              debugPrint('ScanService: 修复扫描文件夹路径: $folder -> $validPath');
+            }
+          } else {
+            // 路径无法修复且不存在，自动清理失效路径
+            removedCount++;
+            debugPrint('ScanService: 清理失效扫描文件夹路径: $folder');
+          }
+        }
+
+        _scannedFolders = validFolders;
+
+        // 如果有路径变化或清理了失效路径，保存更新后的路径列表
+        if (fixedCount > 0 || removedCount > 0) {
+          await prefs.setStringList(_scannedFoldersPrefsKey, validFolders);
+          if (fixedCount > 0) {
+            debugPrint('ScanService: 已修复 $fixedCount 个文件夹路径');
+          }
+          if (removedCount > 0) {
+            debugPrint('ScanService: 已清理 $removedCount 个失效文件夹路径');
+          }
+        }
+      } else {
+        // Android: 将旧版 PR#599 存的 content:// primary tree URI 迁移为文件路径
+        // （恢复 io.File 兼容）。SD/OTG 的 content:// 保留走 SAF。
+        if (Platform.isAndroid) {
+          final migrated = <String>[];
+          int migratedCount = 0;
+          for (final folder in rawFolders) {
+            final converted = AndroidSafService.tryConvertToFilePath(folder);
+            // 验证转换后的真实路径可访问（MANAGE_EXTERNAL_STORAGE 覆盖）。
+            // 不可访问（如 USB OTG 被 OEM 限制）则保留原 content:// 走 SAF。
+            if (converted != folder && !Directory(converted).existsSync()) {
+              migrated.add(folder);
+            } else {
+              if (converted != folder) migratedCount++;
+              migrated.add(converted);
+            }
+          }
+          _scannedFolders = migrated;
+          if (migratedCount > 0) {
+            await prefs.setStringList(_scannedFoldersPrefsKey, migrated);
+            debugPrint(
+                'ScanService: 迁移 $migratedCount 个 content:// 文件夹到文件路径');
+          }
+        } else {
+          _scannedFolders = rawFolders;
+        }
+      }
+
+      notifyListeners();
+    } catch (e) {
+      //debugPrint("ScanService: Error loading scanned folders: $e");
+      _updateScanMessage("加载已扫描文件夹列表失败: $e");
+    }
+  }
+
+  Future<void> _saveScannedFolders() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_scannedFoldersPrefsKey, _scannedFolders);
+      //debugPrint("ScanService: Scanned folders saved.");
+    } catch (e) {
+      //debugPrint("ScanService: Error saving scanned folders: $e");
+      // UI should show this message if it's critical
+    }
+  }
+
+  /// 加载子文件夹hash缓存
+  Future<void> _loadSubFolderHashCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheJson = prefs.getString(_subFolderHashCachePrefsKey);
+      if (cacheJson != null) {
+        final Map<String, dynamic> cacheMap = json.decode(cacheJson);
+        _subFolderHashCache = cacheMap.map((key, value) {
+          if (value is Map<String, dynamic>) {
+            return MapEntry(
+                key, value.map((k, v) => MapEntry(k, v.toString())));
+          }
+          return MapEntry(key, <String, String>{});
+        });
+      }
+    } catch (e) {
+      debugPrint("加载子文件夹hash缓存失败: $e");
+      _subFolderHashCache = {};
+    }
+  }
+
+  /// 保存子文件夹hash缓存
+  Future<void> _saveSubFolderHashCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cacheJson = json.encode(_subFolderHashCache);
+      await prefs.setString(_subFolderHashCachePrefsKey, cacheJson);
+      debugPrint("子文件夹hash缓存已保存，包含 ${_subFolderHashCache.length} 个主文件夹");
+    } catch (e) {
+      debugPrint("保存子文件夹hash缓存失败: $e");
+    }
+  }
+
+  _FolderFileDiff _diffFromRustResult(RustFileScanResult result) {
+    return _FolderFileDiff(
+      currentCount: result.currentCount,
+      cachedCount: result.cachedCount,
+      currentFiles: result.currentFiles,
+      newFiles: result.newFiles,
+      modifiedFiles: result.modifiedFiles,
+      deletedFiles: result.deletedFiles,
+      currentHashes: result.currentHashes,
+    );
+  }
+
+  Future<_FolderFileDiff> _calculateFolderFileDiffWithRust(
+    String folderPath,
+  ) async {
+    if (_isAndroidSafPath(folderPath)) {
+      return _calculateFolderFileDiffWithSaf(folderPath);
+    }
+
+    final result = await RustFileScanService.calculateDiff(
+      folderPath: folderPath,
+      cachedHashes: _subFolderHashCache[folderPath] ?? {},
+    );
+    debugPrint(
+      "Rust 文件扫描完成 $folderPath: ${result.currentCount} 个视频文件",
+    );
+    return _diffFromRustResult(result);
+  }
+
+  Future<_FolderFileDiff> _calculateFolderFileDiffWithSaf(
+    String folderUri,
+  ) async {
+    final entries = await AndroidSafService.scanDirectory(folderUri);
+    final cachedHashes = _subFolderHashCache[folderUri] ?? {};
+    final currentHashes = <String, String>{
+      for (final entry in entries) entry.relativePath: entry.fileHash,
+    };
+    final currentFiles = currentHashes.keys.toList()..sort();
+    final newFiles = <String>[];
+    final modifiedFiles = <String>[];
+
+    for (final entry in entries) {
+      final cachedHash = cachedHashes[entry.relativePath];
+      if (cachedHash == null) {
+        newFiles.add(entry.relativePath);
+      } else if (cachedHash != entry.fileHash) {
+        modifiedFiles.add(entry.relativePath);
+      }
+    }
+
+    final deletedFiles = cachedHashes.keys
+        .where((relativePath) => !currentHashes.containsKey(relativePath))
+        .toList()
+      ..sort();
+    newFiles.sort();
+    modifiedFiles.sort();
+
+    debugPrint(
+      "Android SAF 文件扫描完成 $folderUri: ${entries.length} 个视频文件",
+    );
+
+    return _FolderFileDiff(
+      currentCount: currentFiles.length,
+      cachedCount: cachedHashes.length,
+      currentFiles: currentFiles,
+      newFiles: newFiles,
+      modifiedFiles: modifiedFiles,
+      deletedFiles: deletedFiles,
+      currentHashes: currentHashes,
+      filePathsByRelativePath: {
+        for (final entry in entries) entry.relativePath: entry.uri,
+      },
+    );
+  }
+
+  Future<void> _storeFileHashes(
+    String folderPath,
+    _FolderFileDiff diff,
+  ) async {
+    if (diff.currentHashes != null) {
+      _subFolderHashCache[folderPath] = Map<String, String>.from(
+        diff.currentHashes!,
+      );
+      await _saveSubFolderHashCache();
+      debugPrint("已使用扫描结果更新文件夹 $folderPath 的hash缓存");
+    }
+  }
+
+  /// 更新文件hash缓存
+  Future<void> _updateFileHashes(
+    String folderPath, {
+    _FolderFileDiff? precomputedDiff,
+  }) async {
+    if (kIsWeb) return;
+    try {
+      final diff = precomputedDiff ??
+          _precomputedFolderDiffs.remove(folderPath) ??
+          await _calculateFolderFileDiffWithRust(folderPath);
+      await _storeFileHashes(folderPath, diff);
+    } catch (e) {
+      debugPrint("更新文件夹hash缓存失败 $folderPath: $e");
+    }
+  }
+
+  /// 清理不存在文件夹的hash缓存
+  Future<void> _cleanupFolderHashCache() async {
+    if (kIsWeb) return;
+    final keysToRemove = <String>[];
+
+    for (final folderPath in _subFolderHashCache.keys) {
+      if (!_scannedFolders.contains(folderPath)) {
+        keysToRemove.add(folderPath);
+        continue;
+      }
+
+      if (_isAndroidSafPath(folderPath)) {
+        if (!await AndroidSafService.canAccessTree(folderPath)) {
+          keysToRemove.add(folderPath);
+        }
+      } else if (!await Directory(folderPath).exists()) {
+        keysToRemove.add(folderPath);
+      }
+    }
+
+    for (final key in keysToRemove) {
+      _subFolderHashCache.remove(key);
+    }
+
+    if (keysToRemove.isNotEmpty) {
+      await _saveSubFolderHashCache();
+      debugPrint("已清理 ${keysToRemove.length} 个无效的文件夹hash缓存");
+    }
+  }
+
+  /// 清理所有文件夹hash缓存，强制下次扫描时重新检查所有文件夹
+  Future<void> clearAllFolderHashCache() async {
+    _subFolderHashCache.clear();
+    await _saveSubFolderHashCache();
+    debugPrint("已清理所有文件夹hash缓存");
+    _updateScanMessage("已清理智能扫描缓存，下次扫描将检查所有文件夹。");
+  }
+
+  /// 启动时执行变化检测
+  Future<void> _performStartupChangeDetection() async {
+    if (kIsWeb) return;
+    if (_scannedFolders.isEmpty) {
+      return;
+    }
+
+    debugPrint("开始启动时变化检测，检查 ${_scannedFolders.length} 个文件夹");
+    _detectedChanges.clear();
+
+    for (final folderPath in _scannedFolders) {
+      try {
+        final changes = await _detectDetailedFolderChanges(folderPath);
+        if (changes != null) {
+          _detectedChanges.add(changes);
+        }
+      } catch (e) {
+        debugPrint("检测文件夹 $folderPath 变化时出错: $e");
+      }
+    }
+
+    if (_detectedChanges.isNotEmpty) {
+      debugPrint("启动时检测到 ${_detectedChanges.length} 个文件夹有变化");
+      notifyListeners(); // 通知UI有变化检测结果
+    } else {
+      debugPrint("启动时检测完成，所有文件夹都没有变化");
+    }
+  }
+
+  /// 详细检测文件夹变化，包括子文件夹级别的变化
+  Future<FolderChangeInfo?> _detectDetailedFolderChanges(
+      String folderPath) async {
+    if (kIsWeb) return null;
+    if (!_isAndroidSafPath(folderPath)) {
+      final directory = Directory(folderPath);
+      if (!await directory.exists()) {
+        // 文件夹已删除
+        return FolderChangeInfo(
+          folderPath: folderPath,
+          changeType: 'deleted',
+          detectedAt: DateTime.now(),
+        );
+      }
+    } else if (!await AndroidSafService.canAccessTree(folderPath)) {
+      // 文件夹已删除
+      return FolderChangeInfo(
+        folderPath: folderPath,
+        changeType: 'deleted',
+        detectedAt: DateTime.now(),
+      );
+    }
+
+    final diff = await _calculateFolderFileDiff(folderPath);
+    if (!diff.hasChanges) {
+      return null; // 没有变化
+    }
+
+    return FolderChangeInfo(
+      folderPath: folderPath,
+      changeType: 'modified',
+      newFiles: diff.newFiles,
+      deletedFiles: diff.deletedFiles,
+      changedFiles: diff.modifiedFiles,
+      detectedAt: DateTime.now(),
+    );
+  }
+
+  /// 计算文件夹内视频文件的变化明细
+  Future<_FolderFileDiff> _calculateFolderFileDiff(String folderPath) async {
+    final precomputed = _precomputedFolderDiffs.remove(folderPath);
+    if (precomputed != null) {
+      return precomputed;
+    }
+
+    return _calculateFolderFileDiffWithRust(folderPath);
+  }
+
+  /// 获取变化检测结果的摘要
+  String getChangeDetectionSummary() {
+    if (_detectedChanges.isEmpty) {
+      return "没有检测到文件夹变化";
+    }
+
+    int modifiedCount =
+        _detectedChanges.where((c) => c.changeType == 'modified').length;
+    int newCount = _detectedChanges.where((c) => c.changeType == 'new').length;
+    int deletedCount =
+        _detectedChanges.where((c) => c.changeType == 'deleted').length;
+
+    List<String> parts = [];
+    if (modifiedCount > 0) parts.add("$modifiedCount 个文件夹有变化");
+    if (newCount > 0) parts.add("$newCount 个新文件夹");
+    if (deletedCount > 0) parts.add("$deletedCount 个文件夹被删除");
+
+    return "检测到：${parts.join('，')}";
+  }
+
+  /// 清除变化检测结果
+  void clearDetectedChanges() {
+    _detectedChanges.clear();
+    notifyListeners();
+    debugPrint("已清理检测到的文件夹变化");
+  }
+
+  /// 清理扫描失败文件列表
+  void clearFailedScanFiles({bool notify = true}) {
+    if (_failedScanFiles.isEmpty) return;
+    _failedScanFiles.clear();
+    if (notify) {
+      notifyListeners();
+    }
+  }
+
+  void _recordFailedScanFiles(
+    String folderPath,
+    List<VideoProcessResult> failedResults,
+  ) {
+    if (failedResults.isEmpty) return;
+    _failedScanFiles.addAll(
+      failedResults.map(
+        (result) => ScanFailedFile(
+          folderPath: folderPath,
+          filePath: result.filePath,
+          errorMessage: result.errorMessage,
+        ),
+      ),
+    );
+  }
+
+  void _updateScanState(
+      {bool? scanning, double? progress, String? message, bool? completed}) {
+    bool changed = false;
+    if (scanning != null && _isScanning != scanning) {
+      _isScanning = scanning;
+      changed = true;
+      debugPrint("扫描状态变更: isScanning=$_isScanning");
+    }
+    if (progress != null && _scanProgress != progress) {
+      _scanProgress = progress;
+      changed = true;
+    }
+    if (message != null && _scanMessage != message) {
+      _scanMessage = message;
+      changed = true;
+    }
+    if (completed != null && completed && !_scanJustCompleted) {
+      _scanJustCompleted = true;
+      changed = true; // 确保完成事件被标记为"changed"
+      debugPrint("扫描完成标志已设置: _scanJustCompleted=$_scanJustCompleted");
+      // This will also be caught by 'changed' if scanning is set to false
+    }
+
+    if (changed || (completed != null && completed)) {
+      // Ensure listener notification on completion
+      debugPrint(
+          "准备通知监听器状态变化: isScanning=$_isScanning, justFinishedScanning=$_justFinishedScanning, totalFilesFound=$_totalFilesFound");
+      notifyListeners();
+      debugPrint("已通知监听器状态变化");
+    }
+  }
+
+  void _updateScanMessage(String message) {
+    if (_scanMessage != message) {
+      _scanMessage = message;
+      notifyListeners();
+    }
+  }
+
+  // Public method to allow UI or other services to update the scan message
+  void updateScanMessage(String message) {
+    _updateScanMessage(message);
+  }
+
+  Future<void> rescanAllFolders(
+      {bool skipPreviouslyMatchedUnwatched = true}) async {
+    if (kIsWeb) {
+      _updateScanMessage("Web版不支持扫描本地媒体库。");
+      _updateScanState(scanning: false, completed: true);
+      return;
+    }
+    if (_isScanning) {
+      _updateScanMessage("已有扫描任务在进行中，请稍后开始全面刷新。");
+      return;
+    }
+
+    if (_scannedFolders.isEmpty) {
+      _updateScanMessage("没有已添加的媒体文件夹可供刷新。");
+      _updateScanState(scanning: false, completed: true);
+      return;
+    }
+
+    clearFailedScanFiles(notify: false);
+    _precomputedFolderDiffs.clear();
+    _updateScanState(
+        scanning: true, progress: 0.0, message: "开始智能刷新所有媒体文件夹...");
+
+    await _cleanupFolderHashCache();
+
+    final allFoldersToScan = List<String>.from(_scannedFolders);
+    final foldersNeedingScan = <String>[];
+
+    _updateScanState(message: "正在检查文件夹变化...");
+
+    for (int i = 0; i < allFoldersToScan.length; i++) {
+      if (!_isScanning) {
+        _precomputedFolderDiffs.clear();
+        _updateScanState(scanning: false, message: "刷新已取消。", completed: true);
+        return;
+      }
+
+      final folderPath = allFoldersToScan[i];
+      _updateScanState(
+          progress: (i + 1) / allFoldersToScan.length * 0.3,
+          message:
+              "检查文件夹变化: ${p.basename(folderPath)} (${i + 1}/${allFoldersToScan.length})");
+
+      try {
+        final diff = await _calculateFolderFileDiffWithRust(folderPath);
+        _precomputedFolderDiffs[folderPath] = diff;
+        if (diff.hasChanges) {
+          foldersNeedingScan.add(folderPath);
+        }
+      } catch (e) {
+        // Rust diff failed for this folder — fall back to a full scan
+        // instead of aborting the entire batch.
+        debugPrint('Rust 文件 diff 失败，回退到全量扫描: $folderPath — $e');
+        foldersNeedingScan.add(folderPath);
+      }
+    }
+
+    if (foldersNeedingScan.isEmpty) {
+      for (final diffEntry in _precomputedFolderDiffs.entries) {
+        await _storeFileHashes(diffEntry.key, diffEntry.value);
+      }
+      _precomputedFolderDiffs.clear();
+      _updateScanState(
+          scanning: false,
+          progress: 1.0,
+          message: "智能刷新完成：所有文件夹都没有变化，无需重新扫描。",
+          completed: true);
+      return;
+    }
+
+    _updateScanState(
+        message: "发现 ${foldersNeedingScan.length} 个文件夹有变化，开始扫描...");
+
+    var foldersProcessedCount = 0;
+
+    for (final folderPath in foldersNeedingScan) {
+      if (!_isScanning) {
+        _precomputedFolderDiffs.clear();
+        _updateScanState(scanning: false, message: "刷新已取消。", completed: true);
+        return;
+      }
+
+      final overallProgress =
+          0.3 + (foldersProcessedCount / foldersNeedingScan.length) * 0.7;
+      _updateScanState(
+          progress: overallProgress,
+          message:
+              "正在刷新有变化的文件夹: ${p.basename(folderPath)} (${foldersProcessedCount + 1}/${foldersNeedingScan.length})");
+
+      await startDirectoryScan(folderPath,
+          isPartOfBatch: true,
+          skipPreviouslyMatchedUnwatched: skipPreviouslyMatchedUnwatched);
+
+      foldersProcessedCount++;
+    }
+
+    if (_isScanning || foldersProcessedCount == foldersNeedingScan.length) {
+      _justFinishedScanning = true;
+      final skippedCount = allFoldersToScan.length - foldersNeedingScan.length;
+      var completionMessage =
+          "智能刷新完成：扫描了 ${foldersNeedingScan.length} 个有变化的文件夹";
+      if (skippedCount > 0) {
+        completionMessage += "，跳过了 $skippedCount 个无变化的文件夹";
+      }
+      completionMessage += "。";
+
+      _updateScanState(
+          scanning: false,
+          progress: 1.0,
+          message: completionMessage,
+          completed: true);
+      _precomputedFolderDiffs.clear();
+    }
+  }
+
+  Future<void> startDirectoryScan(String directoryPath,
+      {bool isPartOfBatch = false,
+      bool skipPreviouslyMatchedUnwatched = false}) async {
+    if (kIsWeb) {
+      _updateScanMessage("Web版不支持扫描本地媒体库。");
+      if (!isPartOfBatch) {
+        _updateScanState(scanning: false, completed: true);
+      }
+      return;
+    }
+    if (!isPartOfBatch && _isScanning) {
+      _updateScanMessage("已有扫描任务在进行中，请稍后。");
+      return;
+    }
+
+    if (!isPartOfBatch) {
+      clearFailedScanFiles(notify: false);
+      // Standalone scans must not reuse diff snapshots from previous runs.
+      _precomputedFolderDiffs.clear();
+    }
+
+    if (!isPartOfBatch) {
+      _updateScanState(
+          scanning: true, progress: 0.0, message: "准备智能扫描: $directoryPath");
+    } else {
+      _updateScanState(
+          message:
+              "开始扫描子文件夹: ${p.basename(directoryPath)} (${skipPreviouslyMatchedUnwatched ? "跳过已匹配" : "全面扫描"})");
+    }
+
+    bool newFolderAddedToPrefs = false;
+    if (!_scannedFolders.contains(directoryPath)) {
+      _scannedFolders = List.from(_scannedFolders)..add(directoryPath);
+      newFolderAddedToPrefs = true;
+    }
+
+    if (newFolderAddedToPrefs) {
+      await _saveScannedFolders();
+      notifyListeners();
+    }
+
+    // 第一阶段：分析文件变化
+    _updateScanState(message: "正在分析文件变化...");
+    final _FolderFileDiff diff;
+    try {
+      diff = await _calculateFolderFileDiff(directoryPath);
+    } catch (e) {
+      final message = "Rust 文件扫描失败: $e";
+      debugPrint("$message ($directoryPath)");
+      if (!isPartOfBatch) {
+        _updateScanState(
+          scanning: false,
+          message: message,
+          completed: true,
+        );
+      } else {
+        _updateScanMessage("${p.basename(directoryPath)} $message");
+      }
+      return;
+    }
+    if (diff.currentCount == 0 && diff.cachedCount == 0) {
+      if (!isPartOfBatch) {
+        _totalFilesFound = 0;
+        _justFinishedScanning = true;
+        _updateScanState(
+            scanning: false,
+            message: "在 $directoryPath 中没有找到 mp4 或 mkv 文件。",
+            completed: true);
+        debugPrint(
+            "扫描结束，没有找到文件，已设置 _justFinishedScanning=$_justFinishedScanning, _totalFilesFound=$_totalFilesFound");
+      } else {
+        _updateScanMessage("在 ${p.basename(directoryPath)} 中无视频文件。");
+      }
+      await _updateFileHashes(directoryPath, precomputedDiff: diff);
+      return;
+    }
+
+    List<String> filesToProcess = List<String>.from(diff.filesToProcess)
+      ..sort();
+    if (filesToProcess.isEmpty) {
+      if (diff.deletedFiles.isNotEmpty) {
+        final deletionMessage =
+            "检测到 ${diff.deletedFiles.length} 个文件被删除，无需重新刮削。";
+        if (!isPartOfBatch) {
+          await _updateFileHashes(directoryPath, precomputedDiff: diff);
+          _updateScanState(
+            scanning: false,
+            progress: 1.0,
+            message: "智能扫描完成：$deletionMessage",
+            completed: true,
+          );
+        } else {
+          await _updateFileHashes(directoryPath, precomputedDiff: diff);
+          _updateScanMessage("${p.basename(directoryPath)} $deletionMessage");
+        }
+      } else {
+        if (!isPartOfBatch) {
+          await _updateFileHashes(directoryPath, precomputedDiff: diff);
+          _updateScanState(
+            scanning: false,
+            progress: 1.0,
+            message: "智能扫描完成：文件夹 ${p.basename(directoryPath)} 没有变化，无需重新扫描。",
+            completed: true,
+          );
+        } else {
+          await _updateFileHashes(directoryPath, precomputedDiff: diff);
+          _updateScanMessage("文件夹 ${p.basename(directoryPath)} 没有变化，已跳过。");
+        }
+      }
+      return;
+    }
+
+    final List<String> detailParts = [];
+    if (diff.newFiles.isNotEmpty) {
+      detailParts.add("新增 ${diff.newFiles.length} 个");
+    }
+    if (diff.modifiedFiles.isNotEmpty) {
+      detailParts.add("修改 ${diff.modifiedFiles.length} 个");
+    }
+    final String detail =
+        detailParts.isEmpty ? "" : "（${detailParts.join('，')}）";
+
+    _updateScanState(
+        message: "发现 ${filesToProcess.length} 个需要处理的视频文件$detail，开始并发扫描...");
+
+    final filePathsByRelativePath = diff.filePathsByRelativePath;
+    final List<String> videoPaths = filesToProcess
+        .map((relativePath) =>
+            filePathsByRelativePath?[relativePath] ??
+            p.join(directoryPath, relativePath))
+        .toList();
+
+    if (!_isScanning && !isPartOfBatch) {
+      _updateScanState(
+          scanning: false, message: "扫描已取消: $directoryPath", completed: true);
+      return;
+    }
+
+    // 第二阶段：并发处理视频文件
+    final results = await ConcurrentVideoProcessor.processVideoPaths(videoPaths,
+        skipPreviouslyMatchedUnwatched: skipPreviouslyMatchedUnwatched,
+        onProgress: (processed, total, currentFile) {
+      if (!_isScanning) return;
+      _updateScanState(
+          progress: processed / total,
+          message: "正在处理: $currentFile ($processed/$total)");
+    });
+
+    if (!_isScanning && !isPartOfBatch) {
+      _updateScanState(
+          scanning: false, message: "扫描已取消: $directoryPath", completed: true);
+      return;
+    }
+
+    // 第三阶段：处理结果
+    final successResults = results.where((r) => r.success).toList();
+    final failedResults = results.where((r) => !r.success).toList();
+    _recordFailedScanFiles(directoryPath, failedResults);
+    final addedAnimeTitles = successResults
+        .where((r) => r.animeTitle != null)
+        .map((r) => r.animeTitle!)
+        .toSet();
+    final skippedFilesCount = videoPaths.length - results.length;
+
+    if (!isPartOfBatch && _isScanning) {
+      _totalFilesFound = videoPaths.length;
+
+      String completionMessage = "";
+      if (failedResults.isNotEmpty) {
+        completionMessage =
+            "并发扫描 $directoryPath 完成。添加/更新 ${addedAnimeTitles.length} 部番剧。${failedResults.length} 个文件处理失败。";
+      } else {
+        completionMessage =
+            "并发扫描 $directoryPath 完成。添加/更新 ${addedAnimeTitles.length} 部番剧。";
+      }
+      if (skippedFilesCount > 0) {
+        completionMessage += " 跳过了 $skippedFilesCount 个已匹配文件。";
+      }
+
+      _justFinishedScanning = true;
+      await _updateFileHashes(directoryPath, precomputedDiff: diff);
+      _updateScanState(
+          scanning: false,
+          progress: 1.0,
+          message: completionMessage,
+          completed: true);
+    } else if (isPartOfBatch) {
+      _totalFilesFound += videoPaths.length;
+      await _updateFileHashes(directoryPath, precomputedDiff: diff);
+    }
+  }
+
+  Future<void> addScannedFolder(String folderPath) async {
+    if (kIsWeb) {
+      _updateScanMessage("Web版不支持扫描本地媒体库。");
+      return;
+    }
+
+    final sanitized = folderPath.trim();
+    if (sanitized.isEmpty) {
+      _updateScanMessage("文件夹路径为空。");
+      return;
+    }
+
+    if (_scannedFolders.contains(sanitized)) {
+      _updateScanMessage("文件夹已在扫描列表中：$sanitized");
+      return;
+    }
+
+    _scannedFolders = List.from(_scannedFolders)..add(sanitized);
+    await _saveScannedFolders();
+    _updateScanMessage("已添加媒体文件夹：$sanitized");
+    notifyListeners();
+  }
+
+  Future<void> removeScannedFolder(String folderPath) async {
+    if (kIsWeb) {
+      _updateScanMessage("Web版不支持扫描本地媒体库。");
+      return;
+    }
+    if (_scannedFolders.contains(folderPath)) {
+      // First, perform the cleanup of associated media records
+      try {
+        List<WatchHistoryItem> itemsToRemove =
+            await WatchHistoryManager.getItemsByPathPrefix(folderPath);
+        if (itemsToRemove.isNotEmpty) {
+          Set<int> affectedAnimeIds = itemsToRemove
+              .where((item) => item.animeId != null)
+              .map((item) => item.animeId!)
+              .toSet();
+
+          await WatchHistoryManager.removeItemsByPathPrefix(folderPath);
+          //debugPrint("ScanService: Removed ${itemsToRemove.length} items from WatchHistoryManager for path: $folderPath");
+
+          for (int animeId in affectedAnimeIds) {
+            List<WatchHistoryItem> remainingItemsForAnime =
+                await WatchHistoryManager.getAllItemsForAnime(animeId);
+            if (remainingItemsForAnime.isEmpty) {
+              //debugPrint("ScanService: Anime ID: $animeId is now orphaned (no remaining episodes) after removing $folderPath.");
+              // TODO: Optionally, add logic here to notify other parts of the app or clean up anime-level data if needed
+            }
+          }
+        } else {
+          //debugPrint("ScanService: No WatchHistoryItems found for path prefix $folderPath to remove.");
+        }
+      } catch (e) {
+        //debugPrint("ScanService: Error cleaning watch history for $folderPath: $e");
+        // Decide if we should still proceed with removing the folder from the list
+        // For now, we will, but flag the error in the message.
+        _updateScanMessage("移除 $folderPath 时清理历史记录失败: $e");
+        // Potentially return or throw to prevent folder removal from list if history cleanup is critical
+      }
+
+      // Then, remove the folder from the list and save
+      _scannedFolders = List.from(_scannedFolders)..remove(folderPath);
+      await _saveScannedFolders();
+
+      if (_subFolderHashCache.containsKey(folderPath)) {
+        _subFolderHashCache.remove(folderPath);
+        await _saveSubFolderHashCache();
+        debugPrint("已清理文件夹 $folderPath 的文件hash缓存");
+      }
+
+      _updateScanMessage("已从扫描列表移除文件夹: $folderPath");
+      _updateScanState(
+          scanning: false,
+          completed:
+              true); // Ensure isScanning is false, and signal completion for UI refresh
+
+      //debugPrint("ScanService: Removed folder $folderPath from scanned list.");
+    } else {
+      //debugPrint("ScanService: Attempted to remove folder not in list: $folderPath");
+      _updateScanMessage("文件夹 $folderPath 不在扫描列表中。");
+    }
+  }
+
+  Future<int> cleanupMissingScannedFolders() async {
+    if (kIsWeb) {
+      _updateScanMessage("Web版不支持扫描本地媒体库。");
+      return 0;
+    }
+
+    if (_isScanning) {
+      _updateScanMessage("已有扫描任务在进行中，请稍后。");
+      return 0;
+    }
+
+    final missingFolders = <String>[];
+    for (final folderPath in List<String>.from(_scannedFolders)) {
+      if (_isAndroidSafPath(folderPath)) {
+        if (!await AndroidSafService.canAccessTree(folderPath)) {
+          missingFolders.add(folderPath);
+        }
+        continue;
+      }
+
+      final directory = Directory(folderPath);
+      if (!await directory.exists()) {
+        missingFolders.add(folderPath);
+      }
+    }
+
+    if (missingFolders.isEmpty) {
+      _updateScanMessage("没有需要清理的不存在文件夹。");
+      return 0;
+    }
+
+    for (final folderPath in missingFolders) {
+      await removeScannedFolder(folderPath);
+    }
+
+    _updateScanMessage("已清理 ${missingFolders.length} 个不存在的文件夹。");
+    return missingFolders.length;
+  }
+}

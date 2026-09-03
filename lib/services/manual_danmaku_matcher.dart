@@ -1,0 +1,133 @@
+import 'package:flutter/material.dart';
+import 'package:nipaplay/services/danmaku_matching_service.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/manual_danmaku_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/nipaplay_window.dart';
+import 'package:nipaplay/providers/appearance_settings_provider.dart';
+import 'package:nipaplay/app/app_display_surface.dart';
+import 'package:nipaplay/app/app_display_surface_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_view_container.dart';
+import 'package:provider/provider.dart';
+
+/// 手动弹幕匹配器
+///
+/// 提供手动搜索和匹配弹幕的功能，参考jellyfin_dandanplay_matcher的实现方式
+class ManualDanmakuMatcher {
+  static final ManualDanmakuMatcher instance = ManualDanmakuMatcher._internal();
+
+  ManualDanmakuMatcher._internal();
+
+  /// 搜索动画
+  ///
+  /// 根据关键词搜索动画列表
+  Future<List<Map<String, dynamic>>> searchAnime(String keyword) async {
+    if (keyword.trim().isEmpty) {
+      return [];
+    }
+
+    return DanmakuMatchingService.instance.searchAnime(keyword);
+  }
+
+  /// 获取动画剧集列表
+  ///
+  /// 根据动画ID获取剧集信息
+  Future<List<Map<String, dynamic>>> getAnimeEpisodes(int animeId) async {
+    return DanmakuMatchingService.instance.getAnimeEpisodes(animeId);
+  }
+
+  /// 显示手动匹配弹幕对话框
+  ///
+  /// 返回选择的结果：{anime: 动画信息, episode: 剧集信息}
+  static Future<Map<String, dynamic>?> showMatchDialog(
+    BuildContext context, {
+    String? initialVideoTitle,
+  }) async {
+    if (NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      return NipaplayLargeScreenViewContainer.show<Map<String, dynamic>>(
+        context: context,
+        title: '手动匹配弹幕',
+        subtitle: '搜索番剧，再使用方向键选择对应剧集',
+        maxWidth: 1100,
+        maxHeightFactor: 0.92,
+        autofocusClose: false,
+        builder: (_) => ManualDanmakuMatchDialog(
+          initialVideoTitle: initialVideoTitle,
+          embedded: true,
+        ),
+      );
+    }
+
+    if (AppDisplaySurfaceScope.of(context) == AppDisplaySurface.phone) {
+      return CupertinoBottomSheet.show<Map<String, dynamic>>(
+        context: context,
+        title: '手动匹配弹幕',
+        floatingTitle: true,
+        child: ManualDanmakuMatchDialog(
+          initialVideoTitle: initialVideoTitle,
+          embedded: true,
+        ),
+      );
+    }
+
+    final enableAnimation = Provider.of<AppearanceSettingsProvider>(
+      context,
+      listen: false,
+    ).enablePageAnimation;
+
+    return await NipaplayWindow.show<Map<String, dynamic>>(
+      context: context,
+      enableAnimation: enableAnimation,
+      barrierDismissible: true,
+      child: ManualDanmakuMatchDialog(
+        initialVideoTitle: initialVideoTitle,
+      ),
+    );
+  }
+
+  /// 显示手动匹配弹幕对话框（实例方法，为了兼容性）
+  ///
+  /// 返回选择的结果：{anime: 动画信息, episode: 剧集信息}
+  Future<Map<String, dynamic>?> showManualMatchDialog(
+    BuildContext context, {
+    String? initialVideoTitle,
+  }) async {
+    debugPrint('=== ManualDanmakuMatcher.showManualMatchDialog() 被调用 ===');
+    return await showMatchDialog(
+      context,
+      initialVideoTitle: initialVideoTitle,
+    );
+  }
+
+  /// 获取弹幕数据
+  ///
+  /// 根据episodeId获取弹幕内容
+  Future<Map<String, dynamic>> getDanmaku(String episodeId, int animeId) async {
+    try {
+      return await DanmakuMatchingService.instance
+          .getDanmaku(episodeId, animeId);
+    } catch (e) {
+      debugPrint('获取弹幕数据时出错: $e');
+      rethrow;
+    }
+  }
+
+  /// 自动匹配弹幕
+  ///
+  /// 根据视频文件名自动匹配合适的弹幕
+  /// 返回匹配结果，包含弹幕数据和匹配信息
+  Future<Map<String, dynamic>> autoMatch(String videoFileName) async {
+    // 实现自动匹配逻辑
+    // 这里可以使用视频文件名进行智能匹配
+    // 目前先返回空结果，后续可以扩展
+
+    Map<String, dynamic> result = {
+      'success': false,
+      'message': '自动匹配功能待实现',
+      'danmaku': null,
+      'matchInfo': null,
+    };
+
+    return result;
+  }
+}

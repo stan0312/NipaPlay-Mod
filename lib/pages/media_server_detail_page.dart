@@ -1,0 +1,2174 @@
+import 'dart:async';
+import 'dart:ui' show ImageFilter;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:nipaplay/models/emby_media_selection.dart';
+import 'package:nipaplay/models/jellyfin_model.dart';
+import 'package:nipaplay/models/emby_model.dart';
+import 'package:nipaplay/services/jellyfin_service.dart';
+import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/services/emby_media_preference_store.dart';
+import 'package:nipaplay/services/emby_media_selection_controller.dart';
+import 'package:nipaplay/services/emby_media_selection_resolver.dart';
+import 'package:nipaplay/services/emby_media_source_catalog.dart';
+import 'package:nipaplay/services/emby_media_source_selection.dart';
+import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/models/watch_history_model.dart';
+import 'package:nipaplay/models/media_server_playback.dart';
+import 'package:nipaplay/services/playback_service.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
+import 'package:kmbal_ionicons/kmbal_ionicons.dart';
+import 'package:provider/provider.dart';
+import 'package:nipaplay/providers/appearance_settings_provider.dart';
+import 'package:nipaplay/services/jellyfin_dandanplay_matcher.dart';
+import 'package:nipaplay/services/emby_dandanplay_matcher.dart';
+import 'package:nipaplay/utils/video_player_state.dart';
+import 'package:nipaplay/utils/tab_change_notifier.dart';
+import 'package:nipaplay/app/app_page_ids.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/network_media_server_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/anime_detail_shell.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_page_scaffold.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/settings_no_ripple_theme.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/nipaplay_window.dart';
+import 'package:nipaplay/widgets/media_server_network_image.dart';
+import 'package:nipaplay/widgets/emby_media_source_selector.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
+import 'package:nipaplay/providers/settings_provider.dart';
+import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:nipaplay/app/app_display_surface.dart';
+import 'package:nipaplay/app/app_display_surface_scope.dart';
+import 'package:nipaplay/media_library/adaptive_media_library_primitives.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+
+@visibleForTesting
+Future<void> startEmbyPlaybackAndCloseDetail({
+  required NavigatorState detailNavigator,
+  required Future<void> Function() startPlayback,
+}) async {
+  if (detailNavigator.mounted) {
+    detailNavigator.pop();
+  }
+  await startPlayback();
+}
+
+class MediaServerDetailPage extends StatefulWidget {
+  final String mediaId;
+  final MediaServerType serverType;
+
+  const MediaServerDetailPage({
+    super.key,
+    required this.mediaId,
+    required this.serverType,
+    this.embedded = false,
+  });
+
+  final bool embedded;
+
+  @override
+  State<MediaServerDetailPage> createState() => _MediaServerDetailPageState();
+
+  static Future<WatchHistoryItem?> showJellyfin(
+      BuildContext context, String jellyfinId) {
+    return show(context, jellyfinId, MediaServerType.jellyfin);
+  }
+
+  static Future<WatchHistoryItem?> showEmby(
+      BuildContext context, String embyId) {
+    return show(context, embyId, MediaServerType.emby);
+  }
+
+  static Future<WatchHistoryItem?> show(
+      BuildContext context, String mediaId, MediaServerType serverType) {
+    if (AppDisplaySurfaceScope.of(context) == AppDisplaySurface.phone) {
+      final label =
+          serverType == MediaServerType.jellyfin ? 'Jellyfin' : 'Emby';
+      return CupertinoBottomSheet.show<WatchHistoryItem>(
+        context: context,
+        title: '$label 详情',
+        floatingTitle: true,
+        child: MediaServerDetailPage(
+          mediaId: mediaId,
+          serverType: serverType,
+          embedded: true,
+        ),
+      );
+    }
+    // 获取外观设置Provider
+    final appearanceSettings =
+        Provider.of<AppearanceSettingsProvider>(context, listen: false);
+    final enableAnimation = appearanceSettings.enablePageAnimation;
+
+    return NipaplayWindow.show<WatchHistoryItem>(
+      context: context,
+      enableAnimation: enableAnimation,
+      child: MediaServerDetailPage(mediaId: mediaId, serverType: serverType),
+    );
+  }
+}
+
+class _MediaServerDetailPageState extends State<MediaServerDetailPage>
+    with SingleTickerProviderStateMixin {
+  // 静态Map，用于存储视频的哈希值（ID -> 哈希值）
+  static final Map<String, String> _videoHashes = {};
+  static final Map<String, Map<String, dynamic>> _videoInfos = {};
+
+  // 通用媒体详情（可以是Jellyfin或Emby）
+  dynamic _mediaDetail;
+  List<dynamic> _seasons = [];
+  final Map<String, List<dynamic>> _episodesBySeasonId = {};
+  String? _selectedSeasonId;
+  bool _isLoading = true;
+  String? _error;
+  bool _isMovie = false; // 新增状态，判断是否为电影
+
+  bool _isDetailAutoMatching = false;
+  bool _detailAutoMatchDialogVisible = false;
+  bool _detailAutoMatchCancelled = false;
+
+  TabController? _tabController;
+  String? _hoveredEpisodeId;
+  late final CachedEmbyMediaSourceCatalog _embyMediaSourceCatalog;
+  late final Future<EmbyMediaPreferenceStore> _embyPreferenceStore;
+  late final String _embyPageCacheScope;
+  final Map<String, String> _embySavedSourceLabels = <String, String>{};
+
+  // 辅助方法：获取演员头像URL
+  String? _getActorImageUrl(dynamic actor) {
+    if (widget.serverType == MediaServerType.jellyfin) {
+      if (actor.primaryImageTag != null) {
+        final service = JellyfinService.instance;
+        return service.getImageUrl(actor.id,
+            type: 'Primary', width: 100, quality: 90);
+      }
+    } else {
+      if (actor.imagePrimaryTag != null && actor.id != null) {
+        final service = EmbyService.instance;
+        return service.getImageUrl(actor.id!,
+            type: 'Primary',
+            width: 100,
+            height: 100,
+            tag: actor.imagePrimaryTag);
+      }
+    }
+    return null;
+  }
+
+  // 辅助方法：获取剧集缩略图URL
+  String _getEpisodeImageUrl(dynamic episode, dynamic service) {
+    if (widget.serverType == MediaServerType.jellyfin) {
+      return service.getImageUrl(episode.id,
+          type: 'Primary', width: 300, quality: 90);
+    } else {
+      // Emby需要传递tag参数
+      return service.getImageUrl(episode.id,
+          type: 'Primary', width: 300, tag: episode.imagePrimaryTag);
+    }
+  }
+
+  // 辅助方法：获取海报URL
+  String _getPosterUrl({int width = 300}) {
+    if (_mediaDetail?.imagePrimaryTag == null) return '';
+
+    if (widget.serverType == MediaServerType.jellyfin) {
+      final service = JellyfinService.instance;
+      return service.getImageUrl(_mediaDetail!.id,
+          type: 'Primary', width: width, quality: 95);
+    } else {
+      final service = EmbyService.instance;
+      return service.getImageUrl(_mediaDetail!.id,
+          type: 'Primary', width: width, tag: _mediaDetail!.imagePrimaryTag);
+    }
+  }
+
+  String _getBackdropUrl() {
+    if (_mediaDetail?.imageBackdropTag == null) return '';
+    if (widget.serverType == MediaServerType.jellyfin) {
+      final service = JellyfinService.instance;
+      return service.getImageUrl(_mediaDetail!.id,
+          type: 'Backdrop', width: 1920, height: 1080, quality: 95);
+    } else {
+      final service = EmbyService.instance;
+      return service.getImageUrl(_mediaDetail!.id,
+          type: 'Backdrop',
+          width: 1920,
+          height: 1080,
+          quality: 95,
+          tag: _mediaDetail!.imageBackdropTag);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _embyMediaSourceCatalog = CachedEmbyMediaSourceCatalog(
+      loader: EmbyService.instance.getPlaybackMediaSources,
+    );
+    _embyPreferenceStore = SharedPreferences.getInstance()
+        .then((preferences) => EmbyMediaPreferenceStore(preferences));
+    _embyPageCacheScope = 'detail:${identityHashCode(this)}';
+    _loadMediaDetail();
+    // _tabController = TabController(length: 2, vsync: this); // 延迟到加载后初始化
+    // _tabController!.addListener(() {
+    //   if (mounted && !_tabController!.indexIsChanging) {
+    //     setState(() {
+    //       // 当 TabController 的索引稳定改变后，触发重建以更新 SwitchableView 的 currentIndex
+    //     });
+    //   }
+    // });
+  }
+
+  @override
+  void dispose() {
+    _tabController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadMediaDetail() async {
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+
+    try {
+      dynamic service;
+      dynamic detail;
+
+      if (widget.serverType == MediaServerType.jellyfin) {
+        service = JellyfinService.instance;
+        detail = await service.getMediaItemDetails(widget.mediaId);
+      } else {
+        service = EmbyService.instance;
+        detail = await service.getMediaItemDetails(widget.mediaId);
+      }
+
+      if (mounted) {
+        setState(() {
+          _mediaDetail = detail;
+          _isMovie = detail.type == 'Movie'; // 判断是否为电影
+
+          if (_isMovie) {
+            _isLoading = false;
+            // 对于电影，我们不需要 TabController
+          } else {
+            // 对于剧集，初始化 TabController
+            _tabController = TabController(
+                length: 2,
+                vsync: this,
+                initialIndex: Provider.of<AppearanceSettingsProvider>(context,
+                                listen: false)
+                            .animeCardAction ==
+                        AnimeCardAction.synopsis
+                    ? 0
+                    : 1);
+            _tabController!.addListener(() {
+              if (mounted && !_tabController!.indexIsChanging) {
+                setState(() {
+                  // 当 TabController 的索引稳定改变后，触发重建以更新 SwitchableView 的 currentIndex
+                });
+              }
+            });
+          }
+        });
+      }
+
+      // 如果是剧集，才加载季节信息
+      if (!_isMovie) {
+        dynamic seasons;
+        if (widget.serverType == MediaServerType.jellyfin) {
+          seasons = await (service as JellyfinService)
+              .getSeriesSeasons(widget.mediaId);
+        } else {
+          seasons = await (service as EmbyService).getSeasons(widget.mediaId);
+        }
+
+        if (mounted) {
+          setState(() {
+            _seasons = seasons;
+            _isLoading = false;
+
+            // 如果有季，选择第一个季
+            if (seasons.isNotEmpty) {
+              _selectedSeasonId = seasons.first.id;
+              _loadEpisodesForSeason(seasons.first.id);
+            }
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadEpisodesForSeason(String seasonId) async {
+    // 如果已经加载过，不重复加载
+    if (_episodesBySeasonId.containsKey(seasonId)) {
+      setState(() {
+        _selectedSeasonId = seasonId;
+      });
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _error = null;
+      _selectedSeasonId = seasonId;
+    });
+
+    try {
+      // 确保_mediaDetail不为null且有有效id
+      if (_mediaDetail?.id == null) {
+        if (mounted) {
+          setState(() {
+            _error = '无法获取剧集详情，无法加载剧集列表。';
+            _isLoading = false;
+          });
+        }
+        return;
+      }
+
+      dynamic episodes;
+      if (widget.serverType == MediaServerType.jellyfin) {
+        final service = JellyfinService.instance;
+        episodes = await service.getSeasonEpisodes(_mediaDetail!.id, seasonId);
+      } else {
+        final service = EmbyService.instance;
+        episodes = await service.getSeasonEpisodes(_mediaDetail!.id, seasonId);
+      }
+
+      if (mounted) {
+        setState(() {
+          _episodesBySeasonId[seasonId] = episodes;
+          _isLoading = false;
+        });
+        if (widget.serverType == MediaServerType.emby) {
+          unawaited(_loadSavedEmbySourceLabels(List<dynamic>.from(episodes)));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  EmbySelectionContext? _embySelectionContextFor(dynamic episode) {
+    final service = EmbyService.instance;
+    final rawSeriesId = episode.seriesId?.toString().trim();
+    final fallbackSeriesId =
+        _mediaDetail?.id?.toString().trim() ?? widget.mediaId.trim();
+    return buildEmbySelectionContext(
+      profile: service.currentProfile,
+      userId: service.userId,
+      seriesId:
+          rawSeriesId?.isNotEmpty == true ? rawSeriesId! : fallbackSeriesId,
+      episodeId: episode.id.toString(),
+    );
+  }
+
+  Future<void> _loadSavedEmbySourceLabels(List<dynamic> episodes) async {
+    final store = await _embyPreferenceStore;
+    final labels = <String, String>{};
+    for (final episode in episodes) {
+      final selectionContext = _embySelectionContextFor(episode);
+      if (selectionContext == null) continue;
+      final layers = await store.load(selectionContext);
+      final series = layers.series;
+      final displayName = layers.episode?.displayName?.trim();
+      if (displayName?.isNotEmpty == true) {
+        labels[episode.id.toString()] = displayName!;
+        continue;
+      }
+      final fullName = series?.normalizedFullName?.trim();
+      if (fullName?.isNotEmpty == true) {
+        labels[episode.id.toString()] = fullName!;
+        continue;
+      }
+      final families = series?.families.isNotEmpty == true
+          ? series!.families
+          : layers.global?.families;
+      if (families != null && families.isNotEmpty) {
+        labels[episode.id.toString()] = families.first;
+      }
+    }
+    if (!mounted || labels.isEmpty) return;
+    setState(() => _embySavedSourceLabels.addAll(labels));
+  }
+
+  Future<void> _openEmbyMediaSelection(dynamic episode) async {
+    final store = await _embyPreferenceStore;
+    if (!mounted) return;
+
+    final selectionContext = _embySelectionContextFor(episode);
+    final controller = DefaultEmbyMediaSelectionController(
+      catalog: _embyMediaSourceCatalog,
+      store: store,
+      resolver: DefaultEmbyMediaSelectionResolver(),
+      context: selectionContext,
+      catalogScopeKey: selectionContext?.accountKey ?? _embyPageCacheScope,
+      itemId: episode.id.toString(),
+    );
+    final load = controller.load();
+    try {
+      final result = await showEmbyMediaSelection(
+        context: context,
+        useCupertino: !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS,
+        controller: controller,
+      );
+      if (!mounted) return;
+      updateEmbySavedSourceLabelAfterSelection(
+        result,
+        controller,
+        (label) => setState(() {
+          _embySavedSourceLabels[episode.id.toString()] = label;
+        }),
+      );
+    } finally {
+      try {
+        await load;
+      } catch (_) {
+        // The panel already exposes loading failures and retry controls.
+      }
+      controller.dispose();
+    }
+  }
+
+  Future<WatchHistoryItem?> _createWatchHistoryItem(dynamic episode) async {
+    if (context.read<SettingsProvider>().skipDanmakuMatching) {
+      return episode.toWatchHistoryItem();
+    }
+
+    // 根据服务器类型使用相应的匹配器创建可播放的历史记录项
+    try {
+      dynamic matcher;
+      if (widget.serverType == MediaServerType.jellyfin) {
+        matcher = JellyfinDandanplayMatcher.instance;
+      } else {
+        matcher = EmbyDandanplayMatcher.instance;
+      }
+
+      // 先进行预计算和预匹配，不阻塞主流程
+      matcher
+          .precomputeVideoInfoAndMatch(context, episode)
+          .then((preMatchResult) {
+        final String? videoHash = preMatchResult['videoHash'] as String?;
+        final String? fileName = preMatchResult['fileName'] as String?;
+        final int? fileSize = preMatchResult['fileSize'] as int?;
+
+        if (videoHash != null && videoHash.isNotEmpty) {
+          debugPrint('预计算哈希值成功: $videoHash');
+
+          // 需要在播放器创建或历史项创建时使用这个哈希值
+          _videoHashes[episode.id] = videoHash;
+          debugPrint('视频哈希值已缓存: ${episode.id} -> $videoHash');
+
+          // 同时保存文件名和文件大小信息
+          Map<String, dynamic> videoInfo = {
+            'hash': videoHash,
+            'fileName': fileName ?? '',
+            'fileSize': fileSize ?? 0
+          };
+          _videoInfos[episode.id] = videoInfo;
+          debugPrint('视频信息已缓存: ${episode.id} -> $videoInfo');
+        }
+
+        if (preMatchResult['success'] == true) {
+          debugPrint(
+              '预匹配成功: animeId=${preMatchResult['animeId']}, episodeId=${preMatchResult['episodeId']}');
+        } else {
+          debugPrint('预匹配未成功: ${preMatchResult['message']}');
+        }
+      }).catchError((e) {
+        debugPrint('预计算过程中出错: $e');
+      });
+
+      // 继续常规匹配流程
+      final playableItem =
+          await matcher.createPlayableHistoryItem(context, episode);
+
+      // 如果我们有这个视频的信息，添加到历史项中
+      if (playableItem != null) {
+        // 添加哈希值
+        if (_videoHashes.containsKey(episode.id)) {
+          final videoHash = _videoHashes[episode.id];
+          playableItem.videoHash = videoHash;
+          debugPrint('成功将哈希值 $videoHash 添加到历史记录项');
+        }
+
+        // 存储完整的视频信息，可用于后续弹幕匹配
+        if (_videoInfos.containsKey(episode.id)) {
+          final videoInfo = _videoInfos[episode.id]!;
+          debugPrint(
+              '已准备视频信息: ${videoInfo['fileName']}, 文件大小: ${videoInfo['fileSize']} 字节');
+        }
+      }
+
+      debugPrint(
+          '成功创建可播放历史项: ${playableItem?.animeName} - ${playableItem?.episodeTitle}, animeId=${playableItem?.animeId}, episodeId=${playableItem?.episodeId}');
+      return playableItem;
+    } catch (e) {
+      debugPrint('创建可播放历史记录项失败: $e');
+      // 出现错误时仍然返回基本的WatchHistoryItem，确保播放功能不会完全失败
+      return episode.toWatchHistoryItem();
+    }
+  }
+
+  Future<void> _playMovie() async {
+    if (_mediaDetail == null || !_isMovie) return;
+    if (_isDetailAutoMatching) {
+      BlurSnackBar.show(context, '正在自动匹配，请稍候');
+      return;
+    }
+
+    if (context.read<SettingsProvider>().skipDanmakuMatching) {
+      Navigator.of(context).pop(_mediaDetail!.toWatchHistoryItem());
+      return;
+    }
+
+    try {
+      final playableItem =
+          await _runDetailAutoMatchTask<WatchHistoryItem?>(() async {
+        if (widget.serverType == MediaServerType.jellyfin) {
+          final movieInfo = JellyfinMovieInfo(
+            id: _mediaDetail!.id,
+            name: _mediaDetail!.name,
+            overview: _mediaDetail!.overview,
+            originalTitle: _mediaDetail!.originalTitle,
+            imagePrimaryTag: _mediaDetail!.imagePrimaryTag,
+            imageBackdropTag: _mediaDetail!.imageBackdropTag,
+            productionYear: _mediaDetail!.productionYear,
+            dateAdded: _mediaDetail!.dateAdded,
+            premiereDate: _mediaDetail!.premiereDate,
+            communityRating: _mediaDetail!.communityRating,
+            genres: _mediaDetail!.genres,
+            officialRating: _mediaDetail!.officialRating,
+            cast: _mediaDetail!.cast,
+            directors: _mediaDetail!.directors,
+            runTimeTicks: _mediaDetail!.runTimeTicks,
+            studio: _mediaDetail!.seriesStudio,
+          );
+          return JellyfinDandanplayMatcher.instance
+              .createPlayableHistoryItemFromMovie(context, movieInfo);
+        }
+
+        final movieInfo = EmbyMovieInfo(
+          id: _mediaDetail!.id,
+          name: _mediaDetail!.name,
+          overview: _mediaDetail!.overview,
+          originalTitle: _mediaDetail!.originalTitle,
+          imagePrimaryTag: _mediaDetail!.imagePrimaryTag,
+          imageBackdropTag: _mediaDetail!.imageBackdropTag,
+          productionYear: _mediaDetail!.productionYear,
+          dateAdded: _mediaDetail!.dateAdded,
+          premiereDate: _mediaDetail!.premiereDate,
+          communityRating: _mediaDetail!.communityRating,
+          genres: _mediaDetail!.genres,
+          officialRating: _mediaDetail!.officialRating,
+          cast: _mediaDetail!.cast,
+          directors: _mediaDetail!.directors,
+          runTimeTicks: _mediaDetail!.runTimeTicks,
+          studio: _mediaDetail!.seriesStudio,
+        );
+        return EmbyDandanplayMatcher.instance
+            .createPlayableHistoryItemFromMovie(context, movieInfo);
+      });
+
+      if (playableItem == null) {
+        if (!_detailAutoMatchCancelled && mounted) {
+          BlurSnackBar.show(context, '未能找到匹配的弹幕信息，但仍可播放。');
+          final basicItem = _mediaDetail!.toWatchHistoryItem();
+          Navigator.of(context).pop(basicItem);
+        }
+        return;
+      }
+
+      if (mounted) {
+        Navigator.of(context).pop(playableItem);
+      }
+    } catch (e) {
+      if (mounted) {
+        BlurSnackBar.show(context, '播放失败: $e');
+      }
+      debugPrint('电影播放失败: $e');
+    }
+  }
+
+  String _formatRuntime(int? runTimeTicks) {
+    if (runTimeTicks == null) return '';
+
+    // Jellyfin和Emby中的RunTimeTicks单位是100纳秒
+    final durationInSeconds = runTimeTicks / 10000000;
+    final hours = (durationInSeconds / 3600).floor();
+    final minutes = ((durationInSeconds % 3600) / 60).floor();
+
+    if (hours > 0) {
+      return '$hours小时${minutes > 0 ? ' $minutes分钟' : ''}';
+    } else {
+      return '$minutes分钟';
+    }
+  }
+
+  String? _formatPremiereDate(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null) {
+      return value.split('T').first;
+    }
+    final month = parsed.month.toString().padLeft(2, '0');
+    final day = parsed.day.toString().padLeft(2, '0');
+    return '${parsed.year}-$month-$day';
+  }
+
+  Widget _buildRatingStars(double rating) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+
+    if (rating < 0 || rating > 10) {
+      return Text('N/A',
+          style: TextStyle(color: textColor.withOpacity(0.85), fontSize: 13));
+    }
+
+    final stars = <Widget>[];
+    final fullStars = rating.floor();
+    final halfStar = (rating - fullStars) >= 0.5;
+
+    for (int i = 0; i < 10; i++) {
+      if (i < fullStars) {
+        stars.add(Icon(Ionicons.star, color: Colors.yellow[600], size: 16));
+      } else if (i == fullStars && halfStar) {
+        stars
+            .add(Icon(Ionicons.star_half, color: Colors.yellow[600], size: 16));
+      } else {
+        stars.add(Icon(Ionicons.star_outline,
+            color: Colors.yellow[600]?.withOpacity(isDark ? 0.7 : 0.4),
+            size: 16));
+      }
+      if (i < 9) {
+        stars.add(SizedBox(width: 1));
+      }
+    }
+    return Row(mainAxisSize: MainAxisSize.min, children: stars);
+  }
+
+  Future<T?> _runDetailAutoMatchTask<T>(Future<T?> Function() task) async {
+    if (_isDetailAutoMatching) {
+      if (mounted) {
+        BlurSnackBar.show(context, '正在自动匹配，请稍候');
+      }
+      return null;
+    }
+
+    _updateDetailAutoMatchingState(true);
+    _detailAutoMatchCancelled = false;
+    _showDetailAutoMatchingDialog();
+
+    try {
+      final result = await task();
+      if (_detailAutoMatchCancelled) {
+        if (mounted) {
+          BlurSnackBar.show(context, '已取消自动匹配');
+        }
+        return null;
+      }
+      return result;
+    } finally {
+      _hideDetailAutoMatchingDialog();
+      _updateDetailAutoMatchingState(false);
+    }
+  }
+
+  void _updateDetailAutoMatchingState(bool value) {
+    if (!mounted) {
+      _isDetailAutoMatching = value;
+      return;
+    }
+    if (_isDetailAutoMatching == value) {
+      return;
+    }
+    setState(() {
+      _isDetailAutoMatching = value;
+    });
+  }
+
+  void _showDetailAutoMatchingDialog() {
+    if (_detailAutoMatchDialogVisible || !mounted) {
+      return;
+    }
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+
+    _detailAutoMatchDialogVisible = true;
+    BlurDialog.show(
+      context: context,
+      title: '正在自动匹配',
+      barrierDismissible: false,
+      contentWidget: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(height: 8),
+          AdaptiveMediaActivityIndicator(
+            color: textColor,
+          ),
+          SizedBox(height: 16),
+          Text(
+            '正在为当前条目匹配弹幕，请稍候…',
+            style: TextStyle(color: textColor, fontSize: 14),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+      actions: [
+        HoverScaleTextButton(
+          onPressed: () {
+            _detailAutoMatchCancelled = true;
+            Navigator.of(context, rootNavigator: true).pop();
+          },
+          child: const Text('中断匹配', style: TextStyle(color: Colors.redAccent)),
+        ),
+      ],
+    ).whenComplete(() {
+      _detailAutoMatchDialogVisible = false;
+    });
+  }
+
+  void _hideDetailAutoMatchingDialog() {
+    if (!_detailAutoMatchDialogVisible) {
+      return;
+    }
+    if (!mounted) {
+      _detailAutoMatchDialogVisible = false;
+      return;
+    }
+    Navigator.of(context, rootNavigator: true).pop();
+  }
+
+  bool get _isLargeScreenDarkMode {
+    return Theme.of(context).brightness == Brightness.dark;
+  }
+
+  Color get _largeScreenTextColor {
+    return _isLargeScreenDarkMode ? Colors.white : const Color(0xFF171A22);
+  }
+
+  Color get _largeScreenMutedTextColor {
+    return _largeScreenTextColor.withValues(alpha: 0.64);
+  }
+
+  Color get _largeScreenChipColor {
+    return _isLargeScreenDarkMode
+        ? Colors.white.withValues(alpha: 0.10)
+        : Colors.white.withValues(alpha: 0.72);
+  }
+
+  Color get _largeScreenChipBorderColor {
+    return _largeScreenTextColor.withValues(alpha: 0.10);
+  }
+
+  Widget _buildLargeScreenBackdrop({required Widget child}) {
+    final backdropUrl = _getBackdropUrl();
+    final posterUrl = _getPosterUrl(width: 900);
+    final imageUrl = backdropUrl.isNotEmpty ? backdropUrl : posterUrl;
+    final blurImage = backdropUrl.isEmpty && imageUrl.isNotEmpty;
+    final isDark = _isLargeScreenDarkMode;
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ColoredBox(
+            color: isDark ? Colors.black : const Color(0xFFF3F5F8),
+          ),
+        ),
+        if (imageUrl.isNotEmpty)
+          Positioned.fill(
+            child: ImageFiltered(
+              imageFilter: blurImage
+                  ? ImageFilter.blur(sigmaX: 34, sigmaY: 34)
+                  : ImageFilter.blur(sigmaX: 0, sigmaY: 0),
+              child: CachedNetworkImageWidget(
+                imageUrl: imageUrl,
+                fit: BoxFit.cover,
+                shouldCompress: false,
+                loadMode: CachedImageLoadMode.hybrid,
+              ),
+            ),
+          ),
+        Positioned.fill(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: isDark
+                    ? [
+                        Colors.black.withValues(alpha: 0.42),
+                        Colors.black.withValues(alpha: 0.82),
+                      ]
+                    : [
+                        Colors.white.withValues(alpha: 0.70),
+                        Colors.white.withValues(alpha: 0.90),
+                      ],
+              ),
+            ),
+          ),
+        ),
+        Positioned.fill(child: child),
+      ],
+    );
+  }
+
+  Widget _buildLargeScreenDetailPage() {
+    final title = _mediaDetail?.name?.toString() ?? '媒体详情';
+    final sourceLabel =
+        widget.serverType == MediaServerType.jellyfin ? 'Jellyfin' : 'Emby';
+
+    Widget child;
+    if (_isLoading && _mediaDetail == null) {
+      child = const Center(child: AdaptiveMediaActivityIndicator());
+    } else if (_error != null && _mediaDetail == null) {
+      child = NipaplayLargeScreenEmptyState(
+        icon: Icons.error_outline_rounded,
+        title: '加载详情失败',
+        subtitle: _error!,
+        action: NipaplayLargeScreenActionButton(
+          icon: Icons.refresh_rounded,
+          label: '重试',
+          onPressed: _loadMediaDetail,
+        ),
+      );
+    } else if (_mediaDetail == null) {
+      child = const NipaplayLargeScreenEmptyState(
+        icon: Icons.search_off_rounded,
+        title: '未找到媒体详情',
+        subtitle: '该媒体可能已被服务器移除，或当前账号没有访问权限',
+      );
+    } else {
+      child = Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 350,
+            child: _buildLargeScreenInfoColumn(),
+          ),
+          const SizedBox(width: 24),
+          Expanded(
+            child: _isMovie
+                ? _buildLargeScreenMoviePanel()
+                : _buildLargeScreenEpisodesPanel(),
+          ),
+        ],
+      );
+    }
+
+    return _buildLargeScreenBackdrop(
+      child: NipaplayLargeScreenPageScaffold(
+        title: title,
+        subtitle: _mediaDetail?.originalTitle != null &&
+                _mediaDetail!.originalTitle!.isNotEmpty &&
+                _mediaDetail!.originalTitle != _mediaDetail!.name
+            ? '$sourceLabel · ${_mediaDetail!.originalTitle}'
+            : sourceLabel,
+        actions: [
+          if (_mediaDetail != null && _isMovie)
+            NipaplayLargeScreenActionButton(
+              icon: Icons.play_arrow_rounded,
+              label: '播放',
+              autofocus: true,
+              onPressed: _isDetailAutoMatching ? null : _playMovie,
+            ),
+          NipaplayLargeScreenIconButton(
+            icon: Icons.close_rounded,
+            tooltip: '关闭',
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+        ],
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenInfoColumn() {
+    final posterUrl = _getPosterUrl(width: 700);
+    final ratingValue = double.tryParse(_mediaDetail!.communityRating ?? '');
+
+    return NipaplayLargeScreenPanel(
+      padding: const EdgeInsets.all(18),
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: AspectRatio(
+              aspectRatio: 2 / 3,
+              child: posterUrl.isEmpty
+                  ? Container(
+                      color: _largeScreenChipColor,
+                      child: Icon(
+                        Icons.movie_creation_outlined,
+                        size: 72,
+                        color: _largeScreenMutedTextColor,
+                      ),
+                    )
+                  : CachedNetworkImageWidget(
+                      imageUrl: posterUrl,
+                      fit: BoxFit.cover,
+                      loadMode: CachedImageLoadMode.hybrid,
+                    ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          if (ratingValue != null && ratingValue > 0) ...[
+            Row(
+              children: [
+                Icon(Ionicons.star, color: Colors.yellow[600], size: 22),
+                const SizedBox(width: 8),
+                Text(
+                  ratingValue.toStringAsFixed(1),
+                  style: TextStyle(
+                    color: _largeScreenTextColor,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+          ],
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (_formatPremiereDate(_mediaDetail!.premiereDate) != null)
+                _buildLargeScreenMetaChip(
+                  Icons.calendar_month_rounded,
+                  _formatPremiereDate(_mediaDetail!.premiereDate)!,
+                ),
+              if (_mediaDetail!.productionYear != null)
+                _buildLargeScreenMetaChip(
+                  Icons.history_rounded,
+                  _mediaDetail!.productionYear.toString(),
+                ),
+              if (_formatRuntime(_mediaDetail!.runTimeTicks).isNotEmpty)
+                _buildLargeScreenMetaChip(
+                  Icons.timer_rounded,
+                  _formatRuntime(_mediaDetail!.runTimeTicks),
+                ),
+              if (_mediaDetail!.officialRating != null &&
+                  _mediaDetail!.officialRating!.trim().isNotEmpty)
+                _buildLargeScreenMetaChip(
+                  Icons.verified_user_outlined,
+                  _mediaDetail!.officialRating!,
+                ),
+            ],
+          ),
+          if (_mediaDetail!.genres.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _mediaDetail!.genres
+                  .map<Widget>((genre) =>
+                      _buildLargeScreenMetaChip(Icons.sell_outlined, genre))
+                  .toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenMetaChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: _largeScreenChipColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _largeScreenChipBorderColor),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: _largeScreenMutedTextColor),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: _largeScreenTextColor,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenMoviePanel() {
+    final summaryText = (_mediaDetail!.overview != null &&
+                _mediaDetail!.overview!.trim().isNotEmpty
+            ? _mediaDetail!.overview!
+            : '暂无简介')
+        .replaceAll('<br>', ' ')
+        .replaceAll('<br/>', ' ')
+        .replaceAll('<br />', ' ')
+        .replaceAll('```', '');
+
+    return NipaplayLargeScreenPanel(
+      padding: const EdgeInsets.all(22),
+      child: ListView(
+        padding: EdgeInsets.zero,
+        children: [
+          const NipaplayLargeScreenSectionHeader(title: '简介'),
+          const SizedBox(height: 14),
+          Text(
+            summaryText,
+            style: TextStyle(
+              color: _largeScreenTextColor,
+              fontSize: 16,
+              height: 1.55,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 22),
+          NipaplayLargeScreenActionButton(
+            icon: Icons.play_arrow_rounded,
+            label: _isDetailAutoMatching ? '正在匹配' : '播放',
+            onPressed: _isDetailAutoMatching ? null : _playMovie,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenEpisodesPanel() {
+    final episodes = _episodesBySeasonId[_selectedSeasonId] ?? [];
+    dynamic service = widget.serverType == MediaServerType.jellyfin
+        ? JellyfinService.instance
+        : EmbyService.instance;
+
+    return NipaplayLargeScreenPanel(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          NipaplayLargeScreenSectionHeader(
+            title: '剧集',
+            subtitle:
+                _selectedSeasonId == null ? '选择一个季后开始播放' : '选择剧集即可自动匹配弹幕并播放',
+          ),
+          if (_seasons.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 48,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _seasons.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 10),
+                itemBuilder: (context, index) {
+                  final season = _seasons[index];
+                  final selected = season.id == _selectedSeasonId;
+                  return NipaplayLargeScreenFocusableAction(
+                    onActivate: () => _loadEpisodesForSeason(season.id),
+                    borderRadius: BorderRadius.circular(8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    style: NipaplayLargeScreenFocusableStyle(
+                      idleBackgroundDark: selected
+                          ? AppAccentColors.current.withValues(alpha: 0.72)
+                          : Colors.white.withValues(alpha: 0.08),
+                      idleBackgroundLight: selected
+                          ? AppAccentColors.current.withValues(alpha: 0.72)
+                          : _largeScreenChipColor,
+                      contentColorDark: Colors.white,
+                      contentColorLight:
+                          selected ? Colors.white : const Color(0xFF161922),
+                    ),
+                    child: Text(
+                      season.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+          const SizedBox(height: 18),
+          Expanded(
+            child: _buildLargeScreenEpisodeGrid(episodes, service),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenEpisodeGrid(List<dynamic> episodes, dynamic service) {
+    if (_selectedSeasonId == null && _seasons.isNotEmpty) {
+      return const NipaplayLargeScreenEmptyState(
+        icon: Icons.video_library_outlined,
+        title: '请选择一个季',
+        subtitle: '使用方向键移动到上方季节后按确认',
+      );
+    }
+    if (_isLoading &&
+        (_episodesBySeasonId[_selectedSeasonId ?? ''] == null ||
+            _episodesBySeasonId[_selectedSeasonId ?? '']!.isEmpty)) {
+      return const Center(child: AdaptiveMediaActivityIndicator());
+    }
+    if (_error != null && _selectedSeasonId != null) {
+      return NipaplayLargeScreenEmptyState(
+        icon: Icons.error_outline_rounded,
+        title: '加载剧集失败',
+        subtitle: _error!,
+        action: NipaplayLargeScreenActionButton(
+          icon: Icons.refresh_rounded,
+          label: '重试',
+          onPressed: () => _loadEpisodesForSeason(_selectedSeasonId!),
+        ),
+      );
+    }
+    if (episodes.isEmpty) {
+      return const NipaplayLargeScreenEmptyState(
+        icon: Icons.movie_filter_outlined,
+        title: '没有可播放剧集',
+        subtitle: '当前季没有返回剧集内容',
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns =
+            (constraints.maxWidth / 310).floor().clamp(2, 5).toInt();
+        return GridView.builder(
+          padding: const EdgeInsets.only(bottom: 18),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: columns,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.42,
+          ),
+          itemCount: episodes.length,
+          itemBuilder: (context, index) {
+            return _buildLargeScreenEpisodeCard(episodes[index], service);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildLargeScreenEpisodeCard(dynamic episode, dynamic service) {
+    final episodeImageUrl = episode.imagePrimaryTag != null
+        ? _getEpisodeImageUrl(episode, service)
+        : '';
+    final title = episode.indexNumber != null
+        ? '${episode.indexNumber}. ${episode.name}'
+        : episode.name;
+    final runtime = episode.runTimeTicks != null
+        ? _formatRuntime(episode.runTimeTicks)
+        : '';
+    final overview = (episode.overview ?? '')
+        .replaceAll('<br>', ' ')
+        .replaceAll('<br/>', ' ')
+        .replaceAll('<br />', ' ');
+
+    return NipaplayLargeScreenFocusableAction(
+      onActivate: _isDetailAutoMatching ? null : () => _playEpisode(episode),
+      borderRadius: BorderRadius.circular(8),
+      focusScale: 1.025,
+      style: NipaplayLargeScreenFocusableStyle(
+        idleBackgroundDark: Colors.white.withValues(alpha: 0.08),
+        idleBackgroundLight: Colors.white.withValues(alpha: 0.78),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  episodeImageUrl.isNotEmpty
+                      ? CachedNetworkImageWidget(
+                          imageUrl: episodeImageUrl,
+                          fit: BoxFit.cover,
+                        )
+                      : ColoredBox(
+                          color: _largeScreenChipColor,
+                          child: Icon(
+                            Icons.movie_outlined,
+                            size: 42,
+                            color: _largeScreenMutedTextColor,
+                          ),
+                        ),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: 0.58),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (episode.userData?.played == true)
+                    Positioned(
+                      top: 10,
+                      right: 10,
+                      child: Icon(
+                        Ionicons.checkmark_circle,
+                        color: AppAccentColors.current,
+                        size: 24,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  if (runtime.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      runtime,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: _largeScreenMutedTextColor,
+                      ),
+                    ),
+                  ],
+                  if (overview.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      overview,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.22,
+                        color: _largeScreenMutedTextColor,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (NipaplayLargeScreenModeScope.isActiveOf(context)) {
+      return _buildLargeScreenDetailPage();
+    }
+
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+    final Color secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
+
+    Widget pageContent;
+
+    if (_isLoading && _mediaDetail == null) {
+      pageContent = Center(
+        child: AdaptiveMediaActivityIndicator(
+          color: isDark ? Colors.white : Colors.black87,
+        ),
+      );
+    } else if (_error != null && _mediaDetail == null) {
+      pageContent = Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+              SizedBox(height: 16),
+              Text('加载详情失败:',
+                  locale: Locale("zh-Hans", "zh"),
+                  style: TextStyle(color: textColor.withOpacity(0.8))),
+              SizedBox(height: 8),
+              Text(
+                _error!,
+                locale: Locale("zh-Hans", "zh"),
+                style: TextStyle(color: secondaryTextColor),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 20),
+              BlurButton(
+                icon: Icons.refresh,
+                text: '重试',
+                onTap: _loadMediaDetail,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                fontSize: 16,
+              ),
+              SizedBox(height: 10),
+              AdaptiveMediaActionButton(
+                label: '关闭',
+                onPressed: () => Navigator.of(context).pop(),
+                compact: true,
+              ),
+            ],
+          ),
+        ),
+      );
+    } else if (_mediaDetail == null) {
+      // 理论上在成功加载后 _mediaDetail 不会为 null，除非发生意外
+      pageContent = Center(
+          child: Text('未找到媒体详情',
+              locale: Locale("zh-Hans", "zh"),
+              style: TextStyle(color: secondaryTextColor)));
+    } else {
+      // 成功加载，构建详情UI
+      final appearanceSettings =
+          Provider.of<AppearanceSettingsProvider>(context, listen: false);
+      final enableAnimation = appearanceSettings.enablePageAnimation;
+      final subtitle = _mediaDetail!.originalTitle;
+      final bool isDesktopOrTablet =
+          AppDisplaySurfaceScope.of(context) != AppDisplaySurface.phone;
+
+      pageContent = NipaplayAnimeDetailLayout(
+        title: _mediaDetail!.name,
+        subtitle: subtitle,
+        sourceLabel:
+            widget.serverType == MediaServerType.jellyfin ? 'Jellyfin' : 'Emby',
+        sourceLabelUseContainer: false,
+        onClose: () => Navigator.of(context).pop(),
+        tabController: _tabController,
+        showTabs: !isDesktopOrTablet,
+        enableAnimation: enableAnimation,
+        isDesktopOrTablet: isDesktopOrTablet,
+        infoView: RepaintBoundary(child: _buildInfoView()),
+        episodesView:
+            _isMovie ? null : RepaintBoundary(child: _buildEpisodesView()),
+        desktopView: (isDesktopOrTablet && !_isMovie)
+            ? _buildDesktopTabletLayout()
+            : null,
+      );
+    }
+
+    final backdropUrl = _getBackdropUrl();
+    final posterUrl = _getPosterUrl(width: 600);
+    final hasBackdrop = backdropUrl.isNotEmpty;
+
+    return NipaplayWindowScaffold(
+      embedded: widget.embedded,
+      backgroundImageUrl:
+          hasBackdrop ? backdropUrl : (posterUrl.isNotEmpty ? posterUrl : null),
+      blurBackground: !hasBackdrop, // 如果没有横向图而使用竖向图，开启高斯模糊
+      onClose: () => Navigator.of(context).pop(),
+      child: pageContent,
+    );
+  }
+
+  Widget _buildInfoView() {
+    if (_mediaDetail == null) return const SizedBox.shrink();
+
+    final summaryText = (_mediaDetail!.overview != null &&
+                _mediaDetail!.overview!.trim().isNotEmpty
+            ? _mediaDetail!.overview!
+            : '暂无简介')
+        .replaceAll('<br>', ' ')
+        .replaceAll('<br/>', ' ')
+        .replaceAll('<br />', ' ')
+        .replaceAll('```', '');
+    final posterUrl = _getPosterUrl();
+    final ratingValue = double.tryParse(_mediaDetail!.communityRating ?? '');
+
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+    final Color secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
+
+    final valueStyle = TextStyle(
+      color: textColor.withOpacity(0.85),
+      fontSize: 13,
+      height: 1.5,
+    );
+    final boldWhiteKeyStyle = TextStyle(
+      color: textColor,
+      fontWeight: FontWeight.w600,
+      fontSize: 13,
+      height: 1.5,
+    );
+    final sectionTitleStyle = Theme.of(context)
+        .textTheme
+        .titleMedium
+        ?.copyWith(color: textColor, fontWeight: FontWeight.bold);
+
+    final infoRows = <Widget>[];
+    void addInfoRow(String label, String? value) {
+      if (value == null || value.trim().isEmpty) return;
+      infoRows.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4.0),
+          child: RichText(
+            text: TextSpan(
+              style: valueStyle,
+              children: [
+                TextSpan(text: '$label: ', style: boldWhiteKeyStyle),
+                TextSpan(text: value.trim(), style: valueStyle),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    addInfoRow('首播', _formatPremiereDate(_mediaDetail!.premiereDate));
+    addInfoRow('年份', _mediaDetail!.productionYear?.toString());
+    addInfoRow('时长', _formatRuntime(_mediaDetail!.runTimeTicks));
+    addInfoRow('分级', _mediaDetail!.officialRating);
+    addInfoRow('制作', _mediaDetail!.seriesStudio);
+    if (_mediaDetail!.genres.isNotEmpty) {
+      addInfoRow('类型', _mediaDetail!.genres.join(' / '));
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_mediaDetail!.originalTitle != null &&
+              _mediaDetail!.originalTitle!.isNotEmpty &&
+              _mediaDetail!.originalTitle != _mediaDetail!.name)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8.0),
+              child: Text(
+                _mediaDetail!.originalTitle!,
+                style: valueStyle.copyWith(
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (posterUrl.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(right: 16.0, bottom: 8.0),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: CachedNetworkImageWidget(
+                      imageUrl: posterUrl,
+                      width: 130,
+                      height: 195,
+                      fit: BoxFit.cover,
+                      loadMode: CachedImageLoadMode.legacy,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: SizedBox(
+                  height: 195,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: Text(summaryText, style: valueStyle),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 16),
+          Divider(color: textColor.withOpacity(0.15)),
+          SizedBox(height: 8),
+          if (ratingValue != null && ratingValue > 0) ...[
+            RichText(
+              text: TextSpan(
+                children: [
+                  TextSpan(text: '评分: ', style: boldWhiteKeyStyle),
+                  WidgetSpan(child: _buildRatingStars(ratingValue)),
+                  TextSpan(
+                    text: ' ${ratingValue.toStringAsFixed(1)} ',
+                    style: TextStyle(
+                      color: Colors.yellow[600],
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 6),
+          ],
+          ...infoRows,
+          if (_mediaDetail!.genres.isNotEmpty) ...[
+            SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _mediaDetail!.genres.map<Widget>((genre) {
+                return Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: textColor.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: textColor.withOpacity(0.12), width: 0.5),
+                  ),
+                  child: Text(
+                    genre,
+                    style: TextStyle(color: secondaryTextColor, fontSize: 12),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+          if (_mediaDetail!.cast.isNotEmpty) ...[
+            SizedBox(height: 12),
+            if (sectionTitleStyle != null) Text('演员', style: sectionTitleStyle),
+            SizedBox(height: 8),
+            SizedBox(
+              height: 100,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _mediaDetail!.cast.length,
+                itemBuilder: (context, index) {
+                  final actor = _mediaDetail!.cast[index];
+                  final actorImage = _getActorImageUrl(actor);
+
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Column(
+                      children: [
+                        MediaServerActorAvatar(
+                          imageUrl: actorImage,
+                          size: 60,
+                          backgroundColor: Colors.grey.shade800,
+                          placeholder: Icon(
+                            Icons.person,
+                            color: secondaryTextColor,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        SizedBox(
+                          width: 70,
+                          child: Text(
+                            actor.name,
+                            style: TextStyle(
+                                fontSize: 12, color: secondaryTextColor),
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+          if (_isMovie) ...[
+            SizedBox(height: 16),
+            Row(
+              children: [
+                BlurButton(
+                  icon: Icons.play_arrow,
+                  text: '播放',
+                  foregroundColor: const Color(0xFF3B82F6),
+                  hoverForegroundColor: const Color(0xFF60A5FA),
+                  onTap: () {
+                    if (_isDetailAutoMatching) {
+                      BlurSnackBar.show(context, '正在自动匹配，请稍候');
+                      return;
+                    }
+                    _playMovie();
+                  },
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  fontSize: 18,
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesktopTabletLayout() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: RepaintBoundary(child: _buildInfoView()),
+          ),
+          Container(
+            width: 1,
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            color: Colors.white.withOpacity(0.12),
+          ),
+          Expanded(
+            child: RepaintBoundary(child: _buildEpisodesView()),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEpisodesView() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+    final Color secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
+    final Color accentColor = AppAccentColors.current;
+
+    // 移除原有的 Positioned 返回按钮，因为顶部已经有了全局关闭按钮
+    return Column(
+      // 不再需要 Stack，因为返回按钮已全局处理
+      children: [
+        // SizedBox(height: 16), // 顶部间距可以根据整体布局调整，TabBar外部已有间距
+
+        // 季节选择器
+        if (_seasons.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: SizedBox(
+              height: 40,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _seasons.length,
+                itemBuilder: (context, index) {
+                  final season = _seasons[index];
+                  final isSelected = season.id == _selectedSeasonId;
+                  final Color seasonTextColor =
+                      isSelected ? accentColor : secondaryTextColor;
+
+                  return ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 180),
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: Tooltip(
+                        message: season.name,
+                        waitDuration: const Duration(milliseconds: 500),
+                        child: HoverScaleTextButton(
+                          onPressed: () => _loadEpisodesForSeason(season.id),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 4),
+                          hoverScale: 1.04,
+                          idleColor: seasonTextColor,
+                          hoverColor: accentColor,
+                          child: Text(
+                            season.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: seasonTextColor,
+                              fontWeight: isSelected
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+
+        if (_seasons.isNotEmpty) // 仅当有季节选择器时显示分割线
+          Divider(
+              height: 1,
+              thickness: 1,
+              color: textColor.withOpacity(0.1),
+              indent: 16,
+              endIndent: 16),
+
+        // 剧集列表
+        Expanded(
+          child: _buildEpisodesListForSelectedSeason(),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _playEpisode(dynamic episode) async {
+    if (_isDetailAutoMatching) {
+      BlurSnackBar.show(context, '正在自动匹配，请稍候');
+      return;
+    }
+    try {
+      BlurSnackBar.show(context, '准备播放: ${episode.name}');
+
+      debugPrint('准备创建播放会话');
+
+      final skipDanmakuMatching =
+          context.read<SettingsProvider>().skipDanmakuMatching;
+      if (mounted && !skipDanmakuMatching) {
+        BlurSnackBar.show(context, '正在匹配弹幕信息...');
+      }
+
+      final historyItem = skipDanmakuMatching
+          ? episode.toWatchHistoryItem()
+          : await _runDetailAutoMatchTask<WatchHistoryItem?>(
+              () => _createWatchHistoryItem(episode),
+            );
+      if (historyItem == null) return;
+
+      debugPrint(
+          '成功获取历史记录项: ${historyItem.animeName} - ${historyItem.episodeTitle}, animeId=${historyItem.animeId}, episodeId=${historyItem.episodeId}');
+
+      if (historyItem.animeId == null || historyItem.episodeId == null) {
+        debugPrint('警告: 从 JellyfinDandanplayMatcher 获得的 historyItem 缺少弹幕 ID');
+        debugPrint('  animeId: ${historyItem.animeId}');
+        debugPrint('  episodeId: ${historyItem.episodeId}');
+      } else {
+        debugPrint('确认: historyItem 包含有效的弹幕 ID');
+        debugPrint('  animeId: ${historyItem.animeId}');
+        debugPrint('  episodeId: ${historyItem.episodeId}');
+      }
+
+      final playableHistoryItem = WatchHistoryItem(
+        filePath: historyItem.filePath,
+        animeName: historyItem.animeName,
+        episodeTitle: historyItem.episodeTitle,
+        episodeId: historyItem.episodeId,
+        animeId: historyItem.animeId,
+        watchProgress: historyItem.watchProgress,
+        lastPosition: historyItem.lastPosition,
+        duration: historyItem.duration,
+        lastWatchTime: historyItem.lastWatchTime,
+        thumbnailPath: historyItem.thumbnailPath,
+        isFromScan: false,
+        videoHash: historyItem.videoHash,
+      );
+
+      final startPositionMs = playableHistoryItem.lastPosition > 0
+          ? playableHistoryItem.lastPosition
+          : null;
+
+      if (playableHistoryItem.filePath.startsWith('emby://')) {
+        final embyId = embyItemIdFromVideoPath(playableHistoryItem.filePath);
+        final selectionContext = _embySelectionContextFor(episode);
+        final sources = await _embyMediaSourceCatalog.load(
+          selectionContext?.accountKey ?? _embyPageCacheScope,
+          embyId,
+        );
+        final preferenceStore = await _embyPreferenceStore;
+        if (!mounted) return;
+
+        await startEmbyEpisodePlayback(
+          itemId: embyId,
+          context: selectionContext,
+          sources: sources,
+          loadPreferences: preferenceStore.load,
+          resolver: DefaultEmbyMediaSelectionResolver(),
+          startPositionMs: startPositionMs,
+          createSession: (request) =>
+              EmbyService.instance.createPlaybackSession(
+            itemId: request.itemId,
+            startPositionMs: request.startPositionMs,
+            audioStreamIndex: request.audioStreamIndex,
+            subtitleStreamIndex: request.subtitleStreamIndex,
+            burnInSubtitle: request.burnInSubtitle,
+            playSessionId: request.playSessionId,
+            mediaSourceId: request.mediaSourceId,
+          ),
+          startPlayback: (playback) async {
+            await _startEpisodePlayback(
+              playableHistoryItem,
+              playback.session,
+              embyTrackSelection: playback.tracks,
+              onPlaybackStarted: playback.didFallback
+                  ? () => BlurSnackBar.show(
+                        context,
+                        '首选 Emby 版本不可用，已自动切换到可播放版本',
+                      )
+                  : null,
+            );
+          },
+        );
+        return;
+      }
+
+      PlaybackSession? playbackSession;
+      if (playableHistoryItem.filePath.startsWith('jellyfin://')) {
+        final jellyfinId =
+            playableHistoryItem.filePath.replaceFirst('jellyfin://', '');
+        playbackSession = await JellyfinService.instance.createPlaybackSession(
+          itemId: jellyfinId,
+          startPositionMs: startPositionMs,
+        );
+      }
+      await _startEpisodePlayback(playableHistoryItem, playbackSession);
+    } catch (e) {
+      if (mounted) BlurSnackBar.show(context, '播放出错: $e');
+      debugPrint('播放Jellyfin媒体出错: $e');
+    }
+  }
+
+  Future<void> _startEpisodePlayback(
+    WatchHistoryItem historyItem,
+    PlaybackSession? playbackSession, {
+    EmbyResolvedTrackBundle? embyTrackSelection,
+    VoidCallback? onPlaybackStarted,
+  }) async {
+    if (!mounted) return;
+    final settingsProvider =
+        Provider.of<SettingsProvider>(context, listen: false);
+    if (settingsProvider.useExternalPlayer) {
+      final playableItem = PlayableItem(
+        videoPath: historyItem.filePath,
+        title: historyItem.animeName,
+        subtitle: historyItem.episodeTitle,
+        animeId: historyItem.animeId,
+        episodeId: historyItem.episodeId,
+        historyItem: historyItem,
+        playbackSession: playbackSession,
+      );
+      final handled =
+          await PlaybackService().tryPlayExternally(context, playableItem);
+      if (!mounted) return;
+      if (handled) {
+        onPlaybackStarted?.call();
+        Navigator.of(context).pop();
+        return;
+      }
+    }
+
+    if (!mounted) return;
+    final detailNavigator = Navigator.of(context);
+    final videoPlayerState =
+        Provider.of<VideoPlayerState>(context, listen: false);
+    TabChangeNotifier? tabChangeNotifier;
+    try {
+      tabChangeNotifier =
+          Provider.of<TabChangeNotifier>(context, listen: false);
+    } catch (e) {
+      debugPrint('无法获取TabChangeNotifier: $e');
+    }
+    tabChangeNotifier?.changePage(AppPageIds.video);
+
+    final isEmbyPlayback = historyItem.filePath.startsWith('emby://');
+    if (!isEmbyPlayback) {
+      Navigator.of(context).pop();
+      Future<void>.delayed(const Duration(milliseconds: 100), () async {
+        try {
+          await videoPlayerState.initializePlayer(
+            historyItem.filePath,
+            historyItem: historyItem,
+            playbackSession: playbackSession,
+          );
+          videoPlayerState.play();
+        } catch (playError) {
+          debugPrint('异步播放流媒体时出错: $playError');
+        }
+      });
+      return;
+    }
+
+    await startEmbyPlaybackAndCloseDetail(
+      detailNavigator: detailNavigator,
+      startPlayback: () async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await initializeEmbyPlayerAttempt(
+          initialize: () => videoPlayerState.initializePlayer(
+            historyItem.filePath,
+            historyItem: historyItem,
+            playbackSession: playbackSession,
+            embyTrackSelection: embyTrackSelection,
+          ),
+          readError: () => videoPlayerState.error,
+          hasVideo: () => videoPlayerState.hasVideo,
+          play: () async => videoPlayerState.play(),
+        );
+        if (mounted) {
+          onPlaybackStarted?.call();
+        }
+      },
+    );
+  }
+
+  Widget _buildEpisodesListForSelectedSeason() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+    final Color secondaryTextColor = isDark ? Colors.white70 : Colors.black54;
+    final Color accentColor = AppAccentColors.current;
+
+    if (_selectedSeasonId == null && _seasons.isNotEmpty) {
+      // 如果有季但没有选择，提示选择
+      return Center(
+        child: Text('请选择一个季',
+            locale: Locale("zh-Hans", "zh"),
+            style: TextStyle(color: secondaryTextColor)),
+      );
+    }
+    if (_selectedSeasonId == null && _seasons.isEmpty && !_isLoading) {
+      // 如果没有季且不在加载中
+      return Center(
+        child: Text('该剧集没有季节信息',
+            locale: Locale("zh-Hans", "zh"),
+            style: TextStyle(color: secondaryTextColor)),
+      );
+    }
+
+    if (_isLoading &&
+        (_episodesBySeasonId[_selectedSeasonId ?? ''] == null ||
+            _episodesBySeasonId[_selectedSeasonId ?? '']!.isEmpty)) {
+      return Center(
+        child: AdaptiveMediaActivityIndicator(color: textColor),
+      );
+    }
+
+    if (_error != null && _selectedSeasonId != null) {
+      // 仅在尝试加载特定季出错时显示
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
+              SizedBox(height: 16),
+              Text('加载剧集失败: $_error',
+                  style: TextStyle(color: secondaryTextColor),
+                  textAlign: TextAlign.center),
+              SizedBox(height: 16),
+              BlurButton(
+                icon: Icons.refresh,
+                text: '重试',
+                onTap: () => _loadEpisodesForSeason(_selectedSeasonId!),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                fontSize: 16,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final episodes = _episodesBySeasonId[_selectedSeasonId] ?? [];
+
+    if (episodes.isEmpty && !_isLoading && _selectedSeasonId != null) {
+      // 确保不是在加载中，并且确实选择了季
+      return Center(
+        child: Text('该季没有剧集',
+            locale: Locale("zh-Hans", "zh"),
+            style: TextStyle(color: secondaryTextColor)),
+      );
+    }
+    if (episodes.isEmpty && _isLoading) {
+      // 如果仍在加载，显示加载指示器
+      return Center(child: AdaptiveMediaActivityIndicator(color: textColor));
+    }
+    if (episodes.isEmpty && _selectedSeasonId == null && _seasons.isEmpty) {
+      // 处理没有季的情况
+      return Center(
+          child: Text('没有可显示的剧集',
+              locale: Locale("zh-Hans", "zh"),
+              style: TextStyle(color: secondaryTextColor)));
+    }
+
+    dynamic service;
+    if (widget.serverType == MediaServerType.jellyfin) {
+      service = JellyfinService.instance;
+    } else {
+      service = EmbyService.instance;
+    }
+
+    return SettingsNoRippleTheme(
+      child: ListView.builder(
+        padding: const EdgeInsets.only(top: 8, bottom: 24),
+        itemCount: episodes.length,
+        itemBuilder: (context, index) {
+          final episode = episodes[index];
+          final episodeImageUrl = episode.imagePrimaryTag != null
+              ? _getEpisodeImageUrl(episode, service)
+              : '';
+          final bool playHoverEnabled =
+              !_isDetailAutoMatching && !globals.isTouch;
+          final bool isEpisodeHovered =
+              playHoverEnabled && _hoveredEpisodeId == episode.id;
+          final Color playIconColor =
+              isEpisodeHovered ? accentColor : secondaryTextColor;
+          final Color titleColor = isEpisodeHovered ? accentColor : textColor;
+          final showMediaSelectionEntry = shouldShowEmbyMediaSelectionEntry(
+            isEmby: widget.serverType == MediaServerType.emby,
+            isWindows:
+                !kIsWeb && defaultTargetPlatform == TargetPlatform.windows,
+            isIOS: !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS,
+            isLargeScreen: NipaplayLargeScreenModeScope.isActiveOf(context),
+          );
+
+          return MouseRegion(
+            cursor: playHoverEnabled
+                ? SystemMouseCursors.click
+                : SystemMouseCursors.basic,
+            onEnter: playHoverEnabled
+                ? (_) => setState(() => _hoveredEpisodeId = episode.id)
+                : null,
+            onExit: playHoverEnabled
+                ? (_) {
+                    if (_hoveredEpisodeId == episode.id) {
+                      setState(() => _hoveredEpisodeId = null);
+                    }
+                  }
+                : null,
+            child: AdaptiveMediaListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              leading: SizedBox(
+                width: 100, // 调整图片宽度
+                height: 60, // 调整图片高度，保持宽高比
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: episodeImageUrl.isNotEmpty
+                      ? CachedNetworkImageWidget(
+                          key: ValueKey(
+                              episode.id), // 为 CachedNetworkImageWidget 添加 Key
+                          imageUrl: episodeImageUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error) {
+                            return Container(
+                              color:
+                                  isDark ? Colors.grey[800] : Colors.grey[300],
+                              child: Center(
+                                child: Icon(
+                                  Ionicons.image_outline, // 使用 Ionicons
+                                  size: 24,
+                                  color: secondaryTextColor.withOpacity(0.5),
+                                ),
+                              ),
+                            );
+                          },
+                        )
+                      : Container(
+                          color: isDark ? Colors.grey[800] : Colors.grey[300],
+                          child: Center(
+                            child: Icon(
+                              Ionicons.film_outline, // 使用 Ionicons
+                              size: 24,
+                              color: secondaryTextColor.withOpacity(0.5),
+                            ),
+                          ),
+                        ),
+                ),
+              ),
+              title: Text(
+                episode.indexNumber != null
+                    ? '${episode.indexNumber}. ${episode.name}'
+                    : episode.name,
+                style: TextStyle(
+                  fontWeight: FontWeight.w500,
+                  color: titleColor,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (episode.runTimeTicks != null)
+                    Text(
+                      _formatRuntime(episode.runTimeTicks),
+                      locale: const Locale("zh-Hans", "zh"),
+                      style: TextStyle(fontSize: 12, color: secondaryTextColor),
+                    ),
+                  if (episode.overview != null && episode.overview!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2.0),
+                      child: Text(
+                        episode.overview!
+                            .replaceAll('<br>', ' ')
+                            .replaceAll('<br/>', ' ')
+                            .replaceAll('<br />', ' '),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        locale: const Locale("zh-Hans", "zh"),
+                        style:
+                            TextStyle(fontSize: 12, color: secondaryTextColor),
+                      ),
+                    ),
+                ],
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (showMediaSelectionEntry)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: EmbyMediaSelectionEntry(
+                        savedSourceLabel:
+                            _embySavedSourceLabels[episode.id.toString()],
+                        onOpen: () =>
+                            unawaited(_openEmbyMediaSelection(episode)),
+                      ),
+                    ),
+                  if (episode.userData?.played == true)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8.0),
+                      child: Icon(
+                        Ionicons.checkmark_circle,
+                        color: accentColor.withOpacity(0.7),
+                        size: 18,
+                      ),
+                    ),
+                  AnimatedScale(
+                    scale: isEpisodeHovered ? 1.1 : 1.0,
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    child: Icon(
+                      Ionicons.play_circle_outline,
+                      color: playIconColor,
+                      size: 22,
+                    ),
+                  ),
+                ],
+              ),
+              onTap: _isDetailAutoMatching ? null : () => _playEpisode(episode),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}

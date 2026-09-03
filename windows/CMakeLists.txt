@@ -1,0 +1,151 @@
+# Project-level configuration.
+cmake_minimum_required(VERSION 3.14)
+project(nipaplay LANGUAGES CXX)
+
+# The name of the executable created for the application. Change this to change
+# the on-disk name of your application.
+set(BINARY_NAME "NipaPlay")
+
+# Explicitly opt in to modern CMake behaviors to avoid warnings with recent
+# versions of CMake.
+cmake_policy(VERSION 3.14...3.25)
+
+# Define build configuration option.
+get_property(IS_MULTICONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(IS_MULTICONFIG)
+  set(CMAKE_CONFIGURATION_TYPES "Debug;Profile;Release"
+    CACHE STRING "" FORCE)
+else()
+  if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE "Debug" CACHE
+      STRING "Flutter build mode" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+      "Debug" "Profile" "Release")
+  endif()
+endif()
+# Define settings for the Profile build mode.
+set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS_RELEASE}")
+set(CMAKE_SHARED_LINKER_FLAGS_PROFILE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE}")
+set(CMAKE_C_FLAGS_PROFILE "${CMAKE_C_FLAGS_RELEASE}")
+set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
+
+# Use Unicode and keep the Windows SDK from shadowing std::min/std::max in
+# plugin sources, including Erika's system media controls bridge.
+add_definitions(-DUNICODE -D_UNICODE -DNOMINMAX)
+
+# Suppress deprecated experimental/coroutine warning in newer MSVC
+add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
+# Compilation settings that should be applied to most targets.
+#
+# Be cautious about adding new options here, as plugins use this function by
+# default. In most cases, you should add new options to specific targets instead
+# of modifying this function.
+function(APPLY_STANDARD_SETTINGS TARGET)
+  target_compile_features(${TARGET} PUBLIC cxx_std_17)
+  target_compile_options(${TARGET} PRIVATE /W4 /WX /wd"4100")
+  target_compile_options(${TARGET} PRIVATE /EHsc)
+  target_compile_definitions(${TARGET} PRIVATE "_HAS_EXCEPTIONS=0")
+  target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
+endfunction()
+
+# Extract version from pubspec.yaml for Windows build
+if(NOT FLUTTER_VERSION)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../pubspec.yaml" PUBSPEC_CONTENT)
+  string(REGEX MATCH "version: ([0-9]+\\.[0-9]+\\.[0-9]+)" VERSION_MATCH "${PUBSPEC_CONTENT}")
+  if(VERSION_MATCH)
+    set(FLUTTER_VERSION "${CMAKE_MATCH_1}")
+    string(REPLACE "." ";" VERSION_LIST "${FLUTTER_VERSION}")
+    list(GET VERSION_LIST 0 FLUTTER_VERSION_MAJOR)
+    list(GET VERSION_LIST 1 FLUTTER_VERSION_MINOR)
+    list(GET VERSION_LIST 2 FLUTTER_VERSION_PATCH)
+    set(FLUTTER_VERSION_BUILD "0")
+    message(STATUS "Extracted version from pubspec.yaml: ${FLUTTER_VERSION}")
+  else()
+    set(FLUTTER_VERSION "1.0.0")
+    set(FLUTTER_VERSION_MAJOR "1")
+    set(FLUTTER_VERSION_MINOR "0")
+    set(FLUTTER_VERSION_PATCH "0")
+    set(FLUTTER_VERSION_BUILD "0")
+    message(WARNING "Could not extract version from pubspec.yaml, using default: ${FLUTTER_VERSION}")
+  endif()
+endif()
+
+# Flutter library and tool build rules.
+set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
+add_subdirectory(${FLUTTER_MANAGED_DIR})
+
+# Application build; see runner/CMakeLists.txt.
+add_subdirectory("runner")
+
+
+# Generated plugin build rules, which manage building the plugins and adding
+# them to the application.
+include(flutter/generated_plugins.cmake)
+
+if(TARGET media_kit_libs_windows_video_LIBMPV_EXTRACT)
+  add_dependencies(${BINARY_NAME} media_kit_libs_windows_video_LIBMPV_EXTRACT)
+endif()
+
+# === Installation ===
+# Support files are copied into place next to the executable, so that it can
+# run in place. This is done instead of making a separate bundle (as on Linux)
+# so that building and running from within Visual Studio will work.
+set(BUILD_BUNDLE_DIR "$<TARGET_FILE_DIR:${BINARY_NAME}>")
+# Make the "install" step default, as it's required to run.
+set(CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD 1)
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
+endif()
+
+set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
+set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
+
+install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
+  COMPONENT Runtime)
+
+install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
+if(PLUGIN_BUNDLED_LIBRARIES)
+  install(FILES "${PLUGIN_BUNDLED_LIBRARIES}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
+# Copy the native assets provided by the build.dart from all packages.
+set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/windows/")
+install(DIRECTORY "${NATIVE_ASSETS_DIR}"
+   DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+   COMPONENT Runtime)
+
+# Fully re-copy the assets directory on each build to avoid having stale files
+# from a previous install.
+set(FLUTTER_ASSET_DIR_NAME "flutter_assets")
+install(CODE "
+  file(REMOVE_RECURSE \"${INSTALL_BUNDLE_DATA_DIR}/${FLUTTER_ASSET_DIR_NAME}\")
+  " COMPONENT Runtime)
+install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}" COMPONENT Runtime)
+
+# Install the AOT library on non-Debug builds only.
+install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
+  CONFIGURATIONS Profile;Release
+  COMPONENT Runtime)
+
+# ──── cpp_native: C++ → Dart FFI ────
+set(NP_LIB_TYPE SHARED)  # Windows 使用 DLL
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../cpp_native" cpp_native_build)
+
+# 链接 nipaplay_native 到主可执行文件
+add_dependencies(${BINARY_NAME} nipaplay_native)
+target_link_libraries(${BINARY_NAME} PRIVATE nipaplay_native)
+
+# 将 DLL 安装到与 exe 同目录（使用 install 而非 POST_BUILD，
+# 因为 add_custom_command(TARGET) 不能跨目录使用）
+install(FILES "$<TARGET_FILE:nipaplay_native>"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)

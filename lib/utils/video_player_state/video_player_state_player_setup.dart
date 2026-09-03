@@ -1,0 +1,1576 @@
+part of video_player_state;
+
+@visibleForTesting
+String preferredPlaybackErrorDetail({
+  String? specificError,
+  String? mediaLoadError,
+  required Object fallback,
+}) {
+  for (final candidate in <String?>[specificError, mediaLoadError]) {
+    final detail = candidate?.trim();
+    if (detail != null && detail.isNotEmpty) {
+      return detail;
+    }
+  }
+  return fallback.toString();
+}
+
+extension VideoPlayerStatePlayerSetup on VideoPlayerState {
+  Future<void> initializePlayer(
+    String videoPath, {
+    WatchHistoryItem? historyItem,
+    String? historyFilePath,
+    String? actualPlayUrl,
+    PlaybackSession? playbackSession,
+    EmbyResolvedTrackBundle? embyTrackSelection,
+    PlaybackDetailContext? playbackDetailContext,
+    String? mediaKey,
+    bool resetManualDanmakuOffset = true,
+    bool preserveEmbyAccountKey = false,
+  }) async {
+    _playbackErrorDialogRequested = false;
+    final isRequestedEmbyStream = videoPath.startsWith('emby://');
+    final requestedEmbyAccountKey = isRequestedEmbyStream
+        ? (preserveEmbyAccountKey
+            ? _currentEmbyAccountKey
+            : embyAccountKey(
+                EmbyService.instance.currentProfile,
+                EmbyService.instance.userId,
+              ))
+        : null;
+    var mediaPrepareStarted = false;
+    var mediaPrepareCompleted = false;
+    // 每次切换新视频时，重置自动连播倒计时状态，防止高强度测试下卡死
+    try {
+      AutoNextEpisodeService.instance.cancelAutoNext();
+    } catch (e) {
+      debugPrint('[自动连播] 重置AutoNextEpisodeService状态失败: $e');
+    }
+    final bool shouldResetManualDanmakuOffset =
+        resetManualDanmakuOffset && !_rememberDanmakuOffset;
+    if (shouldResetManualDanmakuOffset) {
+      setManualDanmakuOffset(0.0);
+    }
+    // if (_status == PlayerStatus.loading ||
+    //     _status == PlayerStatus.recognizing) {
+    //   _setStatus(PlayerStatus.idle,
+    //       message: "取消了之前的加载任务", clearPreviousMessages: true);
+    // }
+    // notice: 后面会进入loading状态，此函数用意也是初始化，在函数开头将状态修改到idle不妥
+
+    PlaybackDetailContext resolvedDetailContext;
+    if (playbackDetailContext != null) {
+      resolvedDetailContext = playbackDetailContext;
+    } else {
+      final sourceItem = PlayableItem(
+        videoPath: videoPath,
+        title: historyItem?.animeName,
+        subtitle: historyItem?.episodeTitle,
+        animeId: historyItem?.animeId,
+        episodeId: historyItem?.episodeId,
+        historyItem: historyItem,
+        actualPlayUrl: actualPlayUrl,
+        playbackSession: playbackSession,
+        mediaKey: mediaKey,
+      );
+      final currentContext = _context;
+      resolvedDetailContext = currentContext == null || !currentContext.mounted
+          ? PlaybackSourceService.fallback(sourceItem)
+          : await PlaybackSourceService.resolve(currentContext, sourceItem);
+    }
+
+    _clearPreviousVideoState(); // 清理旧状态
+    _currentEmbyTrackSelection = embyTrackSelection;
+    final initializationGeneration = _playbackGeneration;
+    _playbackDetailContext = resolvedDetailContext;
+    _statusMessages.clear(); // <--- 新增行：确保消息列表在开始时是空的
+    _initialHistoryItem = historyItem;
+    _currentMediaKey = mediaKey ?? MediaIdentityResolver.forPath(videoPath);
+
+    // 从 historyItem 中获取弹幕 ID
+    if (historyItem != null) {
+      _episodeId = historyItem.episodeId;
+      _animeId = historyItem.animeId ?? resolvedDetailContext.animeId;
+      debugPrint(
+        'VideoPlayerState: 从 historyItem 获取弹幕 ID - episodeId: $_episodeId, animeId: $_animeId',
+      );
+    } else {
+      _episodeId = null;
+      _animeId = resolvedDetailContext.animeId;
+      debugPrint('VideoPlayerState: 没有 historyItem，重置弹幕 ID');
+    }
+
+    // 检查是否为网络URL (HTTP或HTTPS) 或新格式远程路径
+    bool isNetworkUrl =
+        videoPath.startsWith('http://') || videoPath.startsWith('https://');
+    bool isNewRemotePath = MediaSourceUtils.isNewWebDavPath(videoPath) ||
+        MediaSourceUtils.isNewSmbPath(videoPath);
+    final bool isAndroidContentUri = !kIsWeb &&
+        Platform.isAndroid &&
+        MediaSourceUtils.isContentUri(videoPath);
+
+    // 检查是否是流媒体（jellyfin://协议、emby://协议）
+    bool isJellyfinStream = videoPath.startsWith('jellyfin://');
+    bool isEmbyStream = videoPath.startsWith('emby://');
+    PlaybackSession? resolvedSession = playbackSession;
+    String? resolvedActualPlayUrl = actualPlayUrl;
+
+    // 对于本地文件才检查存在性，网络URL和流媒体默认认为"存在"
+    bool fileExists = isNetworkUrl ||
+        isNewRemotePath ||
+        isJellyfinStream ||
+        isEmbyStream ||
+        isAndroidContentUri ||
+        kIsWeb;
+
+    // 为网络URL添加特定日志
+    if (isNetworkUrl) {
+      debugPrint('检测到流媒体URL: $videoPath');
+      _statusMessages.add('正在准备流媒体播放...');
+      _notifyListeners();
+    } else if (isNewRemotePath) {
+      debugPrint('检测到远程媒体库路径: $videoPath');
+      _statusMessages.add('正在准备远程媒体播放...');
+      _notifyListeners();
+    } else if (isJellyfinStream) {
+      final infoUrl = playbackSession?.streamUrl ?? actualPlayUrl;
+      debugPrint(
+        '检测到Jellyfin流媒体: videoPath=$videoPath, actualPlayUrl=$infoUrl',
+      );
+      _statusMessages.add('正在准备Jellyfin流媒体播放...');
+      _notifyListeners();
+    } else if (isEmbyStream) {
+      final infoUrl = playbackSession?.streamUrl ?? actualPlayUrl;
+      debugPrint('检测到Emby流媒体: videoPath=$videoPath, actualPlayUrl=$infoUrl');
+      _statusMessages.add('正在准备Emby流媒体播放...');
+      _notifyListeners();
+    }
+
+    if (!kIsWeb &&
+        !isNetworkUrl &&
+        !isNewRemotePath &&
+        !isJellyfinStream &&
+        !isEmbyStream) {
+      // 使用FilePickerService处理文件路径问题
+      if (isAndroidContentUri) {
+        // Erika resolves SAF sources through Android's ContentResolver and
+        // transfers an owned file descriptor to Rust. Treating this as a
+        // normal File path would reject it before the player can open it.
+        fileExists = true;
+      } else if (Platform.isIOS) {
+        final filePickerService = FilePickerService();
+
+        // 首先检查文件是否存在
+        fileExists = filePickerService.checkFileExists(videoPath);
+
+        // 如果文件不存在，尝试获取有效的文件路径
+        if (!fileExists) {
+          final validPath = await filePickerService.getValidFilePath(videoPath);
+          if (validPath != null) {
+            debugPrint('找到有效路径: $validPath (原路径: $videoPath)');
+            videoPath = validPath;
+            fileExists = true;
+          } else {
+            // 检查是否是iOS临时文件路径
+            if (videoPath.contains('/tmp/') ||
+                videoPath.contains('-Inbox/') ||
+                videoPath.contains('/Inbox/')) {
+              debugPrint('检测到iOS临时文件路径: $videoPath');
+              // 尝试从原始路径获取文件名，然后检查是否在持久化目录中
+              final fileName = p.basename(videoPath);
+              final docDir = await StorageService.getAppStorageDirectory();
+              final persistentPath = '${docDir.path}/Videos/$fileName';
+
+              if (File(persistentPath).existsSync()) {
+                debugPrint('找到持久化存储中的文件: $persistentPath');
+                videoPath = persistentPath;
+                fileExists = true;
+              }
+            }
+          }
+        }
+      } else {
+        // 非iOS平台直接检查文件是否存在
+        final File videoFile = File(videoPath);
+        fileExists = videoFile.existsSync();
+      }
+    } else if (kIsWeb) {
+      // Web平台，我们相信传入的blob URL是有效的
+      debugPrint('Web平台，跳过文件存在性检查');
+    } else {
+      debugPrint('检测到网络URL或流媒体: $videoPath');
+    }
+
+    if (kIsWeb &&
+        !isNetworkUrl &&
+        !isNewRemotePath &&
+        !isJellyfinStream &&
+        !isEmbyStream) {
+      final filePickerService = FilePickerService();
+      if (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty) {
+        if (videoPath.startsWith('blob:')) {
+          resolvedActualPlayUrl = videoPath;
+        } else {
+          final webUrl = filePickerService.getWebObjectUrl(videoPath);
+          if (webUrl != null && webUrl.isNotEmpty) {
+            resolvedActualPlayUrl = webUrl;
+          }
+        }
+      }
+      if (resolvedActualPlayUrl != null &&
+          resolvedActualPlayUrl.isNotEmpty &&
+          resolvedActualPlayUrl.startsWith('blob:') &&
+          !videoPath.startsWith('blob:')) {
+        final existingUrl = filePickerService.getWebObjectUrl(videoPath);
+        if (existingUrl == null || existingUrl.isEmpty) {
+          final mimeType = filePickerService.getWebMimeType(videoPath) ??
+              filePickerService.resolveWebMimeType(fileName: videoPath);
+          filePickerService.registerWebObjectUrl(
+            videoPath,
+            resolvedActualPlayUrl,
+            mimeType: mimeType,
+          );
+        }
+      }
+
+      final webMimeType = filePickerService.getWebMimeType(videoPath) ??
+          filePickerService.resolveWebMimeType(fileName: videoPath);
+      if (webMimeType != null &&
+          webMimeType.isNotEmpty &&
+          webMimeType.startsWith('video/')) {
+        final canPlay = web_html.VideoElement().canPlayType(webMimeType);
+        if (canPlay.isEmpty) {
+          const message = '浏览器不支持该视频格式/编码，请转换为 H.264/AAC 的 MP4 或更换支持的浏览器';
+          _setStatus(PlayerStatus.error, message: message);
+          _error = message;
+          return;
+        }
+      }
+    }
+
+    if (!fileExists) {
+      debugPrint('VideoPlayerState: 文件不存在或无法访问: $videoPath');
+      _setStatus(
+        PlayerStatus.error,
+        message: '找不到文件或无法访问: ${p.basename(videoPath)}',
+      );
+      _error = '文件不存在或无法访问';
+      return;
+    }
+
+    if (isJellyfinStream || isEmbyStream) {
+      if (resolvedSession == null) {
+        try {
+          resolvedSession = await _createPlaybackSessionForStream(
+            videoPath,
+            historyItem: historyItem,
+          );
+        } catch (e) {
+          debugPrint('VideoPlayerState: 创建播放会话失败: $e');
+        }
+      }
+      if (resolvedSession != null) {
+        resolvedActualPlayUrl = resolvedSession!.streamUrl;
+        if (isJellyfinStream) {
+          JellyfinPlaybackSyncService().updatePlaybackSession(resolvedSession!);
+        } else if (isEmbyStream) {
+          EmbyPlaybackSyncService().updatePlaybackSession(resolvedSession!);
+        }
+      }
+      if (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty) {
+        _setStatus(PlayerStatus.error, message: '无法获取播放会话');
+        _error = '无法获取播放会话';
+        _requestPlaybackErrorDialog();
+        return;
+      }
+    }
+
+    // 新格式远程路径 (webdav:// / smb://) 需要解析为实际的 HTTP URL
+    if (isNewRemotePath &&
+        (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty)) {
+      try {
+        if (MediaSourceUtils.isNewWebDavPath(videoPath)) {
+          resolvedActualPlayUrl =
+              MediaSourceUtils.resolveWebDavPathToUrl(videoPath);
+        } else if (MediaSourceUtils.isNewSmbPath(videoPath)) {
+          resolvedActualPlayUrl =
+              MediaSourceUtils.resolveSmbPathToUrl(videoPath);
+        }
+        if (resolvedActualPlayUrl == null || resolvedActualPlayUrl.isEmpty) {
+          _setStatus(PlayerStatus.error, message: '无法解析远程媒体路径，请检查连接配置');
+          _error = '无法解析远程媒体路径';
+          _requestPlaybackErrorDialog();
+          return;
+        }
+        debugPrint(
+          'VideoPlayerState: 远程路径解析成功: $videoPath -> '
+          '${_redactMediaUrlForLog(resolvedActualPlayUrl)}',
+        );
+      } catch (e) {
+        debugPrint('VideoPlayerState: 解析远程媒体路径失败: $e');
+        _setStatus(PlayerStatus.error, message: '解析远程媒体路径失败: $e');
+        _error = '解析远程媒体路径失败';
+        _requestPlaybackErrorDialog();
+        return;
+      }
+    }
+
+    // 网络可达性由播放器判断，确保与实际播放共用 UA、代理和重定向策略。
+    if (videoPath.startsWith('http://') || videoPath.startsWith('https://')) {
+      debugPrint('VideoPlayerState: 准备流媒体URL: $videoPath');
+    } else if ((isJellyfinStream || isEmbyStream) &&
+        resolvedActualPlayUrl != null) {
+      debugPrint('VideoPlayerState: 准备流媒体URL: $resolvedActualPlayUrl');
+    }
+
+    // 更新字幕管理器的视频路径
+    _subtitleManager.setCurrentVideoPath(videoPath);
+
+    _currentVideoPath = videoPath;
+    _currentActualPlayUrl = resolvedActualPlayUrl; // 存储实际播放URL
+    _currentPlaybackSession = resolvedSession;
+    _currentEmbyAccountKey = requestedEmbyAccountKey;
+    print('historyItem: $historyItem');
+    // 仅当 historyItem 已被识别（有 animeId）时，其 animeName 才是可信的番剧名。
+    // WebDAV/SMB 的 _loadWebDavEpisodes/_loadSmbEpisodes 创建的占位记录中
+    // animeName 是文件名，animeId 为空。此时应使用 resolvedDetailContext 的 title。
+    _animeTitle = (historyItem != null && historyItem.animeId != null
+            ? historyItem.animeName
+            : null) ??
+        resolvedDetailContext.title;
+    _episodeTitle = (historyItem != null && historyItem.animeId != null
+            ? historyItem.episodeTitle
+            : null) ??
+        resolvedDetailContext.subtitle;
+    _episodeId = historyItem?.episodeId; // 保存从历史记录传入的 episodeId
+    _animeId = historyItem?.animeId ?? resolvedDetailContext.animeId;
+    String message = '正在初始化播放器: ${p.basename(videoPath)}';
+    if (_animeTitle != null) {
+      message = '正在初始化播放器: $_animeTitle $_episodeTitle';
+    }
+    _setStatus(PlayerStatus.loading, message: message);
+    final fastPlaybackStartup =
+        _context?.read<SettingsProvider>().fastPlaybackStartup ?? false;
+
+    // 检测本地 fonts 文件夹
+    if (!kIsWeb &&
+        !isNetworkUrl &&
+        !isNewRemotePath &&
+        !isJellyfinStream &&
+        !isEmbyStream &&
+        !isAndroidContentUri) {
+      final localFontsFolder = await _detectLocalFontsFolder(videoPath);
+      debugPrint('[VideoPlayerState] 自动检测本地fonts结果: $localFontsFolder');
+      if (localFontsFolder != null) {
+        // 检测到本地 fonts 文件夹，直接设置路径并立即应用
+        _subtitleFontDir = localFontsFolder;
+        _statusMessages.add('发现Fonts目录，已自动配置字幕字体');
+        _notifyListeners();
+        debugPrint('[VideoPlayerState] 已设置本地fonts: $_subtitleFontDir');
+        // 立即设置mpv字体目录，确保自动配置生效
+        player.setProperty('sub-fonts-dir', localFontsFolder);
+        if (defaultTargetPlatform == TargetPlatform.iOS) {
+          player.setProperty('sub-file-paths', localFontsFolder);
+        }
+      }
+    }
+    try {
+      debugPrint(
+        'VideoPlayerState: initializePlayer CALLED for path: $videoPath',
+      );
+      //debugPrint('VideoPlayerState: globals.isPhone = ${globals.isPhone}');
+
+      //debugPrint('1. 开始初始化播放器...');
+      // 加载保存的token
+      await DandanplayService.loadToken();
+
+      // _setStatus(PlayerStatus.loading, message: '正在初始化播放器...');
+      // notice: 往上10行已经有进入loading状态了，这里再更改信息不妥
+
+      _error = null;
+
+      //debugPrint('2. 重置播放器状态...');
+      // 完全重置播放器
+      if (player.state != PlaybackState.stopped) {
+        player.state = PlaybackState.stopped;
+      }
+      // 清除视频资源
+      player.state = PlaybackState.stopped;
+      final bool isMediaKitKernel = player.getPlayerKernelName() == 'Media Kit';
+      if (!isMediaKitKernel) {
+        player.setMedia("", MediaType.video); // 使用空字符串和视频类型清除媒体
+      }
+
+      // 释放旧纹理
+      if (player.textureId.value != null) {
+        // Keep the null check for reading
+        // player.textureId.value = null; // COMMENTED OUT - ValueListenable has no setter
+      }
+      // 等待纹理完全释放
+      await Future.delayed(const Duration(milliseconds: 500));
+      // 重置播放器状态
+      if (!isMediaKitKernel) {
+        player.media = '';
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+      final bool shouldPrewarmPlatformVideoSurface =
+          player.prefersPlatformVideoSurface;
+      _currentVideoPath = shouldPrewarmPlatformVideoSurface ? videoPath : null;
+      _danmakuOverlayKey = 'idle'; // 临时重置弹幕覆盖层key
+      _currentVideoHash = null; // 重置哈希值
+      _currentThumbnailPath = null; // 重置缩略图路径
+      _position = Duration.zero;
+      _duration = Duration.zero;
+      _progress = 0.0;
+      _bufferedPositionMs = 0;
+      _error = null;
+      if (shouldPrewarmPlatformVideoSurface) {
+        _setStatus(PlayerStatus.loading, message: '正在初始化播放器...');
+        await Future.delayed(const Duration(milliseconds: 150));
+      } else {
+        // _setStatus(PlayerStatus.idle);
+        // notice:
+      }
+
+      //debugPrint('3. 设置媒体源...');
+      // 设置媒体源 - 如果提供了播放会话URL则使用它，否则使用videoPath
+      String playUrl = resolvedActualPlayUrl ?? videoPath;
+
+      // MediaKit/mpv: 通过audio-add命令在主媒体加载后添加外部音频
+      if (isMediaKitKernel) {
+        if (kDebugMode)
+          debugPrint('[MKA_DEBUG] MediaKit内核: 开始检测外挂音轨, videoPath=$videoPath');
+        final mkaPath =
+            await _audioTrackManager.detectExternalAudioPath(videoPath);
+        if (kDebugMode)
+          debugPrint(
+              '[MKA_DEBUG] MediaKit内核: detectExternalAudioPath 返回 mkaPath=$mkaPath');
+        if (mkaPath != null) {
+          _audioTrackManager.preloadExternalAudioForMediaKit(mkaPath);
+          if (kDebugMode)
+            debugPrint('[MKA_DEBUG] MediaKit内核: 已预加载外部音频: $mkaPath');
+        } else {
+          if (kDebugMode) debugPrint('[MKA_DEBUG] MediaKit内核: 未检测到外挂音轨');
+        }
+      }
+
+      // 应用自定义 User-Agent（须在打开媒体前设置；空字符串 = 用内核默认 UA）。
+      // 优先用一次性 UA（串流菜单设置，仅本次有效，用后即清），否则用持久 UA。
+      PlayerFactory.applyUserAgentForNextOpen(player.setUserAgent);
+
+      player.media = playUrl;
+      await applyErikaUpscalerModeToCurrentPlayer();
+
+      //debugPrint('4. 准备播放器...');
+      // 准备播放器
+      mediaPrepareStarted = true;
+      await player.prepare();
+      final bool isMediaServer = videoPath.startsWith('jellyfin://') ||
+          videoPath.startsWith('emby://');
+      final bool isNetworkMedia = isMediaServer ||
+          videoPath.startsWith('webdav://') ||
+          videoPath.startsWith('smb://') ||
+          playUrl.startsWith('http://') ||
+          playUrl.startsWith('https://');
+
+      if (isMediaKitKernel && player.supportsMediaLoadReadiness) {
+        final readyStopwatch = Stopwatch()..start();
+        var mediaLoadAttempts = 1;
+        bool mediaReady = await player.waitUntilMediaReady(
+          timeout:
+              Duration(seconds: isMediaServer ? 30 : (isNetworkMedia ? 6 : 5)),
+        );
+        if (_isDisposed || initializationGeneration != _playbackGeneration) {
+          return;
+        }
+
+        if (!mediaReady && isNetworkMedia) {
+          for (var attempt = 2;
+              !mediaReady && attempt <= networkMediaLoadMaxAttempts;
+              attempt++) {
+            final retried = await player.retryCurrentMediaLoad();
+            if (!retried) {
+              // Metadata may have arrived between the deadline and retry
+              // decision. Do not turn that recovery into an error.
+              mediaReady = player.isMediaReady;
+              break;
+            }
+            mediaLoadAttempts = attempt;
+            mediaReady = await player.waitUntilMediaReady(
+              timeout: const Duration(seconds: 10),
+            );
+            if (_isDisposed ||
+                initializationGeneration != _playbackGeneration) {
+              return;
+            }
+          }
+        }
+
+        readyStopwatch.stop();
+        if (!mediaReady) {
+          final detail = preferredPlaybackErrorDetail(
+            specificError: player.mediaInfo.specificErrorMessage,
+            mediaLoadError: player.mediaLoadError,
+            fallback: isNetworkMedia ? '网络媒体在重试后仍未返回有效数据' : '媒体未返回有效轨道或时长',
+          );
+          final attemptSummary =
+              isNetworkMedia ? '远程媒体已尝试 $mediaLoadAttempts 次仍无法载入：' : '';
+          throw TimeoutException('$attemptSummary$detail');
+        }
+        debugPrint(
+          'VideoPlayerState: MediaKit媒体就绪，等待${readyStopwatch.elapsedMilliseconds}ms',
+        );
+      } else {
+        // 其他内核保持原有最多10秒的兼容轮询，不改变其启动体验。
+        for (var waitCount = 0; waitCount < 100; waitCount++) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          if (player.state == PlaybackState.playing ||
+              player.state == PlaybackState.paused ||
+              (player.mediaInfo.duration > 0 &&
+                  (player.prefersPlatformVideoSurface ||
+                      player.textureId.value != null))) {
+            break;
+          }
+        }
+      }
+      mediaPrepareCompleted = true;
+
+      //debugPrint('5. 获取视频纹理...');
+      // 获取视频纹理
+      await player.updateTexture();
+      //debugPrint('获取到纹理ID: $textureId');
+
+      // !!!!! 在这里启动或重启UI更新定时器（已包含位置保存功能）!!!!!
+      _startUiUpdateTimer(); // 启动UI更新定时器（已包含位置保存功能）
+      // !!!!! ------------------------------------------- !!!!!
+
+      // MediaKit已经通过真实metadata事件完成放行，无需再增加固定延迟。
+      if (!isMediaKitKernel) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+
+      //debugPrint('6. 分析媒体信息...');
+      // 分析并打印媒体信息，特别是字幕轨道
+      MediaInfoHelper.analyzeMediaInfo(player.mediaInfo);
+
+      // 设置视频宽高比
+      if (player.mediaInfo.video != null &&
+          player.mediaInfo.video!.isNotEmpty) {
+        final videoTrack = player.mediaInfo.video![0];
+        if (videoTrack.codec.width > 0 && videoTrack.codec.height > 0) {
+          _aspectRatio = videoTrack.codec.width / videoTrack.codec.height;
+          debugPrint(
+            'VideoPlayerState: 从mediaInfo设置视频宽高比: $_aspectRatio (${videoTrack.codec.width}x${videoTrack.codec.height})',
+          );
+        } else {
+          // 备用方案：从播放器状态获取视频尺寸
+          debugPrint('VideoPlayerState: mediaInfo中视频尺寸为0，尝试从播放器状态获取');
+          // 延迟获取，因为播放器状态可能还没有准备好
+          Future.delayed(const Duration(milliseconds: 1000), () {
+            // 尝试从播放器的snapshot方法获取视频尺寸
+            try {
+              player.snapshot().then((frame) {
+                if (frame != null && frame.width > 0 && frame.height > 0) {
+                  _aspectRatio = frame.width / frame.height;
+                  debugPrint(
+                    'VideoPlayerState: 从snapshot设置视频宽高比: $_aspectRatio (${frame.width}x${frame.height})',
+                  );
+                  _notifyListeners(); // 通知UI更新
+                }
+              });
+            } catch (e) {
+              debugPrint('VideoPlayerState: 从snapshot获取视频尺寸失败: $e');
+            }
+          });
+        }
+
+        // 更新当前解码器信息
+        // 获取解码器信息（异步方式）
+        final activeDecoder = await getActiveDecoder();
+        SystemResourceMonitor().setActiveDecoder(activeDecoder);
+        debugPrint('当前视频解码器: $activeDecoder');
+
+        // 如果检测到使用软解，但硬件解码开关已打开，尝试强制启用硬件解码
+        if (activeDecoder.contains("软解")) {
+          if (_useHardwareDecoder) {
+            debugPrint('检测到使用软解但硬件解码已启用，尝试强制启用硬件解码...');
+            // 延迟执行以避免干扰视频初始化
+            Future.delayed(const Duration(seconds: 2), () async {
+              await forceEnableHardwareDecoder();
+            });
+          }
+        }
+      }
+
+      // 优先选择中文相关的字幕轨道，根据程序语言设置决定优先级
+      if (player.mediaInfo.subtitle != null) {
+        final subtitles = player.mediaInfo.subtitle!;
+        int? preferredSubtitleIndex;
+
+        // 定义简体和繁体中文的关键字
+        const simplifiedKeywords = ['简体', '简中', 'chs', 'sc', 'simplified'];
+        const traditionalKeywords = ['繁體', '繁体', 'cht', 'tc', 'traditional'];
+
+        // 获取当前程序语言设置（从设置中读取）
+        bool isTraditionalChinese = false;
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final languageMode =
+              prefs.getString(SettingsKeys.appLanguageMode) ?? 'auto';
+          if (languageMode == 'traditional') {
+            isTraditionalChinese = true;
+          } else if (languageMode == 'auto') {
+            // 如果是自动模式，根据系统语言判断
+            final systemLocale =
+                WidgetsBinding.instance.platformDispatcher.locale;
+            isTraditionalChinese =
+                AppLocaleUtils.isTraditionalChineseLocale(systemLocale);
+          }
+        } catch (e) {
+          debugPrint('VideoPlayerState: 获取语言设置失败: $e');
+        }
+
+        // 根据语言设置决定搜索顺序
+        final primaryKeywords =
+            isTraditionalChinese ? traditionalKeywords : simplifiedKeywords;
+        final secondaryKeywords =
+            isTraditionalChinese ? simplifiedKeywords : traditionalKeywords;
+        final primaryType = isTraditionalChinese ? '繁体' : '简体';
+        final secondaryType = isTraditionalChinese ? '简体' : '繁体';
+
+        // 优先级 1: 查找首选语言的字幕轨道
+        for (var i = 0; i < subtitles.length; i++) {
+          final track = subtitles[i];
+          final fullString = track.toString().toLowerCase();
+          if (primaryKeywords.any((kw) => fullString.contains(kw))) {
+            preferredSubtitleIndex = i;
+            debugPrint(
+              'VideoPlayerState: 自动选择${primaryType}中文字幕: ${track.title ?? fullString}',
+            );
+            break;
+          }
+        }
+
+        // 优先级 2: 如果没有找到首选语言，则查找次选语言的字幕轨道
+        if (preferredSubtitleIndex == null) {
+          for (var i = 0; i < subtitles.length; i++) {
+            final track = subtitles[i];
+            final fullString = track.toString().toLowerCase();
+            if (secondaryKeywords.any((kw) => fullString.contains(kw))) {
+              preferredSubtitleIndex = i;
+              debugPrint(
+                'VideoPlayerState: 自动选择${secondaryType}中文字幕: ${track.title ?? fullString}',
+              );
+              break;
+            }
+          }
+        }
+
+        // 优先级 3: 如果还没有，则查找任何语言代码为中文的轨道 (chi/zho)
+        if (preferredSubtitleIndex == null) {
+          for (var i = 0; i < subtitles.length; i++) {
+            final track = subtitles[i];
+            if (track.language == 'chi' || track.language == 'zho') {
+              preferredSubtitleIndex = i;
+              debugPrint(
+                'VideoPlayerState: 自动选择语言代码为中文的字幕: ${track.title ?? track.toString().toLowerCase()}',
+              );
+              break;
+            }
+          }
+        }
+
+        // 优先级 4: 如果没有找到任何中文轨道，且存在其他有效字幕轨道（非auto/no），则默认选择第一条有效轨道
+        if (preferredSubtitleIndex == null) {
+          for (var i = 0; i < subtitles.length; i++) {
+            final track = subtitles[i];
+            // 排除 auto 和 no 轨道
+            final trackId = track.metadata['id'];
+            if (trackId != 'auto' && trackId != 'no') {
+              preferredSubtitleIndex = i;
+              debugPrint(
+                'VideoPlayerState: 未找到符合条件的中文字幕轨道，默认选择第一条有效字幕: ${track.title ?? track.toString()} (Index: $i)',
+              );
+              break;
+            }
+          }
+        }
+
+        // 如果找到了优先的字幕轨道，就激活它
+        if (preferredSubtitleIndex != null) {
+          player.activeSubtitleTracks = [preferredSubtitleIndex];
+
+          // 更新字幕轨道信息
+          if (player.mediaInfo.subtitle != null &&
+              preferredSubtitleIndex < player.mediaInfo.subtitle!.length) {
+            final track = player.mediaInfo.subtitle![preferredSubtitleIndex];
+            _subtitleManager.updateSubtitleTrackInfo('embedded_subtitle', {
+              'index': preferredSubtitleIndex,
+              'title': track.toString(),
+              'isActive': true,
+            });
+          }
+        } else {
+          debugPrint('VideoPlayerState: 未找到符合条件的中文字幕轨道，将使用播放器默认设置。');
+        }
+
+        // 无论是否有优先字幕轨道，都更新所有字幕轨道信息
+        _subtitleManager.updateAllSubtitleTracksInfo();
+
+        // 通知字幕轨道变化
+        _subtitleManager.onSubtitleTrackChanged();
+      }
+
+      //debugPrint('7. 更新视频状态...');
+      // 更新状态
+      _currentVideoPath = videoPath;
+      _danmakuOverlayKey = 'video_${videoPath.hashCode}'; // 为每个视频生成唯一的稳定key
+
+      // 异步计算视频哈希值，不阻塞主要初始化流程
+      _precomputeVideoHash(videoPath);
+
+      final previousSubtitleDelay = subtitleDelaySeconds;
+      _duration = Duration(milliseconds: player.mediaInfo.duration);
+      if ((previousSubtitleDelay - subtitleDelaySeconds).abs() >= 0.0001) {
+        unawaited(applySubtitleStylePreference());
+      }
+      unawaited(_setupTimelinePreviewForVideo(videoPath));
+
+      // 对于Jellyfin流媒体，先进行同步，再获取播放位置
+      bool isJellyfinStream = videoPath.startsWith('jellyfin://');
+      bool isEmbyStream = videoPath.startsWith('emby://');
+      if (isJellyfinStream || isEmbyStream) {
+        await _initializeWatchHistory(videoPath);
+      }
+
+      // 获取上次播放位置
+      final lastPosition = await _getVideoPosition(videoPath);
+      debugPrint(
+        'VideoPlayerState: lastPosition for $videoPath = $lastPosition (raw value from _getVideoPosition)',
+      );
+
+      // 如果有上次的播放位置，恢复播放位置
+      if (lastPosition > 0) {
+        //debugPrint('8. 恢复上次播放位置...');
+        // [VIDEO-OPEN-PTM-DIAG] 根因2诊断：追踪视频打开时 playbackTimeMs 的时序
+        // 假设：player.seek() 不更新 _playbackTimeMs/_smoothAnchorMs/_seekTargetMs，
+        // 导致 Ticker 首帧锚定时 playbackTimeMs=0 → 弹幕从头播放
+        if (!kReleaseMode) {
+          debugPrint('[VIDEO-OPEN-PTM-DIAG] BEFORE player.seek: '
+              'playbackTimeMs=${_playbackTimeMs.value.toStringAsFixed(1)} '
+              'lastPosition=$lastPosition '
+              '_smoothAnchorMs=${_smoothAnchorMs.toStringAsFixed(1)} '
+              '_seekTargetMs=$_seekTargetMs '
+              '_lastRawPlayerMs=$_lastRawPlayerMs '
+              '← player.seek() does NOT update ptm/anchor fields');
+        }
+        // 先设置播放位置
+        // Erika's native seek crosses an asynchronous platform bridge and
+        // performs a frame-output barrier. Wait for that transition to finish
+        // before startup can issue play; otherwise a slow resume seek can race
+        // the first play command and leave the surface without a current frame
+        // until the user seeks again.
+        await player.seekAndWait(position: lastPosition);
+        // ✅ Bug-8-2 修复：player.seek() 只调用底层 API，不更新锚点字段，
+        // 导致 Ticker 首帧锚定到 playbackTimeMs=0 → 弹幕从头播放 + 回弹。
+        // 手动更新所有锚点字段，与 seekTo() 保持一致。
+        _playbackTimeMs.value = lastPosition.toDouble();
+        _smoothAnchorMs = lastPosition.toDouble();
+        _smoothAnchorElapsedUs = _lastElapsedUs;
+        _seekTargetMs = lastPosition.toDouble();
+        _anchorSetBySeek = true;
+        _lastRawPlayerMs = -1; // 保持 -1，让 Ticker 进入 seek 保护分支
+        // 更新状态
+        _position = Duration(milliseconds: lastPosition);
+        // duration 为 0 时避免除零产生 Infinity/NaN 落库
+        // （iOS duration 延迟就绪场景，与 navigation.dart 中的一致性保护）
+        _progress = _duration.inMilliseconds > 0
+            ? lastPosition / _duration.inMilliseconds
+            : 0.0;
+        // [VIDEO-OPEN-PTM-DIAG] 追踪 player.seek 后 playbackTimeMs 是否被更新
+        if (!kReleaseMode) {
+          debugPrint('[VIDEO-OPEN-PTM-DIAG] AFTER player.seek+anchor-update: '
+              'playbackTimeMs=${_playbackTimeMs.value.toStringAsFixed(1)} '
+              '_position=${_position.inMilliseconds} '
+              'player.position=${player.position} '
+              '_smoothAnchorMs=${_smoothAnchorMs.toStringAsFixed(1)} '
+              '_seekTargetMs=$_seekTargetMs '
+              '_lastRawPlayerMs=$_lastRawPlayerMs '
+              '← anchor fields NOW updated correctly');
+        }
+      } else {
+        _position = Duration.zero;
+        _progress = 0.0;
+        _bufferedPositionMs = 0;
+        // Erika has already opened at the beginning of the stream. Seeking to
+        // zero here needlessly tears down and recreates its hardware decoder
+        // (notably HarmonyOS AVCodec Surface output) before first playback.
+        if (player.getPlayerKernelName() != 'Erika') {
+          player.seek(position: 0);
+        }
+      }
+
+      // debugPrint('9. 检查播放器实际状态...');
+      // 检查播放器实际状态
+      // if (player.state == PlaybackState.playing) {
+      //   _setStatus(PlayerStatus.playing, message: '正在播放');
+      // } else {
+      //   // 如果播放器没有真正开始播放，设置为暂停状态
+      //   player.state = PlaybackState.paused;
+      //   _setStatus(PlayerStatus.paused, message: '已暂停');
+      // }
+      // notice: 前面还在初始化状态，后面会进入ready状态，在此时修改状态到play/pause不妥
+
+      // 对于非流媒体，在获取播放位置后初始化观看记录
+      if (!isJellyfinStream && !isEmbyStream) {
+        await _initializeWatchHistory(videoPath);
+      }
+
+      // Streaming servers provide external subtitle tracks independently of
+      // the media stream. Activate them only after resume-position seeking has
+      // settled so external subtitle readers start at the same timeline.
+      if (isJellyfinStream) {
+        await _loadJellyfinExternalSubtitles(videoPath);
+      }
+      if (isEmbyStream) {
+        final trackSelection = _currentEmbyTrackSelection;
+        final isTranscoding = _currentPlaybackSession?.isTranscoding ?? false;
+        if (trackSelection == null) {
+          if (!isTranscoding) {
+            await _loadEmbyExternalSubtitles(
+              videoPath,
+              const EmbyExternalSubtitleAction.followDefault(),
+            );
+          }
+        } else {
+          await applyEmbyTracksForVideoPath(
+            videoPath: videoPath,
+            isTranscoding: isTranscoding,
+            applyEmby: () async {
+              bool isCurrentPlayback() =>
+                  !_isDisposed &&
+                  initializationGeneration == _playbackGeneration &&
+                  _currentVideoPath == videoPath;
+              if (!isCurrentPlayback()) return;
+              await applyEmbyResolvedTracksAfterOpen(
+                mediaInfo: player.mediaInfo,
+                bundle: trackSelection,
+                setActiveAudio: (indexes) {
+                  if (isCurrentPlayback()) {
+                    player.activeAudioTracks = indexes;
+                  }
+                },
+                setActiveSubtitle: (indexes) {
+                  if (isCurrentPlayback()) {
+                    player.activeSubtitleTracks = indexes;
+                  }
+                },
+                clearExternal: () async {
+                  if (isCurrentPlayback()) {
+                    final activeEmbeddedTracks =
+                        List<int>.of(player.activeSubtitleTracks);
+                    await _subtitleManager.activateEmbyExternalSubtitle(
+                      '',
+                      isManualSetting: false,
+                    );
+                    if (activeEmbeddedTracks.isNotEmpty &&
+                        isCurrentPlayback()) {
+                      player.activeSubtitleTracks = activeEmbeddedTracks;
+                    }
+                  }
+                },
+                loadExternal: (action) async {
+                  if (isCurrentPlayback()) {
+                    await _loadEmbyExternalSubtitles(videoPath, action);
+                  }
+                },
+              );
+              if (isCurrentPlayback()) {
+                _subtitleManager.updateAllSubtitleTracksInfo();
+                _subtitleManager.onSubtitleTrackChanged();
+              }
+            },
+          );
+        }
+      }
+
+      //debugPrint('10. 开始识别视频和加载弹幕...');
+      Future<void> loadInitialDanmaku() async {
+        final danmakuLoadGeneration = _playbackGeneration;
+        bool canContinue() =>
+            !_isDisposed &&
+            _currentVideoPath == videoPath &&
+            _playbackGeneration == danmakuLoadGeneration;
+
+        if (!canContinue()) return;
+        final danmakuAutoLoadSettings = await _resolveDanmakuAutoLoadSettings();
+        if (!canContinue()) return;
+
+        // “跳过弹幕匹配”表示启动时完全跳过弹幕流程。手动搜索只能由用户
+        // 从播放器弹幕菜单主动触发，不能在这里自动弹出。
+        if (danmakuAutoLoadSettings.skipMatching) {
+          _clearDanmakuAutoLoadState();
+          _addStatusMessage('已跳过弹幕匹配');
+          _applyTimelineDanmakuTrackForCurrentVideo();
+          _updateMergedDanmakuList();
+          return;
+        }
+
+        // 针对Jellyfin流媒体视频的特殊处理
+        bool jellyfinDanmakuHandled = false;
+        try {
+          // 检查是否是Jellyfin视频并尝试使用historyItem中的IDs直接加载弹幕
+          jellyfinDanmakuHandled = await _checkAndLoadStreamingDanmaku(
+            videoPath,
+            historyItem,
+          );
+        } catch (e) {
+          debugPrint('检查Jellyfin弹幕时出错: $e');
+          // 错误处理时不设置jellyfinDanmakuHandled为true，下面会继续常规处理
+        }
+        if (!canContinue()) return;
+
+        // 如果不是Jellyfin视频或者Jellyfin视频没有预设的弹幕IDs，则检查是否有手动匹配的弹幕
+        if (!jellyfinDanmakuHandled) {
+          Future<void> loadRemoteDanmakuForCurrentVideo() async {
+            if (!canContinue()) return;
+            // 检查是否有手动匹配的弹幕ID
+            if (_episodeId != null &&
+                _animeId != null &&
+                _episodeId! > 0 &&
+                _animeId! > 0) {
+              debugPrint(
+                '检测到手动匹配的弹幕ID，直接加载: episodeId=$_episodeId, animeId=$_animeId',
+              );
+              try {
+                _setStatus(PlayerStatus.recognizing, message: '正在加载手动匹配的弹幕...');
+                await loadDanmaku(_episodeId.toString(), _animeId.toString());
+              } catch (e) {
+                if (!canContinue()) return;
+                debugPrint('加载手动匹配的弹幕失败: $e');
+                _clearDanmakuAutoLoadState();
+                _addStatusMessage('手动匹配的弹幕加载失败');
+              }
+            } else {
+              // 没有手动匹配的弹幕ID，使用常规方式识别和加载弹幕
+              try {
+                await _recognizeVideo(videoPath);
+              } catch (e) {
+                if (!canContinue()) return;
+                //debugPrint('弹幕加载失败: $e');
+                // 设置空弹幕列表，确保播放不受影响
+                _clearDanmakuAutoLoadState();
+                _addStatusMessage('无法连接服务器，跳过加载弹幕');
+              }
+            }
+          }
+
+          switch (danmakuAutoLoadSettings.strategy) {
+            case DanmakuAutoLoadStrategy.remoteAndLocal:
+              await loadRemoteDanmakuForCurrentVideo();
+              if (!canContinue()) return;
+              await _autoDetectAndLoadLocalDanmakuFromVideoDirectory(videoPath);
+              break;
+            case DanmakuAutoLoadStrategy.remote:
+              await loadRemoteDanmakuForCurrentVideo();
+              break;
+            case DanmakuAutoLoadStrategy.local:
+              _clearDanmakuAutoLoadState();
+              final localLoaded =
+                  await _autoDetectAndLoadLocalDanmakuFromVideoDirectory(
+                videoPath,
+              );
+              if (!canContinue()) return;
+              if (!localLoaded) {
+                _addStatusMessage('未找到同名本地弹幕，跳过弹幕');
+              }
+              break;
+            case DanmakuAutoLoadStrategy.manual:
+              break;
+          }
+        }
+
+        if (!canContinue()) return;
+        // 应用时间轴告知弹幕轨道：避免开关默认开启但轨道未生成导致“无效”
+        _applyTimelineDanmakuTrackForCurrentVideo();
+        _updateMergedDanmakuList();
+      }
+
+      if (!fastPlaybackStartup) {
+        await loadInitialDanmaku();
+      }
+
+      // 设置进入最终加载阶段，以优化动画性能
+      _isInFinalLoadingPhase = true;
+      _notifyListeners();
+
+      //debugPrint('11. 设置准备就绪状态...');
+      // 设置状态为准备就绪
+      _setStatus(PlayerStatus.ready, message: '准备就绪');
+
+      // 新视频加载后应用超分辨率/CRT 等设置（避免播放中切换导致卡顿）
+      await applyAnime4KProfileToCurrentPlayer();
+      await applyErikaUpscalerModeToCurrentPlayer();
+
+      // 使用屏幕方向管理器设置播放时的屏幕方向
+      if (globals.isMobilePlatform) {
+        debugPrint(
+          'VideoPlayerState: Device is phone. Setting video playing orientation.',
+        );
+        await ScreenOrientationManager.instance.setVideoPlayingOrientation();
+        await _restoreSystemUiOverlayStyleIfNeeded();
+
+        if (globals.isPhone) {
+          _isFullscreen = true;
+          _notifyListeners();
+        }
+
+        // 平板设备默认隐藏菜单栏（全屏状态）
+        if (globals.isTablet) {
+          _isAppBarHidden = true;
+          debugPrint(
+            'VideoPlayerState: Tablet detected, hiding app bar by default.',
+          );
+
+          // 同时隐藏系统UI
+          try {
+            await SystemChrome.setEnabledSystemUIMode(
+              SystemUiMode.immersiveSticky,
+            );
+          } catch (e) {
+            debugPrint('隐藏系统UI时出错: $e');
+          }
+          await _restoreSystemUiOverlayStyleIfNeeded();
+        }
+      }
+
+      //debugPrint('12. 设置最终播放状态 (在可能的横屏切换之后)...');
+      if (lastPosition == 0) {
+        // 从头播放
+        // debugPrint('VideoPlayerState: Initializing playback from start, calling play().'); // <--- REMOVED PRINT
+        play(); // Call our central play method
+      } else {
+        // 从中间恢复
+        if (player.state == PlaybackState.playing) {
+          // Player is already playing after seek (e.g., underlying engine auto-resumed)
+          _setStatus(
+            PlayerStatus.playing,
+            message: '正在播放 (恢复)',
+          ); // Sync our status
+          // debugPrint('VideoPlayerState: Player already playing on resume. Directly starting screenshot timer.'); // <--- REMOVED PRINT
+          _startScreenshotTimer(); // Start timer directly
+        } else {
+          // Player did not auto-play after seek, or was paused. We need to start it.
+          // _status should be 'ready' from earlier _setStatus call in initializePlayer
+          // debugPrint('VideoPlayerState: Resuming playback (player was not auto-playing), calling play().'); // <--- REMOVED PRINT
+          play(); // Call our central play method
+        }
+      }
+
+      if (fastPlaybackStartup) {
+        _startBackgroundDanmakuLoading(videoPath, loadInitialDanmaku);
+      }
+
+      if (!isFullscreen && autoFullscreenEnabled) {
+        await toggleFullscreen();
+      }
+
+      // 尝试自动检测和加载字幕
+      final shouldAutoDetectSubtitle = !isEmbyStream ||
+          _currentEmbyTrackSelection == null ||
+          _currentEmbyTrackSelection!.subtitle.mode ==
+              EmbyResolvedTrackMode.followDefault;
+      if (!isAndroidContentUri && shouldAutoDetectSubtitle) {
+        await _subtitleManager.autoDetectAndLoadSubtitle(videoPath);
+      }
+
+      // 尝试自动检测和加载同名MKA外部音频
+      // MediaKit已通过audio-add在主媒体加载后添加外部音频，此处仅处理MDK内核
+      _audioTrackManager.setCurrentVideoPath(videoPath);
+      if (!isAndroidContentUri && !isMediaKitKernel) {
+        await _audioTrackManager.autoDetectAndLoadExternalAudio(videoPath);
+      }
+
+      // 不在此处注册热键，由main.dart的_manageHotkeys统一管理
+      debugPrint('[VideoPlayerState] 跳过热键注册，由主页面统一管理');
+
+      // 等待一小段时间确保播放器状态稳定
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // 应用保存的播放速度设置
+      if (hasVideo && _playbackRate != 1.0) {
+        player.setPlaybackRate(_playbackRate);
+        debugPrint('VideoPlayerState: 应用保存的播放速度设置: ${_playbackRate}x');
+      }
+
+      // 再次检查播放器实际状态并同步 _status
+      if (player.state == PlaybackState.playing) {
+        if (_status != PlayerStatus.playing) {
+          // 如果横屏操作导致状态变化，但最终是播放，则同步
+          _setStatus(PlayerStatus.playing, message: '正在播放 (状态确认)');
+        }
+        //debugPrint('VideoPlayerState: Final check - Player IS PLAYING.');
+      } else {
+        debugPrint(
+          'VideoPlayerState: Final check - Player IS NOT PLAYING. Current _status: $_status, player.state: ${player.state}',
+        );
+        // play() 通过 playDirectly() 异步启动播放器，底层状态转换需要时间。
+        // _status == ready 表示刚完成初始化、play() 已调用但异步结果尚未返回，
+        // 此时 player.state 可能在 paused/ready/stopped 之间，强制暂停会取消
+        // 正在进行的 playDirectly()，导致画面卡在第一帧、时间为 00:00。
+        // 只应在 _status 明确为 playing（即 play() 回调已确认播放在进行）而
+        // player.state 却未反映时才纠正。
+        if (_status == PlayerStatus.playing) {
+          // play() 的 .then() 已触发但底层状态未同步，强制暂停以保持一致
+          player.state = PlaybackState.paused;
+          _setStatus(PlayerStatus.paused, message: '已暂停 (播放失败后同步)');
+          debugPrint(
+            'VideoPlayerState: Corrected to PAUSED (sync after play attempt failed)',
+          );
+        }
+        // _status 为 ready 时：play() 异步尚未完成，不干预，让底层自然过渡到播放。
+        // 若底层最终未进入播放，Ticker 的异常检测会捕获并设置 error 状态。
+      }
+    } catch (e) {
+      if (_isDisposed || initializationGeneration != _playbackGeneration) {
+        return;
+      }
+      //debugPrint('初始化视频播放器时出错: $e');
+      if (kIsWeb) {
+        final errorText = e.toString();
+        final bool isUnsupportedFormat = e is PlatformException &&
+                (e.code == 'MEDIA_ERR_SRC_NOT_SUPPORTED' ||
+                    e.message?.contains('MEDIA_ERR_SRC_NOT_SUPPORTED') ==
+                        true ||
+                    e.message?.contains('Format error') == true) ||
+            errorText.contains('MEDIA_ERR_SRC_NOT_SUPPORTED') ||
+            errorText.contains('Format error');
+        if (isUnsupportedFormat) {
+          const message = '浏览器不支持该视频格式/编码，请转换为 H.264/AAC 的 MP4 或更换支持的浏览器';
+          _error = message;
+          _setStatus(PlayerStatus.error, message: message);
+          return;
+        }
+      }
+      if (mediaPrepareStarted && !mediaPrepareCompleted) {
+        final detail = preferredPlaybackErrorDetail(
+          specificError: player.mediaInfo.specificErrorMessage,
+          mediaLoadError: player.mediaLoadError,
+          fallback: e,
+        );
+        final message = '播放器打开媒体失败: $detail';
+        debugPrint(
+          '[VideoPlayerState] Media prepare failed for $videoPath: $detail',
+        );
+        _error = message;
+        _setStatus(PlayerStatus.error, message: message);
+        _notifySeriousPlaybackErrorAfterFrame(
+          expectedPlaybackGeneration: initializationGeneration,
+        );
+        return;
+      }
+      _error = '初始化视频播放器时出错: $e';
+      _setStatus(PlayerStatus.error, message: '播放器初始化失败');
+      // 尝试恢复
+      _tryRecoverFromError();
+    }
+  }
+
+  void _notifySeriousPlaybackErrorAfterFrame({
+    int? expectedPlaybackGeneration,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (_isDisposed ||
+          (expectedPlaybackGeneration != null &&
+              expectedPlaybackGeneration != _playbackGeneration)) {
+        return;
+      }
+      await handleBackButton();
+      if (_isDisposed ||
+          (expectedPlaybackGeneration != null &&
+              expectedPlaybackGeneration != _playbackGeneration)) {
+        return;
+      }
+      _requestPlaybackErrorDialog();
+    });
+  }
+
+  void _startBackgroundDanmakuLoading(
+    String videoPath,
+    Future<void> Function() task,
+  ) {
+    final generation = _playbackGeneration;
+    unawaited(() async {
+      // Wait until the player reports that playback really started. This also
+      // keeps recognition and network requests behind the first video frame.
+      for (var attempt = 0; attempt < 100; attempt++) {
+        if (_isDisposed ||
+            generation != _playbackGeneration ||
+            _currentVideoPath != videoPath) {
+          return;
+        }
+        if (_status == PlayerStatus.playing) break;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      if (_status != PlayerStatus.playing ||
+          _isDisposed ||
+          generation != _playbackGeneration ||
+          _currentVideoPath != videoPath) {
+        return;
+      }
+
+      _isBackgroundDanmakuLoading = true;
+      _addStatusMessage('已开始播放，正在后台识别视频并加载弹幕');
+      try {
+        await task();
+      } catch (e, stackTrace) {
+        debugPrint('后台识别和弹幕加载失败: $e');
+        debugPrintStack(stackTrace: stackTrace);
+      } finally {
+        if (!_isDisposed &&
+            generation == _playbackGeneration &&
+            _currentVideoPath == videoPath) {
+          _isBackgroundDanmakuLoading = false;
+          _notifyListeners();
+        }
+      }
+    }());
+  }
+
+  // 外部字幕自动加载回调处理
+  void _onExternalSubtitleAutoLoaded(String path, String fileName) {
+    // 这里可以处理回调，例如显示提示或更新UI
+    debugPrint('VideoPlayerState: 外部字幕自动加载: $fileName');
+  }
+
+  // 预先计算视频哈希值
+  Future<void> _precomputeVideoHash(String path) async {
+    try {
+      //debugPrint('开始计算视频哈希值...');
+      _currentVideoHash = await _calculateFileHash(path);
+      //debugPrint('视频哈希值计算完成: $_currentVideoHash');
+    } catch (e) {
+      //debugPrint('计算视频哈希值失败: $e');
+      // 失败时将哈希值设为null，让后续操作重新计算
+      _currentVideoHash = null;
+    }
+  }
+
+  Future<PlaybackSession?> _createPlaybackSessionForStream(
+    String videoPath, {
+    WatchHistoryItem? historyItem,
+  }) async {
+    final startPosition = historyItem?.lastPosition ?? 0;
+    if (videoPath.startsWith('jellyfin://')) {
+      final itemId = videoPath.replaceFirst('jellyfin://', '');
+      return await JellyfinService.instance.createPlaybackSession(
+        itemId: itemId,
+        startPositionMs: startPosition > 0 ? startPosition : null,
+      );
+    }
+    if (videoPath.startsWith('emby://')) {
+      final embyPath = videoPath.replaceFirst('emby://', '');
+      final parts = embyPath.split('/');
+      final itemId = parts.isNotEmpty ? parts.last : embyPath;
+      return await EmbyService.instance.createPlaybackSession(
+        itemId: itemId,
+        startPositionMs: startPosition > 0 ? startPosition : null,
+      );
+    }
+    return null;
+  }
+
+  // 初始化观看记录
+  Future<void> _initializeWatchHistory(String path) async {
+    try {
+      final sharedEpisodeId = SharedRemoteHistoryHelper.extractSharedEpisodeId(
+        path,
+      );
+      final sharedEpisodeHistories =
+          await SharedRemoteHistoryHelper.loadHistoriesBySharedEpisodeId(
+        sharedEpisodeId,
+      );
+
+      WatchHistoryItem? existingHistory =
+          await WatchHistoryManager.getHistoryItem(path);
+
+      if (existingHistory == null && sharedEpisodeHistories.isNotEmpty) {
+        try {
+          existingHistory = sharedEpisodeHistories.firstWhere(
+            (item) => item.filePath == path,
+          );
+        } catch (_) {
+          existingHistory = sharedEpisodeHistories.first;
+        }
+        debugPrint(
+          '_initializeWatchHistory: 通过共享媒体EpisodeId匹配到已有记录: ${existingHistory.filePath}',
+        );
+      }
+
+      final duplicatesToRemove = <String>{};
+      for (final history in sharedEpisodeHistories) {
+        if (history.filePath != path) {
+          duplicatesToRemove.add(history.filePath);
+        }
+      }
+
+      for (final duplicatePath in duplicatesToRemove) {
+        debugPrint('_initializeWatchHistory: 移除重复的共享媒体历史记录: $duplicatePath');
+        await _removeHistoryEntry(duplicatePath);
+      }
+
+      if (existingHistory != null) {
+        String finalAnimeName = existingHistory.animeName;
+        String? finalEpisodeTitle = existingHistory.episodeTitle;
+
+        final bool isJellyfinStream = path.startsWith('jellyfin://');
+        final bool isEmbyStream = path.startsWith('emby://');
+        final bool isSharedRemoteStream =
+            SharedRemoteHistoryHelper.isSharedRemoteStreamPath(path);
+
+        if (isJellyfinStream || isEmbyStream || isSharedRemoteStream) {
+          final animeNameCandidate =
+              SharedRemoteHistoryHelper.firstNonEmptyString([
+            SharedRemoteHistoryHelper.normalizeHistoryName(_animeTitle),
+            SharedRemoteHistoryHelper.normalizeHistoryName(
+              _initialHistoryItem?.animeName,
+            ),
+            SharedRemoteHistoryHelper.normalizeHistoryName(finalAnimeName),
+          ]);
+          if (animeNameCandidate != null) {
+            finalAnimeName = animeNameCandidate;
+          }
+
+          final episodeTitleCandidate =
+              SharedRemoteHistoryHelper.firstNonEmptyString([
+            _episodeTitle,
+            _initialHistoryItem?.episodeTitle,
+            finalEpisodeTitle,
+          ]);
+          if (episodeTitleCandidate != null) {
+            finalEpisodeTitle = episodeTitleCandidate;
+          }
+
+          debugPrint(
+            '_initializeWatchHistory: 使用友好名称: $finalAnimeName - $finalEpisodeTitle',
+          );
+        }
+
+        debugPrint(
+          '已有观看记录存在，只更新播放进度: 动画=$finalAnimeName, 集数=$finalEpisodeTitle',
+        );
+
+        // 将历史记录中的弹幕ID赋值给实例变量，避免重复识别
+        _episodeId ??=
+            existingHistory.episodeId ?? _initialHistoryItem?.episodeId;
+        _animeId ??= existingHistory.animeId ?? _initialHistoryItem?.animeId;
+
+        final updatedHistory = WatchHistoryItem(
+          filePath: path,
+          animeName: finalAnimeName,
+          episodeTitle: finalEpisodeTitle,
+          episodeId: _episodeId,
+          animeId: _animeId,
+          watchProgress: existingHistory.watchProgress,
+          lastPosition: existingHistory.lastPosition,
+          duration: existingHistory.duration,
+          lastWatchTime: DateTime.now(),
+          thumbnailPath: existingHistory.thumbnailPath ??
+              _initialHistoryItem?.thumbnailPath,
+          isFromScan: existingHistory.isFromScan,
+        );
+
+        if (isJellyfinStream) {
+          try {
+            final itemId = path.replaceFirst('jellyfin://', '');
+            final syncService = JellyfinPlaybackSyncService();
+            final syncedHistory = await syncService.syncOnPlayStart(
+              itemId,
+              existingHistory,
+            );
+            if (syncedHistory != null) {
+              await WatchHistoryManager.addOrUpdateHistory(syncedHistory);
+              await _saveVideoPosition(path, syncedHistory.lastPosition);
+              debugPrint(
+                'Jellyfin同步成功，更新SharedPreferences位置: ${syncedHistory.lastPosition}ms',
+              );
+              await syncService.reportPlaybackStart(
+                itemId,
+                syncedHistory,
+                playbackSession: _currentPlaybackSession,
+              );
+            } else {
+              await WatchHistoryManager.addOrUpdateHistory(updatedHistory);
+              await syncService.reportPlaybackStart(
+                itemId,
+                updatedHistory,
+                playbackSession: _currentPlaybackSession,
+              );
+            }
+          } catch (e) {
+            debugPrint('Jellyfin同步失败，使用本地记录: $e');
+            await WatchHistoryManager.addOrUpdateHistory(updatedHistory);
+          }
+        } else if (isEmbyStream) {
+          try {
+            final itemId = path.replaceFirst('emby://', '');
+            final syncService = EmbyPlaybackSyncService();
+            final syncedHistory = await syncService.syncOnPlayStart(
+              itemId,
+              existingHistory,
+            );
+            if (syncedHistory != null) {
+              await WatchHistoryManager.addOrUpdateHistory(syncedHistory);
+              await _saveVideoPosition(path, syncedHistory.lastPosition);
+              debugPrint(
+                'Emby同步成功，更新SharedPreferences位置: ${syncedHistory.lastPosition}ms',
+              );
+              await syncService.reportPlaybackStart(
+                itemId,
+                syncedHistory,
+                playbackSession: _currentPlaybackSession,
+              );
+            } else {
+              await WatchHistoryManager.addOrUpdateHistory(updatedHistory);
+              await syncService.reportPlaybackStart(
+                itemId,
+                updatedHistory,
+                playbackSession: _currentPlaybackSession,
+              );
+            }
+          } catch (e) {
+            debugPrint('Emby同步失败，使用本地记录: $e');
+            await WatchHistoryManager.addOrUpdateHistory(updatedHistory);
+          }
+        } else {
+          await WatchHistoryManager.addOrUpdateHistory(updatedHistory);
+        }
+
+        final watchHistoryProvider = _resolveWatchHistoryProvider();
+        if (watchHistoryProvider != null) {
+          await watchHistoryProvider.addOrUpdateHistory(updatedHistory);
+        }
+        return;
+      }
+
+      final fileName = path.split('/').last;
+      final sanitizedFileName = fileName
+          .replaceAll(
+            RegExp(r'\.(mp4|mkv|avi|mov|flv|wmv)$', caseSensitive: false),
+            '',
+          )
+          .replaceAll(RegExp(r'[_\.-]'), ' ')
+          .trim();
+
+      final initialAnimeName = SharedRemoteHistoryHelper.firstNonEmptyString([
+            SharedRemoteHistoryHelper.normalizeHistoryName(_animeTitle),
+            SharedRemoteHistoryHelper.normalizeHistoryName(
+              _initialHistoryItem?.animeName,
+            ),
+            sanitizedFileName.isEmpty
+                ? null
+                : SharedRemoteHistoryHelper.normalizeHistoryName(
+                    sanitizedFileName,
+                  ),
+          ]) ??
+          '未知动画';
+
+      final initialEpisodeTitle = SharedRemoteHistoryHelper.firstNonEmptyString(
+        [_initialHistoryItem?.episodeTitle, _episodeTitle],
+      );
+
+      final initialEpisodeId = _episodeId ?? _initialHistoryItem?.episodeId;
+      final initialAnimeId = _animeId ?? _initialHistoryItem?.animeId;
+      final initialLastPosition = _position.inMilliseconds > 0
+          ? _position.inMilliseconds
+          : (_initialHistoryItem?.lastPosition ?? 0);
+      final initialDuration = _duration.inMilliseconds > 0
+          ? _duration.inMilliseconds
+          : (_initialHistoryItem?.duration ?? 0);
+      final initialProgress = _progress > 0
+          ? _progress
+          : (_initialHistoryItem?.watchProgress ?? 0.0);
+
+      final item = WatchHistoryItem(
+        filePath: path,
+        animeName: initialAnimeName,
+        episodeTitle: initialEpisodeTitle,
+        episodeId: initialEpisodeId,
+        animeId: initialAnimeId,
+        lastPosition: initialLastPosition,
+        duration: initialDuration,
+        watchProgress: initialProgress,
+        lastWatchTime: DateTime.now(),
+        thumbnailPath: _initialHistoryItem?.thumbnailPath,
+        isFromScan: _initialHistoryItem?.isFromScan ?? false,
+      );
+
+      final bool isJellyfinStream = path.startsWith('jellyfin://');
+      final bool isEmbyStream = path.startsWith('emby://');
+
+      if (isJellyfinStream) {
+        try {
+          final itemId = path.replaceFirst('jellyfin://', '');
+          final syncService = JellyfinPlaybackSyncService();
+          final syncedHistory = await syncService.syncOnPlayStart(itemId, item);
+          if (syncedHistory != null) {
+            await WatchHistoryManager.addOrUpdateHistory(syncedHistory);
+            await _saveVideoPosition(path, syncedHistory.lastPosition);
+            debugPrint(
+              'Jellyfin同步成功（新记录），更新SharedPreferences位置: ${syncedHistory.lastPosition}ms',
+            );
+            await syncService.reportPlaybackStart(
+              itemId,
+              syncedHistory,
+              playbackSession: _currentPlaybackSession,
+            );
+          } else {
+            await WatchHistoryManager.addOrUpdateHistory(item);
+            await syncService.reportPlaybackStart(
+              itemId,
+              item,
+              playbackSession: _currentPlaybackSession,
+            );
+          }
+        } catch (e) {
+          debugPrint('Jellyfin同步失败（新记录），使用本地记录: $e');
+          await WatchHistoryManager.addOrUpdateHistory(item);
+        }
+      } else if (isEmbyStream) {
+        try {
+          final itemId = path.replaceFirst('emby://', '');
+          final syncService = EmbyPlaybackSyncService();
+          final syncedHistory = await syncService.syncOnPlayStart(itemId, item);
+          if (syncedHistory != null) {
+            await WatchHistoryManager.addOrUpdateHistory(syncedHistory);
+            await _saveVideoPosition(path, syncedHistory.lastPosition);
+            debugPrint(
+              'Emby同步成功（新记录），更新SharedPreferences位置: ${syncedHistory.lastPosition}ms',
+            );
+            await syncService.reportPlaybackStart(
+              itemId,
+              syncedHistory,
+              playbackSession: _currentPlaybackSession,
+            );
+          } else {
+            await WatchHistoryManager.addOrUpdateHistory(item);
+            await syncService.reportPlaybackStart(
+              itemId,
+              item,
+              playbackSession: _currentPlaybackSession,
+            );
+          }
+        } catch (e) {
+          debugPrint('Emby同步失败（新记录），使用本地记录: $e');
+          await WatchHistoryManager.addOrUpdateHistory(item);
+        }
+      } else {
+        await WatchHistoryManager.addOrUpdateHistory(item);
+      }
+
+      _resolveWatchHistoryProvider()?.refresh();
+    } catch (e) {
+      //debugPrint('初始化观看记录时出错: $e\n$s');
+    }
+  }
+}

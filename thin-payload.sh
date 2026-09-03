@@ -1,0 +1,32 @@
+# 精简Payload文件夹 (上传到AppStore会自动区分平台, 此代码仅用于构建非签名ipa)
+
+foreachThin(){
+  for file in $1/*
+  do
+      if test -f $file
+      then
+           mime=$(file --mime-type -b $file)
+           if [ "$mime" == 'application/x-mach-binary' ]  || [ "${file##*.}"x = "dylib"x ]
+           then
+                echo thin $file
+                if xcrun -sdk iphoneos lipo -info "$file" | grep -q "Architectures in the fat file"; then
+                     xcrun -sdk iphoneos lipo "$file" -thin arm64 -output "$file"
+                else
+                     echo "$file is already thin, skipping lipo"
+                fi
+                xcrun -sdk iphoneos bitcode_strip "$file" -r -o  "$file"
+                strip -S -x "$file" -o "$file"
+           fi
+      fi
+      if test -d $file
+      then
+          foreachThin $file
+      fi
+  done
+}
+
+if [ $# eq 0 ]; then
+  echo "no argument"
+else
+  foreachThin $1
+fi

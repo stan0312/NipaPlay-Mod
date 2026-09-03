@@ -1,0 +1,318 @@
+import 'package:flutter/material.dart';
+import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:provider/provider.dart';
+import 'dart:async';
+import 'package:nipaplay/utils/video_player_state.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
+import 'video_settings_menu.dart';
+import 'package:nipaplay/widgets/desktop_transient_overlay.dart';
+
+class RightEdgeHoverMenu extends StatefulWidget {
+  const RightEdgeHoverMenu({super.key});
+
+  @override
+  State<RightEdgeHoverMenu> createState() => _RightEdgeHoverMenuState();
+}
+
+class _RightEdgeHoverMenuState extends State<RightEdgeHoverMenu> {
+  bool _isHoverAreaVisible = false;
+  bool _isMenuVisible = false;
+  OverlayEntry? _settingsMenuOverlay;
+  DesktopTransientOverlay? _settingsMenuPopup;
+  final GlobalKey _hoverAreaKey = GlobalKey();
+  final GlobalKey<VideoSettingsMenuState> _menuKey =
+      GlobalKey<VideoSettingsMenuState>();
+
+  @override
+  void dispose() {
+    _hideSettingsMenuWithoutSetState();
+    super.dispose();
+  }
+
+  void _showSettingsMenu() {
+    if (_settingsMenuOverlay != null || _settingsMenuPopup != null) return;
+
+    final renderBox =
+        _hoverAreaKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null &&
+        renderBox.hasSize &&
+        DesktopMultiWindow.isSecondaryWindow(context)) {
+      final anchorRect = renderBox.localToGlobal(Offset.zero) & renderBox.size;
+      final popup = DesktopTransientOverlay.showPopup(
+        context: context,
+        anchorRect: anchorRect,
+        size: const Size(320, 600),
+        placement: DesktopTransientWindowPlacement.right,
+        barrierDismissible: false,
+        contentBuilder: (_, close) => HoverSettingsMenuWrapper(
+          onClose: close,
+          onRequestClose: _requestCloseSettingsMenu,
+          onHover: _handlePopupHover,
+          menuKey: _menuKey,
+          standaloneWindow: true,
+        ),
+        onClosed: () {
+          _settingsMenuPopup = null;
+          if (mounted) {
+            setState(() => _isMenuVisible = false);
+          }
+        },
+      );
+      if (popup != null) {
+        _settingsMenuPopup = popup;
+        if (mounted) {
+          setState(() => _isMenuVisible = true);
+        }
+        return;
+      }
+    }
+
+    _settingsMenuOverlay = OverlayEntry(
+      builder: (context) => HoverSettingsMenuWrapper(
+        onClose: _hideSettingsMenu,
+        onRequestClose: _requestCloseSettingsMenu,
+        onHover: (isHovered) {
+          if (mounted) {
+            setState(() {
+              _isMenuVisible = isHovered;
+            });
+          }
+        },
+        menuKey: _menuKey,
+      ),
+    );
+
+    Overlay.of(context).insert(_settingsMenuOverlay!);
+    if (mounted) {
+      setState(() {
+        _isMenuVisible = true;
+      });
+    }
+  }
+
+  void _handlePopupHover(bool isHovered) {
+    if (!mounted) return;
+    setState(() => _isMenuVisible = isHovered);
+  }
+
+  void _hideSettingsMenu() {
+    _settingsMenuPopup?.close();
+    _settingsMenuPopup = null;
+    _settingsMenuOverlay?.remove();
+    _settingsMenuOverlay = null;
+    if (mounted) {
+      setState(() {
+        _isMenuVisible = false;
+      });
+    }
+  }
+
+  void _requestCloseSettingsMenu() {
+    final menuState = _menuKey.currentState;
+    if (menuState != null) {
+      menuState.requestClose();
+    } else {
+      _hideSettingsMenu();
+    }
+  }
+
+  void _hideSettingsMenuWithoutSetState() {
+    _settingsMenuPopup?.close();
+    _settingsMenuPopup = null;
+    _settingsMenuOverlay?.remove();
+    _settingsMenuOverlay = null;
+    _isMenuVisible = false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<VideoPlayerState>(
+      builder: (context, videoState, child) {
+        // 只在有视频且非手机平台时显示
+        if (!videoState.hasVideo || globals.isPhone) {
+          return const SizedBox.shrink();
+        }
+
+        return Positioned(
+          right: 0,
+          top: 0,
+          bottom: 0,
+          child: MouseRegion(
+            key: _hoverAreaKey,
+            onEnter: (_) {
+              setState(() {
+                _isHoverAreaVisible = true;
+              });
+              _showSettingsMenu();
+            },
+            onExit: (_) {
+              setState(() {
+                _isHoverAreaVisible = false;
+              });
+              // 延迟隐藏，给用户时间移动到菜单上
+              Future.delayed(const Duration(milliseconds: 200), () {
+                if (mounted && !_isHoverAreaVisible && !_isMenuVisible) {
+                  _requestCloseSettingsMenu();
+                }
+              });
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              width: _isHoverAreaVisible ? 30 : 8,
+              decoration: BoxDecoration(
+                gradient: _isHoverAreaVisible
+                    ? LinearGradient(
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                        colors: [
+                          Colors.transparent,
+                          Colors.white.withValues(alpha: 0.1),
+                          Colors.white.withValues(alpha: 0.15),
+                        ],
+                        stops: const [0.0, 0.7, 1.0],
+                      )
+                    : LinearGradient(
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                        colors: [
+                          Colors.transparent,
+                          Colors.white.withValues(alpha: 0.05),
+                        ],
+                      ),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(4),
+                  bottomLeft: Radius.circular(4),
+                ),
+              ),
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 150),
+                opacity: _isHoverAreaVisible ? 1.0 : 0.7,
+                child: Container(
+                  decoration: const BoxDecoration(
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(4),
+                      bottomLeft: Radius.circular(4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class HoverSettingsMenuWrapper extends StatefulWidget {
+  final VoidCallback onClose;
+  final VoidCallback onRequestClose;
+  final ValueChanged<bool> onHover;
+  final GlobalKey<VideoSettingsMenuState> menuKey;
+  final bool standaloneWindow;
+
+  const HoverSettingsMenuWrapper({
+    super.key,
+    required this.onClose,
+    required this.onRequestClose,
+    required this.onHover,
+    required this.menuKey,
+    this.standaloneWindow = false,
+  });
+
+  @override
+  State<HoverSettingsMenuWrapper> createState() =>
+      _HoverSettingsMenuWrapperState();
+}
+
+class _HoverSettingsMenuWrapperState extends State<HoverSettingsMenuWrapper> {
+  bool _isMenuHovered = false;
+  bool _isMainMenuHovered = false;
+  bool _isSubMenuHovered = false;
+  Timer? _hideTimer;
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    super.dispose();
+  }
+
+  void _startHideTimer() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(milliseconds: 300), () {
+      if (mounted && !_isMenuHovered) {
+        widget.onRequestClose();
+      }
+    });
+  }
+
+  void _updateHoverState() {
+    final bool isHovered = _isMainMenuHovered || _isSubMenuHovered;
+
+    if (_isMenuHovered != isHovered) {
+      setState(() {
+        _isMenuHovered = isHovered;
+      });
+    } else {
+      _isMenuHovered = isHovered;
+    }
+
+    widget.onHover(isHovered);
+
+    if (isHovered) {
+      _hideTimer?.cancel();
+    } else {
+      _startHideTimer();
+    }
+  }
+
+  void _handleMainMenuHover(bool isHovered) {
+    _isMainMenuHovered = isHovered;
+    _updateHoverState();
+  }
+
+  void _handleSubMenuHover(bool isHovered) {
+    _isSubMenuHovered = isHovered;
+    _updateHoverState();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 使用自定义的鼠标检测包装VideoSettingsMenu
+    return _HoverDetectionWrapper(
+      onHover: _handleMainMenuHover,
+      child: VideoSettingsMenu(
+        key: widget.menuKey,
+        onClose: widget.onClose,
+        onHoverChanged: _handleSubMenuHover,
+        standaloneWindow: widget.standaloneWindow,
+      ),
+    );
+  }
+}
+
+/// 自定义的悬浮检测包装器，在不破坏VideoSettingsMenu布局的情况下添加悬浮检测
+class _HoverDetectionWrapper extends StatefulWidget {
+  final Widget child;
+  final ValueChanged<bool> onHover;
+
+  const _HoverDetectionWrapper({
+    required this.child,
+    required this.onHover,
+  });
+
+  @override
+  State<_HoverDetectionWrapper> createState() => _HoverDetectionWrapperState();
+}
+
+class _HoverDetectionWrapperState extends State<_HoverDetectionWrapper> {
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      onEnter: (_) => widget.onHover(true),
+      onExit: (_) => widget.onHover(false),
+      child: widget.child,
+    );
+  }
+}

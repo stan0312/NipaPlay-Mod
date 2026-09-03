@@ -1,0 +1,2339 @@
+import 'dart:async';
+import 'package:flutter/cupertino.dart' as cupertino;
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:provider/provider.dart';
+import 'package:nipaplay/models/jellyfin_model.dart';
+import 'package:nipaplay/models/emby_model.dart';
+import 'package:nipaplay/models/watch_history_model.dart';
+import 'package:nipaplay/pages/media_server_detail_page.dart';
+import 'package:nipaplay/providers/appearance_settings_provider.dart';
+import 'package:nipaplay/providers/jellyfin_provider.dart';
+import 'package:nipaplay/providers/emby_provider.dart';
+import 'package:nipaplay/services/jellyfin_service.dart';
+import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_card.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_page_scaffold.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/local_library_control_bar.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/network_media_server_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/media_library_sort_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/jellyfin_library_card.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/emby_library_card.dart';
+import 'package:kmbal_ionicons/kmbal_ionicons.dart';
+import 'package:nipaplay/utils/app_accent_color.dart';
+import 'package:nipaplay/media_library/adaptive_media_library_primitives.dart';
+import 'package:nipaplay/app/app_display_surface.dart';
+import 'package:nipaplay/app/app_display_surface_scope.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+import 'package:nipaplay/widgets/in_view_dialog.dart';
+
+enum NetworkMediaServerType { jellyfin, emby }
+
+// 通用媒体项接口
+abstract class NetworkMediaItem {
+  String get id;
+  String get title;
+  String? get imagePath;
+  String? get overview;
+  int? get episodeCount;
+  int? get watchedEpisodeCount;
+  double? get userRating;
+  bool get isFolder;
+  String? get progress; // 新增
+  bool get isPlayed; // 服务器端记录的已观看状态
+}
+
+// 通用媒体库接口
+abstract class NetworkMediaLibrary {
+  String get id;
+  String get name;
+  String get type;
+}
+
+// Jellyfin适配器
+class JellyfinMediaItemAdapter implements NetworkMediaItem {
+  final JellyfinMediaItem _item;
+  JellyfinMediaItemAdapter(this._item);
+
+  @override
+  String get id => _item.id;
+  @override
+  String get title => _item.name;
+  @override
+  String? get imagePath => _item.imagePrimaryTag;
+  @override
+  String? get overview => _item.overview;
+  @override
+  int? get episodeCount => null; // Jellyfin doesn't have this field directly
+  @override
+  int? get watchedEpisodeCount =>
+      null; // Jellyfin doesn't have this field directly
+  @override
+  double? get userRating => null; // Convert from string if needed
+  @override
+  bool get isFolder => _item.isFolder;
+
+  @override
+  String? get progress {
+    if (_item.userData?.played == true) return '已看完';
+    // Jellyfin 列表接口可能不返回具体的播放进度集数，如果需要更详细的可以后续扩展
+    return null;
+  }
+
+  @override
+  bool get isPlayed => _item.userData?.played == true;
+
+  JellyfinMediaItem get originalItem => _item;
+}
+
+class JellyfinLibraryAdapter implements NetworkMediaLibrary {
+  final JellyfinLibrary _library;
+  JellyfinLibraryAdapter(this._library);
+
+  @override
+  String get id => _library.id;
+  @override
+  String get name => _library.name;
+  @override
+  String get type => _library.type ?? 'unknown';
+
+  JellyfinLibrary get originalLibrary => _library;
+}
+
+// Emby适配器
+class EmbyMediaItemAdapter implements NetworkMediaItem {
+  final EmbyMediaItem _item;
+  EmbyMediaItemAdapter(this._item);
+
+  @override
+  String get id => _item.id;
+  @override
+  String get title => _item.name;
+  @override
+  String? get imagePath => _item.imagePrimaryTag;
+  @override
+  String? get overview => _item.overview;
+  @override
+  int? get episodeCount => null; // Emby doesn't have this field directly
+  @override
+  int? get watchedEpisodeCount => null; // Emby doesn't have this field directly
+  @override
+  double? get userRating => null; // Convert from string if needed
+  @override
+  bool get isFolder => _item.isFolder;
+
+  @override
+  String? get progress {
+    if (_item.userData?.played == true) return '已看完';
+    return null;
+  }
+
+  @override
+  bool get isPlayed => _item.userData?.played == true;
+
+  EmbyMediaItem get originalItem => _item;
+}
+
+class EmbyLibraryAdapter implements NetworkMediaLibrary {
+  final EmbyLibrary _library;
+  EmbyLibraryAdapter(this._library);
+
+  @override
+  String get id => _library.id;
+  @override
+  String get name => _library.name;
+  @override
+  String get type => _library.type ?? 'unknown';
+
+  EmbyLibrary get originalLibrary => _library;
+}
+
+class NetworkMediaLibraryView extends StatefulWidget {
+  final NetworkMediaServerType serverType;
+  final void Function(WatchHistoryItem item)? onPlayEpisode;
+
+  const NetworkMediaLibraryView({
+    super.key,
+    required this.serverType,
+    this.onPlayEpisode,
+  });
+
+  @override
+  State<NetworkMediaLibraryView> createState() =>
+      _NetworkMediaLibraryViewState();
+}
+
+class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
+    with AutomaticKeepAliveClientMixin {
+  static Color get _accentColor => AppAccentColors.current;
+
+  List<NetworkMediaItem> _mediaItems = [];
+  String? _error;
+  Timer? _refreshTimer;
+  final ScrollController _gridScrollController = ScrollController();
+
+  // 库视图状态
+  String? _selectedLibraryId;
+  bool _isShowingLibraryContent = false;
+  bool _isLoadingLibraryContent = false;
+  bool _isFolderNavigation = false;
+  final List<_FolderNode> _folderStack = [];
+
+  // 搜索状态
+  final TextEditingController _searchController = TextEditingController();
+  LocalLibrarySortType _currentSort = LocalLibrarySortType.dateAdded;
+  bool _isSearching = false;
+  bool _isSearchLoading = false;
+  List<NetworkMediaItem> _searchResults = [];
+  List<NetworkMediaItem> _filteredMediaItems = [];
+  Timer? _searchDebounceTimer;
+  bool _showOnlyUnwatched = false;
+
+  Widget _buildPlainActionButton({
+    required IconData icon,
+    required String text,
+    required VoidCallback? onPressed,
+    Color? baseColor,
+  }) {
+    return AdaptiveMediaActionButton(
+      onPressed: onPressed,
+      desktopIcon: icon,
+      phoneIcon: switch (icon) {
+        Icons.cloud => cupertino.CupertinoIcons.cloud,
+        Icons.refresh => cupertino.CupertinoIcons.refresh,
+        Icons.arrow_back => cupertino.CupertinoIcons.back,
+        _ => cupertino.CupertinoIcons.ellipsis,
+      },
+      label: text,
+      emphasis: baseColor == Colors.red
+          ? AdaptiveMediaActionEmphasis.destructive
+          : AdaptiveMediaActionEmphasis.plain,
+    );
+  }
+
+  void _applySortAndFilter() {
+    if (!mounted) return;
+    setState(() {
+      String query = _searchController.text.toLowerCase().trim();
+
+      // 基础过滤
+      List<NetworkMediaItem> source = _mediaItems;
+      if (query.isNotEmpty) {
+        source = source
+            .where((item) => item.title.toLowerCase().contains(query))
+            .toList();
+      }
+
+      // 只看未观看过滤
+      if (_showOnlyUnwatched) {
+        source = source.where((item) => !item.isPlayed).toList();
+      }
+
+      if (_showRemoteSortDropdown) {
+        _filteredMediaItems = source;
+        return;
+      }
+
+      // 排序
+      switch (_currentSort) {
+        case LocalLibrarySortType.name:
+          source.sort((a, b) => a.title.compareTo(b.title));
+          break;
+        case LocalLibrarySortType.dateAdded:
+          // 远程服务目前没有统一的添加日期，这里暂不做变动或使用原始顺序
+          break;
+        case LocalLibrarySortType.rating:
+          break;
+      }
+      _filteredMediaItems = source;
+    });
+  }
+
+  // 切换“只看未观看”过滤（排序弹层开关会调用）
+  void _toggleShowOnlyUnwatched() {
+    setState(() {
+      _showOnlyUnwatched = !_showOnlyUnwatched;
+    });
+    _applySortAndFilter();
+  }
+
+  // 手动刷新当前视图（媒体库列表 / 媒体库内容 / 文件夹）
+  Future<void> _manualRefresh() async {
+    if (!mounted) return;
+    if (_isShowingLibraryContent) {
+      if (_isFolderNavigation) {
+        final folderId = _currentFolderId ?? _selectedLibraryId;
+        if (folderId != null) {
+          setState(() {
+            _isLoadingLibraryContent = true;
+            _error = null;
+          });
+          await _loadFolderItems(folderId);
+        }
+      } else if (_selectedLibraryId != null) {
+        setState(() {
+          _isLoadingLibraryContent = true;
+          _error = null;
+        });
+        await _loadLibraryContent(_selectedLibraryId!);
+      }
+    } else {
+      await _loadData();
+    }
+  }
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final provider = _provider;
+        provider.addListener(_onProviderChanged);
+        _loadData(); // Initial load based on current provider state
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    try {
+      if (mounted) {
+        final provider = _provider;
+        provider.removeListener(_onProviderChanged);
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print("Error removing Provider listener in NetworkMediaLibraryView: $e");
+    }
+    _refreshTimer?.cancel();
+    _searchDebounceTimer?.cancel();
+    _gridScrollController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onProviderChanged() {
+    if (mounted) {
+      _loadData();
+    }
+  }
+
+  // 获取对应的provider和service
+  dynamic get _provider {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        return Provider.of<JellyfinProvider>(context, listen: false);
+      case NetworkMediaServerType.emby:
+        return Provider.of<EmbyProvider>(context, listen: false);
+    }
+  }
+
+  dynamic get _service {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        return JellyfinService.instance;
+      case NetworkMediaServerType.emby:
+        return EmbyService.instance;
+    }
+  }
+
+  String get _serverName {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        return 'Jellyfin';
+      case NetworkMediaServerType.emby:
+        return 'Emby';
+    }
+  }
+
+  MediaLibraryType get _mediaLibraryType {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        return MediaLibraryType.jellyfin;
+      case NetworkMediaServerType.emby:
+        return MediaLibraryType.emby;
+    }
+  }
+
+  String? get _currentFolderId =>
+      _folderStack.isNotEmpty ? _folderStack.last.id : null;
+
+  bool get _isAtFolderRoot => _folderStack.length <= 1;
+
+  bool get _showRemoteSortDropdown =>
+      _isShowingLibraryContent && !_isSearching && !_isFolderNavigation;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+
+    final provider = _provider;
+    final service = _service;
+    final isLargeScreen = NipaplayLargeScreenModeScope.isActiveOf(context);
+
+    if (!provider.isConnected || provider.selectedLibraryIds.isEmpty) {
+      if (isLargeScreen) {
+        return NipaplayLargeScreenEmptyState(
+          icon: Icons.dns_outlined,
+          title: '还没有连接 $_serverName',
+          subtitle: '添加服务器后可以在大屏模式中浏览、搜索并播放媒体库内容',
+          action: NipaplayLargeScreenActionButton(
+            icon: Icons.cloud_outlined,
+            label: '添加媒体服务器',
+            onPressed: _showServerDialog,
+          ),
+        );
+      }
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text(
+                '媒体库为空。\n观看过的动画将显示在这里。',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey, fontSize: 16),
+              ),
+              SizedBox(height: 16),
+              _buildPlainActionButton(
+                icon: Icons.cloud,
+                text: '添加媒体服务器',
+                onPressed: _showServerDialog,
+                baseColor: _accentColor,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 根据当前状态决定显示内容
+    if (isLargeScreen) {
+      if (_isShowingLibraryContent) {
+        return _buildLargeScreenLibraryContentView(provider, service);
+      }
+      return _buildLargeScreenLibrariesView(provider, service);
+    }
+
+    if (_isShowingLibraryContent) {
+      return _buildLibraryContentView(provider, service);
+    } else {
+      return _buildLibrariesView(provider, service);
+    }
+  }
+
+  Widget _buildLargeScreenLibrariesView(dynamic provider, dynamic service) {
+    final selectedLibraries = _getSelectedLibraries(provider);
+
+    if (selectedLibraries.isEmpty) {
+      return NipaplayLargeScreenEmptyState(
+        icon: Icons.video_library_outlined,
+        title: '没有可用的媒体库',
+        subtitle: '刷新服务器媒体库，或在服务器设置中选择要显示的库',
+        action: NipaplayLargeScreenActionButton(
+          icon: Icons.refresh_rounded,
+          label: '刷新媒体库',
+          onPressed: _loadData,
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        _buildLargeScreenRemoteTopBar(
+          title: '$_serverName 媒体库',
+          onSearchChanged: _onMainSearchChanged,
+          showBack: false,
+          showRemoteSort: false,
+        ),
+        if (_isSearching) ...[
+          const SizedBox(height: 14),
+          _buildLargeScreenLocalSortRow(),
+        ],
+        const SizedBox(height: 18),
+        Expanded(
+          child: _isSearching
+              ? _buildLargeScreenMediaGrid(_searchResults)
+              : GridView.builder(
+                  controller: _gridScrollController,
+                  padding: const EdgeInsets.only(bottom: 96),
+                  physics: const AlwaysScrollableScrollPhysics(
+                    parent: BouncingScrollPhysics(),
+                  ),
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 420,
+                    mainAxisExtent: 210,
+                    crossAxisSpacing: 18,
+                    mainAxisSpacing: 18,
+                  ),
+                  itemCount: selectedLibraries.length,
+                  itemBuilder: (context, index) {
+                    return _buildLargeScreenLibraryCard(
+                      selectedLibraries[index],
+                      autofocus: index == 0,
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLargeScreenLibraryContentView(
+      dynamic provider, dynamic service) {
+    if (_isLoadingLibraryContent) {
+      return const Center(
+        child: AdaptiveMediaActivityIndicator(),
+      );
+    }
+
+    if (_error != null) {
+      return NipaplayLargeScreenEmptyState(
+        icon: Icons.error_outline_rounded,
+        title: '加载媒体库失败',
+        subtitle: _error!,
+        action: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NipaplayLargeScreenActionButton(
+              icon: Icons.refresh_rounded,
+              label: '重试',
+              onPressed: _retryCurrentView,
+            ),
+            const SizedBox(width: 12),
+            NipaplayLargeScreenActionButton(
+              icon: Icons.arrow_back_rounded,
+              label: '返回',
+              onPressed: _handleBackNavigation,
+            ),
+          ],
+        ),
+      );
+    }
+
+    final items = _isSearching ? _searchResults : _filteredMediaItems;
+    final title = _getCurrentViewTitle(provider);
+
+    return Column(
+      children: [
+        _buildLargeScreenRemoteTopBar(
+          title: title,
+          onSearchChanged: _onSearchChanged,
+          showBack: true,
+          showRemoteSort: _showRemoteSortDropdown,
+        ),
+        if (!_showRemoteSortDropdown) ...[
+          const SizedBox(height: 14),
+          _buildLargeScreenLocalSortRow(),
+        ],
+        const SizedBox(height: 18),
+        Expanded(
+          child: _mediaItems.isEmpty
+              ? NipaplayLargeScreenEmptyState(
+                  icon: _isFolderNavigation
+                      ? Icons.folder_off_outlined
+                      : Icons.video_library_outlined,
+                  title: _isFolderNavigation ? '该文件夹为空' : '该媒体库为空',
+                  subtitle: '返回上一级或刷新服务器内容后再试',
+                  action: NipaplayLargeScreenActionButton(
+                    icon: Icons.arrow_back_rounded,
+                    label: _isFolderNavigation && !_isAtFolderRoot
+                        ? '返回上级文件夹'
+                        : '返回媒体库列表',
+                    onPressed: _handleBackNavigation,
+                  ),
+                )
+              : _buildLargeScreenMediaGrid(items),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLargeScreenRemoteTopBar({
+    required String title,
+    required ValueChanged<String> onSearchChanged,
+    required bool showBack,
+    required bool showRemoteSort,
+  }) {
+    final textColor = Theme.of(context).brightness == Brightness.dark
+        ? Colors.white
+        : const Color(0xFF151820);
+    return Row(
+      children: [
+        if (showBack) ...[
+          NipaplayLargeScreenIconButton(
+            icon: Icons.arrow_back_rounded,
+            tooltip: '返回',
+            onPressed: _handleBackNavigation,
+            autofocus: true,
+          ),
+          const SizedBox(width: 12),
+        ],
+        Expanded(
+          child: NipaplayLargeScreenTextInput(
+            controller: _searchController,
+            hintText: '搜索 $title',
+            onChanged: onSearchChanged,
+            suffix: _searchController.text.isEmpty
+                ? null
+                : AdaptiveMediaIconButton(
+                    tooltip: '清空搜索',
+                    onPressed: _clearSearch,
+                    desktopIcon: Icons.close_rounded,
+                    phoneIcon: cupertino.CupertinoIcons.clear,
+                  ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        if (showRemoteSort) ...[
+          NipaplayLargeScreenActionButton(
+            icon: Icons.sort_rounded,
+            label: _showOnlyUnwatched ? '排序·未看' : '排序',
+            onPressed: _showLargeScreenRemoteSortDialog,
+          ),
+          const SizedBox(width: 10),
+        ],
+        NipaplayLargeScreenActionButton(
+          icon: Icons.refresh_rounded,
+          label: '刷新',
+          onPressed: _manualRefresh,
+        ),
+        const SizedBox(width: 10),
+        NipaplayLargeScreenActionButton(
+          icon: Ionicons.settings_outline,
+          label: '服务器',
+          onPressed: _showServerDialog,
+        ),
+        const SizedBox(width: 14),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 260),
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              color: textColor.withValues(alpha: 0.68),
+              fontSize: 14,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLargeScreenLocalSortRow() {
+    return Row(
+      children: [
+        _buildLargeScreenSortChip(
+          label: '最近更新',
+          icon: Icons.schedule_rounded,
+          type: LocalLibrarySortType.dateAdded,
+        ),
+        const SizedBox(width: 10),
+        _buildLargeScreenSortChip(
+          label: '名称',
+          icon: Icons.sort_by_alpha_rounded,
+          type: LocalLibrarySortType.name,
+        ),
+        const SizedBox(width: 10),
+        _buildLargeScreenSortChip(
+          label: '评分',
+          icon: Icons.star_rounded,
+          type: LocalLibrarySortType.rating,
+        ),
+        const Spacer(),
+        if (_isSearchLoading)
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: AdaptiveMediaActivityIndicator(
+              color: _accentColor,
+              size: 20,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildLargeScreenSortChip({
+    required String label,
+    required IconData icon,
+    required LocalLibrarySortType type,
+  }) {
+    final selected = _currentSort == type;
+    return NipaplayLargeScreenFocusableAction(
+      onActivate: () {
+        if (_currentSort == type) return;
+        setState(() => _currentSort = type);
+        _applySortAndFilter();
+      },
+      borderRadius: BorderRadius.circular(8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      focusScale: 1.04,
+      style: NipaplayLargeScreenFocusableStyle(
+        idleBackgroundDark: selected
+            ? _accentColor.withValues(alpha: 0.26)
+            : Colors.white.withValues(alpha: 0.09),
+        idleBackgroundLight: selected
+            ? _accentColor.withValues(alpha: 0.18)
+            : Colors.white.withValues(alpha: 0.82),
+        focusStrokeColor: selected ? _accentColor : null,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenLibraryCard(
+    NetworkMediaLibrary library, {
+    required bool autofocus,
+  }) {
+    final textColor = Theme.of(context).brightness == Brightness.dark
+        ? Colors.white
+        : const Color(0xFF151820);
+    final typeLabel = library.type.isEmpty ? '媒体库' : library.type;
+
+    return NipaplayLargeScreenFocusableAction(
+      autofocus: autofocus,
+      onActivate: () => _selectLibrary(library),
+      borderRadius: BorderRadius.circular(8),
+      padding: const EdgeInsets.all(18),
+      focusScale: 1.025,
+      style: NipaplayLargeScreenFocusableStyle(
+        idleBackgroundDark: Colors.white.withValues(alpha: 0.08),
+        idleBackgroundLight: Colors.white.withValues(alpha: 0.82),
+        focusStrokeWidth: 2.4,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.video_library_outlined, color: _accentColor, size: 34),
+              const Spacer(),
+              _buildLargeScreenTinyBadge(typeLabel),
+            ],
+          ),
+          const Spacer(),
+          Text(
+            library.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: textColor,
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+              height: 1.05,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '浏览 $_serverName 中的内容',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: textColor.withValues(alpha: 0.58),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenMediaGrid(List<NetworkMediaItem> items) {
+    if (items.isEmpty) {
+      final filteredEmpty = !_isSearching && _showOnlyUnwatched;
+      return NipaplayLargeScreenEmptyState(
+        icon: filteredEmpty
+            ? Ionicons.eye_off_outline
+            : Icons.search_off_rounded,
+        title: filteredEmpty ? '没有未观看的条目' : '没有匹配结果',
+        subtitle: filteredEmpty ? '关闭“只看未观看”或刷新后再试' : '换个关键词再试试',
+      );
+    }
+
+    return GridView.builder(
+      controller: _gridScrollController,
+      padding: const EdgeInsets.only(bottom: 96),
+      physics: const AlwaysScrollableScrollPhysics(
+        parent: BouncingScrollPhysics(),
+      ),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 242,
+        mainAxisExtent: 466,
+        crossAxisSpacing: 18,
+        mainAxisSpacing: 18,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, index) {
+        return _buildLargeScreenMediaCard(
+          items[index],
+          autofocus: index == 0,
+        );
+      },
+    );
+  }
+
+  Widget _buildLargeScreenMediaCard(
+    NetworkMediaItem item, {
+    required bool autofocus,
+  }) {
+    final textColor = Theme.of(context).brightness == Brightness.dark
+        ? Colors.white
+        : const Color(0xFF151820);
+    final imageUrl = _getNetworkMediaImageUrl(item, width: 460);
+
+    return NipaplayLargeScreenFocusableAction(
+      autofocus: autofocus,
+      onActivate: () => _openMediaDetail(item),
+      borderRadius: BorderRadius.circular(8),
+      padding: EdgeInsets.zero,
+      focusScale: 1,
+      style: NipaplayLargeScreenFocusableStyle(
+        idleBackgroundDark: Colors.white.withValues(alpha: 0.07),
+        idleBackgroundLight: Colors.white.withValues(alpha: 0.82),
+        focusStrokeWidth: 2.4,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AspectRatio(
+              aspectRatio: 2 / 3,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (item.isFolder)
+                    _buildLargeScreenFolderPoster(textColor)
+                  else
+                    CachedNetworkImageWidget(
+                      imageUrl: imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __) =>
+                          _buildLargeScreenFallbackPoster(textColor),
+                    ),
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Colors.black.withValues(alpha: 0.74),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 10,
+                    left: 10,
+                    child: _buildLargeScreenTinyBadge(
+                      item.isFolder ? '文件夹' : _serverName,
+                    ),
+                  ),
+                  if (item.progress != null)
+                    Positioned(
+                      left: 10,
+                      right: 10,
+                      bottom: 10,
+                      child: Text(
+                        item.progress!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                      height: 1.15,
+                    ),
+                  ),
+                  if (item.overview != null &&
+                      item.overview!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      item.overview!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: textColor.withValues(alpha: 0.52),
+                        fontSize: 12,
+                        height: 1.26,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenFolderPoster(Color textColor) {
+    return Container(
+      color: Colors.white.withValues(alpha: 0.08),
+      child: Center(
+        child: Icon(
+          Icons.folder_open_rounded,
+          color: textColor.withValues(alpha: 0.56),
+          size: 74,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenFallbackPoster(Color textColor) {
+    return Container(
+      color: Colors.white.withValues(alpha: 0.08),
+      child: Center(
+        child: Icon(
+          Icons.movie_creation_outlined,
+          color: textColor.withValues(alpha: 0.46),
+          size: 52,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenTinyBadge(String label) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _getNetworkMediaImageUrl(NetworkMediaItem item, {int width = 300}) {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        final jellyfinItem = (item as JellyfinMediaItemAdapter).originalItem;
+        return jellyfinItem.imagePrimaryTag != null
+            ? JellyfinService.instance
+                .getImageUrl(jellyfinItem.id, width: width)
+            : '';
+      case NetworkMediaServerType.emby:
+        final embyItem = (item as EmbyMediaItemAdapter).originalItem;
+        return embyItem.imagePrimaryTag != null
+            ? EmbyService.instance.getImageUrl(embyItem.id, width: width)
+            : '';
+    }
+  }
+
+  Future<void> _showLargeScreenRemoteSortDialog() async {
+    final provider = _provider;
+    final currentSortSettings = _getCurrentRemoteSortSettings(provider);
+    final items = _buildRemoteSortItems(
+      currentSortSettings['sortBy']!,
+      currentSortSettings['sortOrder']!,
+    );
+    final selection = await showInViewDialog<_RemoteSortSelection>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.54),
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding:
+              const EdgeInsets.symmetric(horizontal: 240, vertical: 120),
+          child: NipaplayLargeScreenPanel(
+            padding: const EdgeInsets.all(18),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 560, maxWidth: 560),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const NipaplayLargeScreenSectionHeader(
+                    title: '排序',
+                    subtitle: '选择当前媒体库的排序方式',
+                  ),
+                  const SizedBox(height: 14),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildLargeScreenRemoteUnwatchedTile(context),
+                          const SizedBox(height: 8),
+                          const Padding(
+                            padding: EdgeInsets.only(left: 4, bottom: 8),
+                            child: Text(
+                              '排序方式',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          for (var index = 0;
+                              index < items.length;
+                              index++) ...[
+                            if (index > 0) const SizedBox(height: 8),
+                            _buildLargeScreenRemoteSortItem(
+                              context,
+                              items[index],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    if (selection != null) {
+      _applyRemoteSortSelection(selection);
+    }
+  }
+
+  Widget _buildLargeScreenRemoteUnwatchedTile(BuildContext dialogContext) {
+    return NipaplayLargeScreenFocusableAction(
+      isSelected: _showOnlyUnwatched,
+      onActivate: () {
+        _toggleShowOnlyUnwatched();
+        Navigator.of(dialogContext).pop();
+      },
+      borderRadius: BorderRadius.circular(8),
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Icon(
+            _showOnlyUnwatched
+                ? Ionicons.eye_off_outline
+                : Ionicons.eye_outline,
+            size: 18,
+            color: _showOnlyUnwatched ? _accentColor : null,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '只看未观看',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '仅显示服务器上还没看完的条目',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.62),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_showOnlyUnwatched)
+            Icon(
+              Icons.check_rounded,
+              size: 18,
+              color: _accentColor,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLargeScreenRemoteSortItem(
+    BuildContext dialogContext,
+    DropdownMenuItemData<_RemoteSortSelection> item,
+  ) {
+    final value = item.value;
+    final description = value.description;
+    return NipaplayLargeScreenFocusableAction(
+      isSelected: item.isSelected,
+      onActivate: () => Navigator.of(dialogContext).pop(value),
+      borderRadius: BorderRadius.circular(8),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (item.isSelected)
+                Icon(
+                  Icons.check_rounded,
+                  size: 18,
+                  color: _accentColor,
+                ),
+            ],
+          ),
+          if (description?.isNotEmpty == true) ...[
+            const SizedBox(height: 4),
+            Text(
+              description!,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.62),
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLibrariesView(dynamic provider, dynamic service) {
+    final selectedLibraries = _getSelectedLibraries(provider);
+    final showSummary =
+        context.watch<AppearanceSettingsProvider>().showAnimeCardSummary;
+
+    if (selectedLibraries.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text(
+                '没有可用的媒体库',
+                style: TextStyle(color: Colors.grey, fontSize: 16),
+              ),
+              SizedBox(height: 16),
+              _buildPlainActionButton(
+                icon: Icons.refresh,
+                text: '刷新媒体库',
+                onPressed: () => _loadData(),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        // 主页面搜索栏
+        _buildMainSearchBar(),
+        // 媒体库网格或搜索结果
+        Expanded(
+          child: RepaintBoundary(
+            child: AdaptiveMediaScrollbar(
+              controller: _gridScrollController,
+              child: _isSearching
+                  ? GridView.builder(
+                      controller: _gridScrollController,
+                      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: showSummary
+                            ? HorizontalAnimeCard.detailedGridMaxCrossAxisExtent
+                            : HorizontalAnimeCard.compactGridMaxCrossAxisExtent,
+                        mainAxisExtent: showSummary
+                            ? HorizontalAnimeCard.detailedCardHeight
+                            : HorizontalAnimeCard.compactCardHeight,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      cacheExtent: 800,
+                      clipBehavior: Clip.hardEdge,
+                      physics: const AlwaysScrollableScrollPhysics(
+                          parent: BouncingScrollPhysics()),
+                      addAutomaticKeepAlives: false,
+                      addRepaintBoundaries: true,
+                      itemCount: _searchResults.length,
+                      itemBuilder: (context, index) {
+                        final item = _searchResults[index];
+                        return _buildMediaCard(item);
+                      },
+                    )
+                  : GridView.builder(
+                      controller: _gridScrollController,
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 400,
+                        childAspectRatio: 16 / 9,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      cacheExtent: 800,
+                      clipBehavior: Clip.hardEdge,
+                      physics: const AlwaysScrollableScrollPhysics(
+                          parent: BouncingScrollPhysics()),
+                      addAutomaticKeepAlives: false,
+                      addRepaintBoundaries: true,
+                      itemCount: selectedLibraries.length,
+                      itemBuilder: (context, index) {
+                        final library = selectedLibraries[index];
+                        return _buildLibraryCard(library);
+                      },
+                    ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLibraryContentView(dynamic provider, dynamic service) {
+    final showSummary =
+        context.watch<AppearanceSettingsProvider>().showAnimeCardSummary;
+    if (_isLoadingLibraryContent) {
+      return const Center(
+        child: AdaptiveMediaActivityIndicator(),
+      );
+    }
+
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text('加载媒体库内容失败: $_error',
+                  style: TextStyle(color: Colors.white70)),
+              SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildPlainActionButton(
+                    icon: Icons.refresh,
+                    text: '重试',
+                    onPressed: _retryCurrentView,
+                  ),
+                  SizedBox(width: 16),
+                  _buildPlainActionButton(
+                    icon: Icons.arrow_back,
+                    text: '返回',
+                    onPressed: _handleBackNavigation,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_mediaItems.isEmpty) {
+      return Column(
+        children: [
+          // 已整合返回按钮和标题的控制栏
+          _buildSearchBar(),
+          // 空内容提示
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _isFolderNavigation ? '该文件夹为空。' : '该媒体库为空。',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.grey, fontSize: 16),
+                    ),
+                    SizedBox(height: 16),
+                    _buildPlainActionButton(
+                      icon: Icons.arrow_back,
+                      text: _isFolderNavigation && !_isAtFolderRoot
+                          ? '返回上级文件夹'
+                          : '返回媒体库列表',
+                      onPressed: _handleBackNavigation,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        // 搜索栏（在媒体库内容视图中显示，已整合返回按钮和标题）
+        if (_isShowingLibraryContent) _buildSearchBar(),
+        // 媒体内容网格/文件夹列表
+        Expanded(
+          child: RepaintBoundary(
+            child: AdaptiveMediaScrollbar(
+              controller: _gridScrollController,
+              child: _isFolderNavigation
+                  ? _buildFolderListView()
+                  : (_isSearching ? _searchResults : _filteredMediaItems)
+                          .isEmpty
+                      ? _buildEmptyResultsPlaceholder()
+                      : GridView.builder(
+                          controller: _gridScrollController,
+                          gridDelegate:
+                              SliverGridDelegateWithMaxCrossAxisExtent(
+                            maxCrossAxisExtent: showSummary
+                                ? HorizontalAnimeCard.detailedGridMaxCrossAxisExtent
+                                : HorizontalAnimeCard.compactGridMaxCrossAxisExtent,
+                            mainAxisExtent: showSummary
+                                ? HorizontalAnimeCard.detailedCardHeight
+                                : HorizontalAnimeCard.compactCardHeight,
+                            crossAxisSpacing: 16,
+                            mainAxisSpacing: 16,
+                          ),
+                          padding: const EdgeInsets.all(16),
+                          cacheExtent: 800,
+                          clipBehavior: Clip.hardEdge,
+                          physics: const AlwaysScrollableScrollPhysics(
+                              parent: BouncingScrollPhysics()),
+                          addAutomaticKeepAlives: false,
+                          addRepaintBoundaries: true,
+                          itemCount: _isSearching
+                              ? _searchResults.length
+                              : _filteredMediaItems.length,
+                          itemBuilder: (context, index) {
+                            final item = _isSearching
+                                ? _searchResults[index]
+                                : _filteredMediaItems[index];
+                            return _buildMediaCard(item);
+                          },
+                        ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyResultsPlaceholder() {
+    final filteredEmpty = !_isSearching && _showOnlyUnwatched;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              filteredEmpty
+                  ? Ionicons.eye_off_outline
+                  : Icons.search_off_rounded,
+              color: Colors.grey,
+              size: 48,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              filteredEmpty ? '没有未观看的条目' : '没有匹配结果',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey, fontSize: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getCurrentViewTitle(dynamic provider) {
+    if (_isFolderNavigation && _folderStack.isNotEmpty) {
+      return _folderStack.last.name;
+    }
+
+    // 直接实现获取选中媒体库名称的逻辑
+    try {
+      final selectedLibraries = _getSelectedLibraries(provider);
+      final currentLibrary = selectedLibraries.firstWhere(
+        (l) => l.id == _selectedLibraryId,
+        orElse: () => selectedLibraries.isNotEmpty
+            ? selectedLibraries.first
+            : selectedLibraries.first,
+      );
+      return currentLibrary.name;
+    } catch (_) {
+      return '媒体库';
+    }
+  }
+
+  LocalLibraryActionControl _buildServerSettingsAction() {
+    return LocalLibraryActionControl(
+      label: '$_serverName服务器设置',
+      desktopIcon: Ionicons.settings_outline,
+      phoneIcon: cupertino.CupertinoIcons.settings,
+      onPressed: _showServerDialog,
+    );
+  }
+
+  Widget _buildLibraryCard(NetworkMediaLibrary library) {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        final jellyfinLibrary =
+            (library as JellyfinLibraryAdapter).originalLibrary;
+        return JellyfinLibraryCard(
+          key: ValueKey('library_${library.id}'),
+          library: jellyfinLibrary,
+          onTap: () => _selectLibrary(library),
+        );
+      case NetworkMediaServerType.emby:
+        final embyLibrary = (library as EmbyLibraryAdapter).originalLibrary;
+        return EmbyLibraryCard(
+          key: ValueKey('library_${library.id}'),
+          library: embyLibrary,
+          onTap: () => _selectLibrary(library),
+        );
+    }
+  }
+
+  Widget _buildMediaCard(NetworkMediaItem item) {
+    String imageUrl = '';
+    String uniqueId = '';
+
+    // 根据服务器类型获取正确的图片URL和唯一ID
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        final jellyfinItem = (item as JellyfinMediaItemAdapter).originalItem;
+        uniqueId = 'jellyfin_${jellyfinItem.id}';
+        imageUrl = jellyfinItem.imagePrimaryTag != null
+            ? JellyfinService.instance.getImageUrl(jellyfinItem.id, width: 300)
+            : '';
+        break;
+      case NetworkMediaServerType.emby:
+        final embyItem = (item as EmbyMediaItemAdapter).originalItem;
+        uniqueId = 'emby_${embyItem.id}';
+        imageUrl = embyItem.imagePrimaryTag != null
+            ? EmbyService.instance.getImageUrl(embyItem.id, width: 300)
+            : '';
+        break;
+    }
+
+    return HorizontalAnimeCard(
+      key: ValueKey(uniqueId),
+      title: item.title,
+      imageUrl: imageUrl,
+      source: _serverName,
+      rating: item.userRating,
+      onTap: () => _openMediaDetail(item),
+      summary: item.overview,
+      progress: item.progress,
+    );
+  }
+
+  Widget _buildFolderListView() {
+    final items = _isSearching ? _searchResults : _mediaItems;
+
+    return ListView.separated(
+      controller: _gridScrollController,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      itemCount: items.length,
+      separatorBuilder: (context, index) => const Divider(
+        height: 1,
+        color: Colors.white12,
+      ),
+      itemBuilder: (context, index) {
+        final item = items[index];
+        final icon = item.isFolder
+            ? Ionicons.folder_outline
+            : Ionicons.play_circle_outline;
+
+        return AdaptiveMediaListTile(
+          leading: Icon(icon, color: Colors.white70, size: 20),
+          title: Text(
+            item.title,
+            style: TextStyle(color: Colors.white, fontSize: 14),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: item.isFolder
+              ? null
+              : const Text(
+                  '点击查看详情',
+                  style: TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+          onTap: () => _openMediaDetail(item),
+        );
+      },
+    );
+  }
+
+  // 获取选中的媒体库列表
+  List<NetworkMediaLibrary> _getSelectedLibraries(dynamic provider) {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        final jellyfinProvider = provider as JellyfinProvider;
+        return jellyfinProvider.availableLibraries
+            .where((library) =>
+                jellyfinProvider.selectedLibraryIds.contains(library.id))
+            .map((lib) => JellyfinLibraryAdapter(lib))
+            .toList();
+      case NetworkMediaServerType.emby:
+        final embyProvider = provider as EmbyProvider;
+        return embyProvider.availableLibraries
+            .where((library) =>
+                embyProvider.selectedLibraryIds.contains(library.id))
+            .map((lib) => EmbyLibraryAdapter(lib))
+            .toList();
+    }
+  }
+
+  // 加载数据
+  Future<void> _loadData() async {
+    if (!mounted) return;
+
+    final provider = _provider;
+
+    if (!provider.isConnected || provider.selectedLibraryIds.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _mediaItems.clear();
+          _error = null;
+          _selectedLibraryId = null;
+          _isShowingLibraryContent = false;
+          _isFolderNavigation = false;
+          _folderStack.clear();
+        });
+      }
+      return;
+    }
+
+    // 如果当前正在显示单个媒体库内容，不要重新加载全局内容
+    if (_isShowingLibraryContent && _selectedLibraryId != null) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _error = null;
+      });
+    }
+
+    try {
+      final service = _service;
+      List<dynamic> items;
+
+      switch (widget.serverType) {
+        case NetworkMediaServerType.jellyfin:
+          items = await (service as JellyfinService).getLatestMediaItems(
+            limit: 99999,
+            sortBy: provider.currentSortBy,
+            sortOrder: provider.currentSortOrder,
+          );
+          break;
+        case NetworkMediaServerType.emby:
+          items = await (service as EmbyService).getLatestMediaItems(
+            limitPerLibrary: 99999,
+            totalLimit: 99999,
+            sortBy: provider.currentSortBy,
+            sortOrder: provider.currentSortOrder,
+          );
+          break;
+      }
+
+      if (mounted && !_isShowingLibraryContent) {
+        setState(() {
+          _mediaItems = _convertToNetworkMediaItems(items);
+          _applySortAndFilter();
+        });
+      }
+      _setupRefreshTimer();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  // 构建搜索栏（单个媒体库视图）
+  Widget _buildSearchBar() {
+    String? title;
+    if (_isShowingLibraryContent) {
+      title = _getCurrentViewTitle(_provider);
+    }
+
+    final showLocalSort = !_showRemoteSortDropdown;
+    final trailingActions = [
+      _buildRefreshAction(),
+      _buildServerSettingsAction(),
+      if (_showRemoteSortDropdown) _buildRemoteSortDropdown(),
+    ];
+
+    return LocalLibraryControlBar(
+      showBackButton: _isShowingLibraryContent,
+      onBack: _handleBackNavigation,
+      title: title,
+      searchController: _searchController,
+      currentSort: _currentSort,
+      onSearchChanged: _onSearchChanged,
+      onSortChanged: showLocalSort
+          ? (type) {
+              setState(() => _currentSort = type);
+              _applySortAndFilter();
+            }
+          : null,
+      showSort: showLocalSort,
+      trailingActions: trailingActions,
+    );
+  }
+
+  // 构建主页面搜索栏（媒体库列表视图）
+  Widget _buildMainSearchBar() {
+    return LocalLibraryControlBar(
+      searchController: _searchController,
+      currentSort: _currentSort,
+      onSearchChanged: _onMainSearchChanged,
+      onSortChanged: (type) {
+        setState(() => _currentSort = type);
+        _applySortAndFilter();
+      },
+      trailingActions: [
+        _buildRefreshAction(),
+        _buildServerSettingsAction(),
+      ],
+    );
+  }
+
+  // 搜索输入变化处理（单个媒体库）
+  void _onSearchChanged(String query) {
+    // 取消之前的搜索定时器
+    _searchDebounceTimer?.cancel();
+
+    if (_isFolderNavigation) {
+      if (query.isEmpty) {
+        setState(() {
+          _isSearching = false;
+          _searchResults.clear();
+          _isSearchLoading = false;
+        });
+        return;
+      }
+
+      final keyword = query.trim().toLowerCase();
+      final results = _mediaItems
+          .where((item) => item.title.toLowerCase().contains(keyword))
+          .toList();
+
+      setState(() {
+        _isSearching = true;
+        _searchResults = results;
+        _isSearchLoading = false;
+      });
+      return;
+    }
+
+    if (query.isEmpty) {
+      setState(() {
+        _isSearching = false;
+        _searchResults.clear();
+        _isSearchLoading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearchLoading = true;
+    });
+
+    // 设置新的搜索定时器（防抖动）
+    _searchDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      _performSearch(query);
+    });
+  }
+
+  // 主页面搜索输入变化处理（跨媒体库）
+  void _onMainSearchChanged(String query) {
+    // 取消之前的搜索定时器
+    _searchDebounceTimer?.cancel();
+
+    if (query.isEmpty) {
+      setState(() {
+        _isSearching = false;
+        _searchResults.clear();
+        _isSearchLoading = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearchLoading = true;
+    });
+
+    // 设置新的搜索定时器（防抖动）
+    _searchDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      _performCrossLibrarySearch(query);
+    });
+  }
+
+  // 执行搜索（单个媒体库）
+  Future<void> _performSearch(String query) async {
+    if (!mounted || query.trim().isEmpty) return;
+
+    try {
+      final service = _service;
+      List<dynamic> searchResults = [];
+
+      switch (widget.serverType) {
+        case NetworkMediaServerType.jellyfin:
+          if (_selectedLibraryId != null) {
+            searchResults = await (service as JellyfinService).searchInLibrary(
+              _selectedLibraryId!,
+              query,
+              limit: 50,
+            );
+          } else {
+            searchResults = await (service as JellyfinService).searchMediaItems(
+              query,
+              limit: 50,
+            );
+          }
+          break;
+        case NetworkMediaServerType.emby:
+          if (_selectedLibraryId != null) {
+            searchResults = await (service as EmbyService).searchInLibrary(
+              _selectedLibraryId!,
+              query,
+              limit: 50,
+            );
+          } else {
+            searchResults = await (service as EmbyService).searchMediaItems(
+              query,
+              limit: 50,
+            );
+          }
+          break;
+      }
+
+      if (mounted) {
+        setState(() {
+          _isSearching = true;
+          _searchResults = _convertToNetworkMediaItems(searchResults);
+          _isSearchLoading = false;
+        });
+
+        debugPrint(
+            '[$_serverName] 搜索 "$query" 找到 ${_searchResults.length} 个结果');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSearchLoading = false;
+          _error = '搜索失败: $e';
+        });
+      }
+      debugPrint('[$_serverName] 搜索失败: $e');
+    }
+  }
+
+  // 执行跨媒体库搜索
+  Future<void> _performCrossLibrarySearch(String query) async {
+    if (!mounted || query.trim().isEmpty) return;
+
+    try {
+      final service = _service;
+      final provider = _provider;
+      final selectedLibraries = _getSelectedLibraries(provider);
+      List<dynamic> allSearchResults = [];
+
+      // 遍历所有选中的媒体库
+      for (final library in selectedLibraries) {
+        if (library.type.toLowerCase() == 'mixed') {
+          continue;
+        }
+        try {
+          List<dynamic> libraryResults = [];
+
+          switch (widget.serverType) {
+            case NetworkMediaServerType.jellyfin:
+              libraryResults =
+                  await (service as JellyfinService).searchInLibrary(
+                library.id,
+                query,
+                limit: 50,
+              );
+              break;
+            case NetworkMediaServerType.emby:
+              libraryResults = await (service as EmbyService).searchInLibrary(
+                library.id,
+                query,
+                limit: 50,
+              );
+              break;
+          }
+
+          allSearchResults.addAll(libraryResults);
+          debugPrint(
+              '[$_serverName] 在媒体库 "${library.name}" 中搜索 "$query" 找到 ${libraryResults.length} 个结果');
+        } catch (e) {
+          debugPrint('[$_serverName] 在媒体库 "${library.name}" 中搜索失败: $e');
+          // 继续搜索其他媒体库
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _isSearching = true;
+          _searchResults = _convertToNetworkMediaItems(allSearchResults);
+          _isSearchLoading = false;
+        });
+
+        debugPrint(
+            '[$_serverName] 跨媒体库搜索 "$query" 共找到 ${_searchResults.length} 个结果');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSearchLoading = false;
+          _error = '跨媒体库搜索失败: $e';
+        });
+      }
+      debugPrint('[$_serverName] 跨媒体库搜索失败: $e');
+    }
+  }
+
+  // 清空搜索
+  void _clearSearch() {
+    _searchController.clear();
+    _searchDebounceTimer?.cancel();
+    setState(() {
+      _isSearching = false;
+      _searchResults.clear();
+      _isSearchLoading = false;
+    });
+  }
+
+  void _handleBackNavigation() {
+    if (_isFolderNavigation && !_isAtFolderRoot) {
+      _navigateUpFolder();
+      return;
+    }
+    _backToLibraries();
+  }
+
+  void _navigateUpFolder() {
+    if (_folderStack.length <= 1) {
+      _backToLibraries();
+      return;
+    }
+
+    _clearSearch();
+
+    if (mounted) {
+      setState(() {
+        _folderStack.removeLast();
+        _isLoadingLibraryContent = true;
+        _error = null;
+      });
+    }
+
+    final parentId = _currentFolderId;
+    if (parentId != null) {
+      _loadFolderItems(parentId);
+    }
+  }
+
+  void _retryCurrentView() {
+    if (_isFolderNavigation) {
+      final folderId = _currentFolderId;
+      if (folderId != null) {
+        setState(() {
+          _isLoadingLibraryContent = true;
+          _error = null;
+        });
+        _loadFolderItems(folderId);
+      }
+      return;
+    }
+
+    if (_selectedLibraryId != null) {
+      _loadLibraryContent(_selectedLibraryId!);
+    }
+  }
+
+  // 返回媒体库列表
+  void _backToLibraries() {
+    _clearSearch();
+
+    if (mounted) {
+      setState(() {
+        _selectedLibraryId = null;
+        _isShowingLibraryContent = false;
+        _isFolderNavigation = false;
+        _folderStack.clear();
+        _mediaItems.clear(); // 清空当前媒体项
+        _error = null;
+      });
+
+      // 重新加载数据以同步最新的媒体库状态
+      _loadData();
+    }
+  }
+
+  // 选择媒体库
+  void _selectLibrary(NetworkMediaLibrary library) {
+    _clearSearch();
+
+    final isMixedLibrary = library.type.toLowerCase() == 'mixed';
+    setState(() {
+      _selectedLibraryId = library.id;
+      _isShowingLibraryContent = true;
+      _isLoadingLibraryContent = true;
+      _isFolderNavigation = isMixedLibrary;
+      _mediaItems.clear();
+      _error = null;
+      _folderStack..clear();
+      if (isMixedLibrary) {
+        _folderStack.add(_FolderNode(id: library.id, name: library.name));
+      }
+    });
+
+    if (isMixedLibrary) {
+      _loadFolderItems(library.id);
+    } else {
+      _loadLibraryContent(library.id);
+    }
+  }
+
+  // 加载媒体库内容
+  Future<void> _loadLibraryContent(String libraryId) async {
+    if (!mounted) return;
+
+    if (_isFolderNavigation) {
+      await _loadFolderItems(libraryId);
+      return;
+    }
+
+    try {
+      final service = _service;
+      final provider = _provider;
+      List<dynamic> items;
+
+      // 获取该媒体库的排序设置
+      final sortSettings = provider.getLibrarySortSettings(libraryId);
+
+      switch (widget.serverType) {
+        case NetworkMediaServerType.jellyfin:
+          items =
+              await (service as JellyfinService).getLatestMediaItemsByLibrary(
+            libraryId,
+            limit: 99999,
+            sortBy: sortSettings['sortBy']!,
+            sortOrder: sortSettings['sortOrder']!,
+          );
+          break;
+        case NetworkMediaServerType.emby:
+          items = await (service as EmbyService).getLatestMediaItemsByLibrary(
+            libraryId,
+            limit: 99999,
+            sortBy: sortSettings['sortBy']!,
+            sortOrder: sortSettings['sortOrder']!,
+          );
+          break;
+      }
+
+      if (mounted) {
+        setState(() {
+          _mediaItems = _convertToNetworkMediaItems(items);
+          _applySortAndFilter();
+          _isLoadingLibraryContent = false;
+          _error = null;
+        });
+      }
+      _setupRefreshTimer();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoadingLibraryContent = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadFolderItems(String parentId) async {
+    if (!mounted) return;
+
+    if (mounted) {
+      setState(() {
+        _isLoadingLibraryContent = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final service = _service;
+      List<dynamic> items;
+
+      switch (widget.serverType) {
+        case NetworkMediaServerType.jellyfin:
+          items = await (service as JellyfinService).getFolderItems(
+            parentId,
+            limit: 99999,
+          );
+          break;
+        case NetworkMediaServerType.emby:
+          items = await (service as EmbyService).getFolderItems(
+            parentId,
+            limit: 99999,
+          );
+          break;
+      }
+
+      if (mounted) {
+        setState(() {
+          _mediaItems = _convertToNetworkMediaItems(items);
+          _applySortAndFilter();
+          _isLoadingLibraryContent = false;
+          _error = null;
+        });
+      }
+      _setupRefreshTimer();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoadingLibraryContent = false;
+        });
+      }
+    }
+  }
+
+  // 设置刷新定时器
+  void _setupRefreshTimer() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(minutes: 60), (timer) {
+      if (_isShowingLibraryContent) {
+        if (_isFolderNavigation) {
+          final folderId = _currentFolderId ?? _selectedLibraryId;
+          if (folderId != null) {
+            _loadFolderItems(folderId);
+          }
+        } else if (_selectedLibraryId != null) {
+          _loadLibraryContent(_selectedLibraryId!);
+        }
+      } else {
+        _loadData();
+      }
+    });
+  }
+
+  // 转换为通用媒体项
+  List<NetworkMediaItem> _convertToNetworkMediaItems(List<dynamic> items) {
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        return items
+            .cast<JellyfinMediaItem>()
+            .map((item) => JellyfinMediaItemAdapter(item))
+            .toList();
+      case NetworkMediaServerType.emby:
+        return items
+            .cast<EmbyMediaItem>()
+            .map((item) => EmbyMediaItemAdapter(item))
+            .toList();
+    }
+  }
+
+  // 打开媒体详情
+  Future<void> _openMediaDetail(NetworkMediaItem item) async {
+    if (_isFolderNavigation && item.isFolder) {
+      _enterFolder(item);
+      return;
+    }
+
+    switch (widget.serverType) {
+      case NetworkMediaServerType.jellyfin:
+        final jellyfinItem = (item as JellyfinMediaItemAdapter).originalItem;
+        final result =
+            await MediaServerDetailPage.showJellyfin(context, jellyfinItem.id);
+        if (result != null && result.filePath.isNotEmpty) {
+          widget.onPlayEpisode?.call(result);
+        }
+        break;
+      case NetworkMediaServerType.emby:
+        final embyItem = (item as EmbyMediaItemAdapter).originalItem;
+        final result =
+            await MediaServerDetailPage.showEmby(context, embyItem.id);
+        if (result != null && result.filePath.isNotEmpty) {
+          widget.onPlayEpisode?.call(result);
+        }
+        break;
+    }
+  }
+
+  void _enterFolder(NetworkMediaItem item) {
+    _clearSearch();
+
+    if (mounted) {
+      setState(() {
+        _isLoadingLibraryContent = true;
+        _error = null;
+        _folderStack.add(_FolderNode(id: item.id, name: item.title));
+      });
+    }
+
+    _loadFolderItems(item.id);
+  }
+
+  // 显示服务器设置对话框
+  Future<void> _showServerDialog() async {
+    final result = await NetworkMediaServerDialog.show(
+        context,
+        widget.serverType == NetworkMediaServerType.jellyfin
+            ? MediaServerType.jellyfin
+            : MediaServerType.emby);
+    if (result == true && mounted) {
+      _loadData();
+    }
+  }
+
+  LocalLibraryActionControl _buildRemoteSortDropdown() {
+    return LocalLibraryActionControl(
+      label: _showOnlyUnwatched ? '排序（只看未观看）' : '排序',
+      desktopIcon: Icons.sort_rounded,
+      phoneIcon: cupertino.CupertinoIcons.arrow_up_arrow_down,
+      onPressed: _showAdaptiveRemoteSortDialog,
+    );
+  }
+
+  LocalLibraryActionControl _buildRefreshAction() {
+    return LocalLibraryActionControl(
+      label: '刷新',
+      desktopIcon: Icons.refresh,
+      phoneIcon: cupertino.CupertinoIcons.refresh,
+      onPressed: _manualRefresh,
+    );
+  }
+
+  Future<void> _showAdaptiveRemoteSortDialog() async {
+    if (AppDisplaySurfaceScope.of(context) != AppDisplaySurface.phone) {
+      await _showLargeScreenRemoteSortDialog();
+      return;
+    }
+    final provider = _provider;
+    final currentSortSettings = _getCurrentRemoteSortSettings(provider);
+    final items = _buildRemoteSortItems(
+      currentSortSettings['sortBy']!,
+      currentSortSettings['sortOrder']!,
+    );
+
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final contentHeight = 112.0 + (items.length + 1) * 52.0;
+    final effectiveHeightRatio =
+        (contentHeight / screenHeight).clamp(0.3, 0.82).toDouble();
+
+    final selection =
+        await CupertinoBottomSheet.show<_RemoteSortSelection>(
+      context: context,
+      title: '排序',
+      heightRatio: effectiveHeightRatio,
+      child: CupertinoBottomSheetContentLayout(
+        sliversBuilder: (sheetContext, topSpacing) => [
+          SliverPadding(
+            padding: EdgeInsets.fromLTRB(12, topSpacing + 4, 12, 24),
+            sliver: SliverToBoxAdapter(
+              child: cupertino.CupertinoListSection.insetGrouped(
+                margin: EdgeInsets.zero,
+                children: [
+                  cupertino.CupertinoListTile(
+                    leading: Icon(
+                      _showOnlyUnwatched
+                          ? cupertino.CupertinoIcons.eye_slash
+                          : cupertino.CupertinoIcons.eye,
+                      size: 20,
+                    ),
+                    title: const Text('只看未观看'),
+                    trailing: _showOnlyUnwatched
+                        ? Icon(
+                            cupertino.CupertinoIcons.check_mark,
+                            size: 18,
+                            color: cupertino.CupertinoTheme.of(sheetContext)
+                                .primaryColor,
+                          )
+                        : null,
+                    onTap: () {
+                      _toggleShowOnlyUnwatched();
+                      Navigator.of(sheetContext).pop();
+                    },
+                  ),
+                  for (final item in items)
+                    cupertino.CupertinoListTile(
+                      title: Text(item.title),
+                      subtitle: item.description == null
+                          ? null
+                          : Text(item.description!),
+                      trailing: item.isSelected
+                          ? Icon(
+                              cupertino.CupertinoIcons.check_mark,
+                              size: 18,
+                              color: cupertino.CupertinoTheme.of(sheetContext)
+                                  .primaryColor,
+                            )
+                          : null,
+                      onTap: () =>
+                          Navigator.of(sheetContext).pop<_RemoteSortSelection>(
+                        item.value,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selection != null) _applyRemoteSortSelection(selection);
+  }
+
+  Map<String, String> _getCurrentRemoteSortSettings(dynamic provider) {
+    if (_isShowingLibraryContent && _selectedLibraryId != null) {
+      return provider.getLibrarySortSettings(_selectedLibraryId!);
+    }
+    return {
+      'sortBy': provider.currentSortBy,
+      'sortOrder': provider.currentSortOrder,
+    };
+  }
+
+  List<DropdownMenuItemData<_RemoteSortSelection>> _buildRemoteSortItems(
+    String currentSortBy,
+    String currentSortOrder,
+  ) {
+    final options = getMediaSortOptions(_mediaLibraryType);
+    final items = <DropdownMenuItemData<_RemoteSortSelection>>[];
+
+    for (final option in options) {
+      for (final order in mediaLibrarySortOrders) {
+        final sortOrderValue = order['value'];
+        final sortOrderLabel = order['label'];
+        if (sortOrderValue == null || sortOrderLabel == null) {
+          continue;
+        }
+
+        final selection = _RemoteSortSelection(
+          sortBy: option.value,
+          sortOrder: sortOrderValue,
+          label: '${option.label} ($sortOrderLabel)',
+          description: option.description,
+        );
+
+        items.add(
+          DropdownMenuItemData<_RemoteSortSelection>(
+            title: selection.label,
+            value: selection,
+            isSelected: option.value == currentSortBy &&
+                sortOrderValue == currentSortOrder,
+            description: selection.description,
+          ),
+        );
+      }
+    }
+
+    return items;
+  }
+
+  void _applyRemoteSortSelection(_RemoteSortSelection selection) {
+    final provider = _provider;
+    if (_isShowingLibraryContent && _selectedLibraryId != null) {
+      provider.setLibrarySortSettings(
+        _selectedLibraryId!,
+        selection.sortBy,
+        selection.sortOrder,
+      );
+      _loadLibraryContent(_selectedLibraryId!);
+    } else {
+      provider.updateSortSettingsOnly(selection.sortBy, selection.sortOrder);
+    }
+  }
+}
+
+class _FolderNode {
+  final String id;
+  final String name;
+
+  const _FolderNode({
+    required this.id,
+    required this.name,
+  });
+}
+
+class _RemoteSortSelection {
+  final String sortBy;
+  final String sortOrder;
+  final String label;
+  final String? description;
+
+  const _RemoteSortSelection({
+    required this.sortBy,
+    required this.sortOrder,
+    required this.label,
+    this.description,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _RemoteSortSelection &&
+          runtimeType == other.runtimeType &&
+          sortBy == other.sortBy &&
+          sortOrder == other.sortOrder;
+
+  @override
+  int get hashCode => Object.hash(sortBy, sortOrder);
+}

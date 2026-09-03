@@ -1,0 +1,307 @@
+import 'dart:convert';
+import 'dart:io' as io;
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as path;
+
+import 'package:nipaplay/utils/storage_service.dart';
+
+class DanmakuCacheManager {
+  static const String _cacheKeyPrefix = 'danmaku_cache_';
+  static const int _oldAnimeThreshold = 18343;
+  static const Duration _oldAnimeCacheDuration = Duration(days: 7);
+  static const Duration _newAnimeCacheDuration = Duration(hours: 2);
+  static final Map<String, Map<String, dynamic>> _memoryCache = {};
+  static io.Directory? _cachedDanmakuDir;
+  static bool _migrationAttempted = false;
+
+  static Future<io.Directory> _getDanmakuCacheDirectory() async {
+    if (_cachedDanmakuDir != null) return _cachedDanmakuDir!;
+    final cacheRoot = await StorageService.getCacheDirectory();
+    final danmakuDir = io.Directory('${cacheRoot.path}/danmaku');
+    if (!await danmakuDir.exists()) {
+      await danmakuDir.create(recursive: true);
+    }
+    await _migrateLegacyCacheIfNeeded(danmakuDir);
+    _cachedDanmakuDir = danmakuDir;
+    return danmakuDir;
+  }
+
+  static Future<String> _getCacheFilePath(String episodeId) async {
+    final directory = await _getDanmakuCacheDirectory();
+    return '${directory.path}/$_cacheKeyPrefix$episodeId.json';
+  }
+
+  static Future<void> _migrateLegacyCacheIfNeeded(io.Directory newDir) async {
+    if (_migrationAttempted) return;
+    _migrationAttempted = true;
+    try {
+      final legacyDir = await StorageService.getAppStorageDirectory();
+      if (legacyDir.path == newDir.path) {
+        return;
+      }
+
+      final legacyEntities = await legacyDir.list().toList();
+      final legacyFiles = legacyEntities.whereType<io.File>().where((file) {
+        final fileName = path.basename(file.path);
+        return fileName.startsWith(_cacheKeyPrefix) &&
+            fileName.endsWith('.json');
+      }).toList();
+
+      if (legacyFiles.isEmpty) {
+        return;
+      }
+
+      for (final file in legacyFiles) {
+        final fileName = path.basename(file.path);
+        final targetFile = io.File(path.join(newDir.path, fileName));
+        if (await targetFile.exists()) {
+          continue;
+        }
+        try {
+          await file.rename(targetFile.path);
+        } catch (_) {
+          try {
+            await file.copy(targetFile.path);
+            await file.delete();
+          } catch (e) {
+            //////debugPrint('迁移弹幕缓存文件失败: $e');
+          }
+        }
+      }
+    } catch (e) {
+      //////debugPrint('迁移旧弹幕缓存失败: $e');
+    }
+  }
+
+  static Future<bool> isCacheValid(String episodeId) async {
+    try {
+      //////debugPrint('检查缓存有效性: $episodeId');
+      // 首先检查内存缓存
+      if (_memoryCache.containsKey(episodeId)) {
+        //////debugPrint('找到内存缓存');
+        final cacheData = _memoryCache[episodeId]!;
+        final timestamp = cacheData['timestamp'] as int;
+        final animeId = cacheData['animeId'] as int;
+        final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+        final now = DateTime.now();
+
+        final cacheDuration = animeId < _oldAnimeThreshold
+            ? _oldAnimeCacheDuration
+            : _newAnimeCacheDuration;
+
+        final isValid = now.difference(cacheTime) < cacheDuration;
+        //////debugPrint('内存缓存${isValid ? '有效' : '已过期'}');
+        return isValid;
+      }
+
+      final file = io.File(await _getCacheFilePath(episodeId));
+      if (!await file.exists()) {
+        //////debugPrint('缓存文件不存在');
+        return false;
+      }
+
+      //////debugPrint('找到文件缓存');
+      final jsonData = json.decode(await file.readAsString());
+      final timestamp = jsonData['timestamp'] as int;
+      final animeId = jsonData['animeId'] as int;
+      final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+      final now = DateTime.now();
+
+      final cacheDuration = animeId < _oldAnimeThreshold
+          ? _oldAnimeCacheDuration
+          : _newAnimeCacheDuration;
+
+      final isValid = now.difference(cacheTime) < cacheDuration;
+      if (isValid) {
+        //////debugPrint('文件缓存有效，保存到内存缓存');
+        _memoryCache[episodeId] = jsonData;
+      } else {
+        //////debugPrint('文件缓存已过期');
+      }
+      return isValid;
+    } catch (e) {
+      //////debugPrint('检查缓存有效性时出错: $e');
+      return false;
+    }
+  }
+
+  static Future<void> saveDanmakuToCache(
+      String episodeId, int animeId, List<dynamic> comments) async {
+    if (kIsWeb) return;
+    try {
+      // 去除重复弹幕
+      final uniqueComments = _removeDuplicateDanmaku(comments);
+
+      final jsonData = {
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'animeId': animeId,
+        'comments': uniqueComments,
+        'count': uniqueComments.length
+      };
+
+      // 保存到内存缓存
+      _memoryCache[episodeId] = jsonData;
+
+      // 异步保存到文件
+      final file = io.File(await _getCacheFilePath(episodeId));
+      await file.writeAsString(json.encode(jsonData));
+    } catch (e) {
+      //////debugPrint('保存弹幕缓存失败: $e');
+    }
+  }
+
+  static Future<List<dynamic>?> getDanmakuFromCache(String episodeId) async {
+    if (kIsWeb) return null;
+    try {
+      //////debugPrint('尝试从缓存获取弹幕: $episodeId');
+      // 首先检查内存缓存
+      if (_memoryCache.containsKey(episodeId)) {
+        //////debugPrint('从内存缓存获取弹幕');
+        final cacheData = _memoryCache[episodeId]!;
+        final timestamp = cacheData['timestamp'] as int;
+        final animeId = cacheData['animeId'] as int;
+        final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+        final now = DateTime.now();
+
+        final cacheDuration = animeId < _oldAnimeThreshold
+            ? _oldAnimeCacheDuration
+            : _newAnimeCacheDuration;
+
+        if (now.difference(cacheTime) < cacheDuration) {
+          final comments = cacheData['comments'] as List<dynamic>;
+          // 对内存缓存中的数据也进行去重
+          final uniqueComments = _removeDuplicateDanmaku(comments);
+          //////debugPrint('内存缓存有效，返回 ${uniqueComments.length} 条弹幕');
+          return uniqueComments;
+        } else {
+          //////debugPrint('内存缓存已过期，移除');
+          _memoryCache.remove(episodeId);
+        }
+      }
+
+      if (!await isCacheValid(episodeId)) {
+        //////debugPrint('缓存无效');
+        return null;
+      }
+
+      //////debugPrint('从文件缓存获取弹幕');
+      final file = io.File(await _getCacheFilePath(episodeId));
+      final jsonData = json.decode(await file.readAsString());
+      final comments = jsonData['comments'] as List<dynamic>;
+      // 去除重复弹幕
+      final uniqueComments = _removeDuplicateDanmaku(comments);
+
+      // 更新内存缓存，确保后续读取一致
+      final updatedCacheData = {
+        'timestamp': jsonData['timestamp'],
+        'animeId': jsonData['animeId'],
+        'comments': uniqueComments,
+        'count': uniqueComments.length
+      };
+      _memoryCache[episodeId] = updatedCacheData;
+
+      //////debugPrint('返回 ${uniqueComments.length} 条弹幕');
+      return uniqueComments;
+    } catch (e) {
+      //////debugPrint('从缓存获取弹幕时出错: $e');
+      return null;
+    }
+  }
+
+  /// 去除重复的弹幕
+  static List<dynamic> _removeDuplicateDanmaku(List<dynamic> comments) {
+    final seen = <String>{};
+    final uniqueComments = <dynamic>[];
+
+    for (final comment in comments) {
+      // 将弹幕转换为唯一字符串表示，用于去重
+      final key =
+          '${comment['time']}_${comment['content']}_${comment['type']}_${comment['color']}';
+      if (!seen.contains(key)) {
+        seen.add(key);
+        uniqueComments.add(comment);
+      }
+    }
+
+    return uniqueComments;
+  }
+
+  static Future<void> clearExpiredCache() async {
+    if (kIsWeb) return;
+    try {
+      // 清理内存缓存
+      final now = DateTime.now();
+      _memoryCache.removeWhere((episodeId, cacheData) {
+        final timestamp = cacheData['timestamp'] as int;
+        final animeId = cacheData['animeId'] as int;
+        final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+
+        final cacheDuration = animeId < _oldAnimeThreshold
+            ? _oldAnimeCacheDuration
+            : _newAnimeCacheDuration;
+
+        return now.difference(cacheTime) > cacheDuration;
+      });
+
+      // 清理文件缓存
+      final directory = await _getDanmakuCacheDirectory();
+      final files = await directory
+          .list()
+          .where((entity) => entity.path.contains(_cacheKeyPrefix))
+          .toList();
+
+      for (var file in files) {
+        if (file is io.File) {
+          try {
+            final jsonData = json.decode(await file.readAsString());
+            final timestamp = jsonData['timestamp'] as int;
+            final animeId = jsonData['animeId'] as int;
+            final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+            final now = DateTime.now();
+
+            final cacheDuration = animeId < _oldAnimeThreshold
+                ? _oldAnimeCacheDuration
+                : _newAnimeCacheDuration;
+
+            if (now.difference(cacheTime) > cacheDuration) {
+              await file.delete();
+            }
+          } catch (e) {
+            // 如果文件损坏，直接删除
+            await file.delete();
+          }
+        }
+      }
+    } catch (e) {
+      //////debugPrint('清理过期缓存失败: $e');
+    }
+  }
+
+  static Future<void> clearAllCache() async {
+    if (kIsWeb) return;
+    try {
+      _memoryCache.clear();
+      final directory = await _getDanmakuCacheDirectory();
+      if (!await directory.exists()) {
+        return;
+      }
+
+      await for (final entity in directory.list()) {
+        if (entity is io.File) {
+          final fileName = path.basename(entity.path);
+          if (fileName.startsWith(_cacheKeyPrefix) &&
+              fileName.endsWith('.json')) {
+            try {
+              await entity.delete();
+            } catch (_) {
+              // ignore deletion errors to avoid breaking the cleanup flow
+            }
+          }
+        }
+      }
+    } catch (e) {
+      //////debugPrint('清理弹幕缓存失败: $e');
+    }
+  }
+}

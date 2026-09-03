@@ -1,0 +1,121 @@
+name: Build Linux
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: '应用版本号'
+        value: ${{ jobs.build.outputs.version }}
+      artifact-name:
+        description: '构建产物名称'
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+jobs:
+  build:
+    name: Build Linux Packages (amd64)
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.setup.outputs.version }}
+      artifact-name: release-Linux-amd64
+    env:
+      FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/latest/download/
+      FVP_DEPS_LATEST: 1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Read Linux Flutter version
+        id: linux-flutter
+        shell: bash
+        run: echo "version=$(tr -d '[:space:]' < .flutter-version-linux)" >> "$GITHUB_OUTPUT"
+      
+      - name: Setup Flutter Environment
+        id: setup
+        uses: ./.github/actions/setup-flutter
+        with:
+          flutter-version: ${{ steps.linux-flutter.outputs.version }}
+          dependency-profile: linux
+
+      - name: Generate build info json
+        shell: bash
+        run: python3 .github/workflows/scripts/generate-build-info-json.py assets/build_info.json
+      
+      - name: Build Linux Packages
+        uses: ./.github/actions/build-linux
+        with:
+          app-version: ${{ steps.setup.outputs.version }}
+          arch: amd64
+      
+      - name: Clean flutter pub cache
+        run: flutter pub cache clean
+      
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-Linux-amd64
+          path: build/linux/
+
+      - name: Upload Dart debug symbols amd64 (for de-obfuscating crash stacks)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dart-symbols-Linux-amd64
+          path: build/symbols-linux/
+          if-no-files-found: warn
+
+  build-arm64:
+    name: Build Linux Packages (arm64)
+    runs-on: ubuntu-22.04-arm
+    env:
+      FVP_DEPS_URL: https://github.com/wang-bin/mdk-sdk/releases/latest/download/
+      FVP_DEPS_LATEST: 1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Read Linux Flutter version
+        id: linux-flutter
+        shell: bash
+        run: echo "version=$(tr -d '[:space:]' < .flutter-version-linux)" >> "$GITHUB_OUTPUT"
+      
+      - name: Setup Flutter Environment
+        id: setup
+        uses: ./.github/actions/setup-flutter
+        with:
+          flutter-version: ${{ steps.linux-flutter.outputs.version }}
+          dependency-profile: linux
+
+      - name: Generate build info json
+        shell: bash
+        run: python3 .github/workflows/scripts/generate-build-info-json.py assets/build_info.json
+      
+      - name: Build Linux Packages
+        uses: ./.github/actions/build-linux
+        with:
+          app-version: ${{ steps.setup.outputs.version }}
+          arch: arm64
+      
+      - name: Clean flutter pub cache
+        run: flutter pub cache clean
+      
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-Linux-arm64
+          path: build/linux/
+
+      - name: Upload Dart debug symbols arm64 (for de-obfuscating crash stacks)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dart-symbols-Linux-arm64
+          path: build/symbols-linux/
+          if-no-files-found: warn
