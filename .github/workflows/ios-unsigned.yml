@@ -2,8 +2,7 @@ name: Build iOS Unsigned (TrollStore)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  # push 触发暂时关闭：弹幕删除迭代期间用 analyze 验证，全部通过后手动触发打包
 
 permissions:
   contents: read
