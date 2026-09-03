@@ -24,8 +24,8 @@ import 'package:nipaplay/themes/nipaplay/widgets/shared_remote_host_selection_sh
 import 'package:nipaplay/themes/nipaplay/widgets/smb_connection_dialog.dart'
     as desktop_smb;
 import 'package:nipaplay/themes/nipaplay/widgets/webdav_connection_dialog.dart'
-import 'package:nipaplay/models/dandanplay_remote_model.dart';
     as desktop_webdav;
+import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class AdaptiveAddMediaResult {
   const AdaptiveAddMediaResult({

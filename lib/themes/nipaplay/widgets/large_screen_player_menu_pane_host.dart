@@ -73,14 +73,12 @@ class NipaplayLargeScreenPlayerMenuPaneHost extends StatelessWidget {
         return CupertinoSubtitleListPane(videoState: videoState);
       case PlayerMenuPaneId.audioTracks:
         return CupertinoAudioTracksPane(videoState: videoState);
+      // [QBSenHook] 已移除弹幕相关面板
       case PlayerMenuPaneId.danmakuSettings:
-        return CupertinoDanmakuSettingsPane(videoState: videoState);
       case PlayerMenuPaneId.danmakuTracks:
-        return CupertinoDanmakuTracksPane(videoState: videoState);
       case PlayerMenuPaneId.danmakuList:
-        return CupertinoDanmakuListPane(videoState: videoState);
       case PlayerMenuPaneId.danmakuOffset:
-        return const CupertinoDanmakuOffsetPane();
+        return const SizedBox.shrink();
       case PlayerMenuPaneId.playbackRate:
         return ChangeNotifierProvider(
           create: (_) => PlaybackRatePaneController(videoState: videoState),

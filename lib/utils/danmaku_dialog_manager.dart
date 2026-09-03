@@ -60,11 +60,8 @@ class DanmakuDialogManager {
               SliverPadding(
                 padding: EdgeInsets.fromLTRB(16, topSpacing + 8, 16, 20),
                 sliver: SliverToBoxAdapter(
-                  child: SendDanmakuDialogContent(
-                    episodeId: episodeId,
-                    currentTime: currentTime,
-                    onDanmakuSent: onDanmakuSent,
-                  ),
+                  // [QBSenHook] 已移除弹幕发送功能
+                  child: const SizedBox.shrink(),
                 ),
               ),
             ],
@@ -82,11 +79,8 @@ class DanmakuDialogManager {
         await BlurDialog.show(
           context: context,
           title: '发送弹幕',
-          contentWidget: SendDanmakuDialogContent(
-            episodeId: episodeId,
-            currentTime: currentTime,
-            onDanmakuSent: onDanmakuSent,
-          ),
+          // [QBSenHook] 已移除弹幕发送功能
+          contentWidget: const SizedBox.shrink(),
           actions: actions,
           barrierDismissible: !disableBackgroundDismiss,
         );

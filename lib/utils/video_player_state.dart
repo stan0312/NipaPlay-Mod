@@ -105,6 +105,7 @@ import 'shared_remote_history_helper.dart';
 import 'package:nipaplay/utils/watch_history_auto_match_helper.dart';
 import 'media_source_utils.dart';
 import 'package:nipaplay/l10n/app_locale_utils.dart';
+import 'package:nipaplay/constants/danmaku_color_presets.dart';
 
 part 'video_player_state/video_player_state_metadata.dart';
 part 'video_player_state/video_player_state_initialization.dart';

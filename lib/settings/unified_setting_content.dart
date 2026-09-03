@@ -37,7 +37,8 @@ class UnifiedSettingContent extends StatelessWidget {
       UnifiedSettingContentType.network => const NetworkSettingsContent(),
       UnifiedSettingContentType.backupRestore => const BackupRestorePage(),
       UnifiedSettingContentType.player => const PlayerSettingsContent(),
-      UnifiedSettingContentType.danmaku => const DanmakuSettingsContent(),
+      // [QBSenHook] 已移除弹幕设置
+      UnifiedSettingContentType.danmaku => const SizedBox.shrink(),
       UnifiedSettingContentType.externalPlayer =>
         const ExternalPlayerSettingsContent(),
       UnifiedSettingContentType.shortcuts => const ShortcutsSettingsPage(),

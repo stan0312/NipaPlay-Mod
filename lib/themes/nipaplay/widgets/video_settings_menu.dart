@@ -397,31 +397,12 @@ class VideoSettingsMenuState extends State<VideoSettingsMenu>
           onHoverChanged: widget.onHoverChanged,
         );
         break;
+      // [QBSenHook] 已移除弹幕菜单
       case PlayerMenuPaneId.danmakuSettings:
-        child = DanmakuSettingsMenu(
-          onClose: onPaneClose,
-          videoState: videoState,
-          onHoverChanged: widget.onHoverChanged,
-        );
-        break;
       case PlayerMenuPaneId.danmakuTracks:
-        child = DanmakuTracksMenu(
-          onClose: onPaneClose,
-          onHoverChanged: widget.onHoverChanged,
-        );
-        break;
       case PlayerMenuPaneId.danmakuList:
-        child = DanmakuListMenu(
-          videoState: videoState,
-          onClose: onPaneClose,
-          onHoverChanged: widget.onHoverChanged,
-        );
-        break;
       case PlayerMenuPaneId.danmakuOffset:
-        child = DanmakuOffsetMenu(
-          onClose: onPaneClose,
-          onHoverChanged: widget.onHoverChanged,
-        );
+        child = const SizedBox.shrink();
         break;
       case PlayerMenuPaneId.playbackRate:
         child = ChangeNotifierProvider(
