@@ -20,7 +20,6 @@ import 'package:nipaplay/themes/nipaplay/widgets/anime_info_widget.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/shadow_action_button.dart';
 import 'package:nipaplay/app/app_navigation_scope.dart';
 import 'package:flutter/gestures.dart';
-import 'package:nipaplay/themes/nipaplay/widgets/send_danmaku_button.dart';
 import 'package:kmbal_ionicons/kmbal_ionicons.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/lock_controls_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/skip_button.dart';
@@ -1030,13 +1029,6 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
                             ),
                           ),
                           const SizedBox(width: 12.0),
-                          if (false) ...[ // [QBSenHook] 已移除弹幕发送按钮
-                            SendDanmakuButton(
-                              onPressed: () =>
-                                  _showSendDanmakuDialog(videoState),
-                            ),
-                            const SizedBox(width: 8.0),
-                          ],
                           if (videoState.playerTopSkipButtonVisible) ...[
                             SkipButton(
                               onPressed: () => videoState.skip(),
@@ -1428,15 +1420,7 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
     );
   }
 
-  Future<void> _showSendDanmakuDialog(VideoPlayerState videoState) async {
-    final hotkeyService = HotkeyService();
-    hotkeyService.unregisterHotkeys();
-    try {
-      await videoState.showSendDanmakuDialog();
-    } finally {
-      hotkeyService.registerHotkeys();
-    }
-  }
+  // [QBSenHook] 已移除弹幕发送对话框
 }
 
 class _LargeScreenPlayerBarButton extends StatelessWidget {

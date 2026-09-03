@@ -225,14 +225,8 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
       case LogicalKeyboardKey.arrowDown:
         videoState.decreaseVolume();
         return KeyEventResult.handled;
-      case LogicalKeyboardKey.keyD:
-        videoState.toggleDanmakuVisible();
-        return KeyEventResult.handled;
       case LogicalKeyboardKey.keyS:
         videoState.skip();
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.keyC:
-        unawaited(videoState.showSendDanmakuDialog());
         return KeyEventResult.handled;
       case LogicalKeyboardKey.escape:
         if (isLargeScreen) {
