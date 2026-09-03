@@ -2070,49 +2070,6 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis),
                               ),
-                              if (DandanplayService.isLoggedIn &&
-                                  _dandanplayWatchStatus
-                                      .containsKey(episode.id))
-                                Container(
-                                  margin: const EdgeInsets.only(left: 8),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: isEpisodeWatched
-                                        ? watchedChipBase.withOpacity(0.2)
-                                        : Colors.transparent,
-                                    border: Border.all(
-                                      color: isEpisodeWatched
-                                          ? watchedChipBase.withOpacity(0.6)
-                                          : Colors.transparent,
-                                      width: 1,
-                                    ),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      if (isEpisodeWatched)
-                                        Icon(
-                                          Ionicons.cloud,
-                                          color:
-                                              watchedChipBase.withOpacity(0.9),
-                                          size: 12,
-                                        ),
-                                      if (isEpisodeWatched) SizedBox(width: 4),
-                                      Text(
-                                        isEpisodeWatched ? '已看' : '',
-                                        locale: const Locale('zh-Hans', 'zh'),
-                                        style: TextStyle(
-                                          color:
-                                              watchedChipBase.withOpacity(0.9),
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
                             ],
                           ),
                           trailing: Row(
@@ -2126,49 +2083,6 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                                     color: progressTextColor,
                                     fontSize: 11,
                                   ),
-                                ),
-                              if (DandanplayService.isLoggedIn)
-                                _EpisodeWatchToggleButton(
-                                  isEnabled: !isEpisodeWatched,
-                                  isHovered: !globals.isTouch &&
-                                      !isEpisodeWatched &&
-                                      _hoveredWatchToggleEpisodeId ==
-                                          episode.id,
-                                  isLargeScreenMode: _isLargeScreenModeActive,
-                                  onHoverChanged: (value) {
-                                    if (!mounted || isEpisodeWatched) return;
-                                    setState(() {
-                                      _hoveredWatchToggleEpisodeId =
-                                          value ? episode.id : null;
-                                    });
-                                  },
-                                  onTap: isEpisodeWatched
-                                      ? null
-                                      : () async {
-                                          try {
-                                            final newStatus =
-                                                !(_dandanplayWatchStatus[
-                                                        episode.id] ??
-                                                    false);
-                                            await updateEpisodeWatchStatus(
-                                              episode.id,
-                                              newStatus,
-                                            );
-                                            setState(() {
-                                              _dandanplayWatchStatus[
-                                                  episode.id] = newStatus;
-                                            });
-                                          } catch (e) {
-                                            _showBlurSnackBar(context,
-                                                '更新观看状态失败: ${e.toString()}');
-                                          }
-                                        },
-                                  icon: isEpisodeWatched
-                                      ? Ionicons.checkmark_circle
-                                      : Ionicons.checkmark_circle_outline,
-                                  idleColor: isEpisodeWatched
-                                      ? progressGreen
-                                      : secondaryTextColor.withOpacity(0.4),
                                 ),
                             ],
                           ),
