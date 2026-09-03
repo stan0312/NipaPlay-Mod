@@ -328,7 +328,7 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
     // 添加TabController监听
     _tabController!.addListener(_handleTabChange);
 
-    _detailTabController = TabController(length: 2, vsync: this);
+    _detailTabController = TabController(length: 1, vsync: this);
     _detailTabController!.addListener(_handleDetailTabChange);
 
     // 添加Bangumi登录状态监听
@@ -565,13 +565,7 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
   }
 
   void _handleDetailTabChange() {
-    if (!mounted || _detailTabController?.index != 1 || _hasOpenedCommentsTab) {
-      return;
-    }
-    setState(() {
-      // 评论组件首次进入时再创建，之后保持挂载作为本次详情页的内存缓存。
-      _hasOpenedCommentsTab = true;
-    });
+    // [QBSenHook] 已移除评论tab：仅剩详情tab，无切换逻辑
   }
 
   Future<void> _fetchAnimeDetails() async {
@@ -1495,11 +1489,6 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                           fontSize: 14,
                           fontWeight: FontWeight.w600,
                         ),
-                        HoverZoomTab(
-                          text: '评论',
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                        ),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -1518,71 +1507,6 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                           metadataWidgets,
                           titlesWidgets),
                     ),
-                    if (_hasOpenedCommentsTab)
-                      Visibility(
-                        visible: _detailTabController!.index == 1,
-                        maintainState: true,
-                        child: Builder(builder: (context) {
-                          debugPrint(
-                              '[AnimeDetail] 评论tab: _bangumiSubjectId=$_bangumiSubjectId, anime.id=${anime.id}');
-                          final userInfo = BangumiApiService.userInfo;
-                          final int currentUserId = userInfo != null
-                              ? (userInfo['id'] as int? ?? 0)
-                              : 0;
-                          String userAvatar = '';
-                          if (userInfo != null) {
-                            final raw = userInfo['avatar'];
-                            if (raw is String) {
-                              userAvatar = raw;
-                            } else if (raw is Map<String, dynamic>) {
-                              userAvatar = (raw['large'] as String?) ??
-                                  (raw['medium'] as String?) ??
-                                  '';
-                            }
-                          }
-                          final String userNickname = userInfo != null
-                              ? ((userInfo['nickname'] as String?) ??
-                                  (userInfo['username'] as String?) ??
-                                  '')
-                              : '';
-                          final BangumiMyCommentData? myComment =
-                              BangumiApiService.isLoggedIn
-                                  ? BangumiMyCommentData(
-                                      nickname: userNickname,
-                                      avatarUrl: userAvatar,
-                                      rate: _bangumiUserRating,
-                                      comment: _bangumiComment ?? '',
-                                      updatedAt: _myCommentTimestamp > 0
-                                          ? _myCommentTimestamp
-                                          : DateTime.now()
-                                                  .millisecondsSinceEpoch ~/
-                                              1000,
-                                    )
-                                  : null;
-                          return BangumiCommentsWidget(
-                            key: _commentsWidgetKey,
-                            subjectId: _bangumiSubjectId,
-                            dandanplayId: anime.id,
-                            onEditRating: BangumiApiService.isLoggedIn
-                                ? _showCommentDialog
-                                : null,
-                            myComment: myComment,
-                            currentUserId: currentUserId,
-                            commentsVersion: _commentsVersion,
-                            onMyCommentTimestamp: (timestamp) {
-                              if (mounted && timestamp != _myCommentTimestamp) {
-                                setState(() {
-                                  _myCommentTimestamp = timestamp;
-                                });
-                                if (_bangumiSubjectId != null) {
-                                  _saveCommentTimestamp(
-                                      _bangumiSubjectId!, timestamp);
-                                }
-                              }
-                            },
-                          );
-                        }),
-                      ),
                   ],
                 );
               },

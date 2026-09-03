@@ -27,7 +27,6 @@ import 'blur_snackbar.dart';
 import 'hover_scale_text_button.dart';
 import 'right_edge_hover_menu.dart';
 import 'minimal_progress_bar.dart';
-import 'danmaku_density_bar.dart';
 import 'speed_boost_indicator.dart';
 import 'loading_overlay.dart';
 import 'macos_hdr_probe_overlay.dart';
@@ -1301,7 +1300,6 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                         const RightEdgeHoverMenu(),
                                       if (!isPictureInPicture) ...[
                                         const MinimalProgressBar(),
-                                        const DanmakuDensityBar(),
                                       ],
                                     ],
                                   ),
