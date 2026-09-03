@@ -74,6 +74,14 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Fix script permissions
+        shell: bash
+        run: |
+          # Windows 提交时 .sh 脚本丢失可执行位，构建阶段会 Permission denied
+          find . -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod +x {} \; 2>/dev/null || true
+          chmod -R +x cpp_native/scripts 2>/dev/null || true
+          ls -la cpp_native/scripts/build_ios.sh
+
       - name: Validate App Store Connect configuration
         if: inputs.upload-to-app-store
         shell: bash
