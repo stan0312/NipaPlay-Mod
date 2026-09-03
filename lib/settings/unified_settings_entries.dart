@@ -423,22 +423,6 @@ List<UnifiedSettingEntry> _buildUnifiedSettingEntryDefinitions() {
       contentType: UnifiedSettingContentType.remoteMediaLibrary,
     ),
     UnifiedSettingEntry(
-      id: UnifiedSettingEntryIds.downloader,
-      section: UnifiedSettingSection.general,
-      titleBuilder: (context, surface) => context.l10n.tabTorrentDownload,
-      pageTitleBuilder: (context, surface) => context.l10n.tabTorrentDownload,
-      subtitleBuilder: (context, surface) => _text(
-        context,
-        '下载任务、设置',
-        '下載任務、設定',
-        'Download tasks and settings.',
-      ),
-      icon: Ionicons.cloud_download_outline,
-      phoneIcon: cupertino.CupertinoIcons.arrow_down_circle,
-      contentType: UnifiedSettingContentType.downloader,
-      visible: (context, surface) => globals.isDownloaderSupportedPlatform,
-    ),
-    UnifiedSettingEntry(
       id: UnifiedSettingEntryIds.developerOptions,
       section: UnifiedSettingSection.general,
       titleBuilder: (context, surface) => context.l10n.developerOptions,

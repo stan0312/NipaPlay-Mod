@@ -16,7 +16,6 @@ import 'api/media_probe.dart';
 import 'api/next2.dart';
 import 'api/performance.dart';
 import 'api/remote_directory.dart';
-import 'api/torrent.dart';
 import 'api/webdav_multistatus.dart';
 import 'dart:async';
 import 'dart:convert';
