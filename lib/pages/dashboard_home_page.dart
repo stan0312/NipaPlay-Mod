@@ -46,7 +46,6 @@ import 'package:nipaplay/pages/media_server_detail_page.dart';
 import 'package:nipaplay/services/playback_service.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
-import 'package:nipaplay/models/dandanplay_remote_model.dart';
 import 'package:nipaplay/providers/dandanplay_remote_provider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:path/path.dart' as path;

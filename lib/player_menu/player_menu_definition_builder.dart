@@ -46,34 +46,6 @@ class PlayerMenuDefinitionBuilder {
             ctx.supportsAdvancedTracks && ctx.hasVideo,
       ),
       PlayerMenuItemDefinition(
-        paneId: PlayerMenuPaneId.danmakuSettings,
-        category: PlayerMenuCategory.danmaku,
-        icon: PlayerMenuIconToken.danmakuSettings,
-        title: '弹幕设置',
-        visibilityPredicate: (ctx) => false, // [QBSenHook] 已移除弹幕
-      ),
-      PlayerMenuItemDefinition(
-        paneId: PlayerMenuPaneId.danmakuTracks,
-        category: PlayerMenuCategory.danmaku,
-        icon: PlayerMenuIconToken.danmakuTracks,
-        title: '弹幕轨道',
-        visibilityPredicate: (ctx) => false, // [QBSenHook] 已移除弹幕
-      ),
-      PlayerMenuItemDefinition(
-        paneId: PlayerMenuPaneId.danmakuList,
-        category: PlayerMenuCategory.danmaku,
-        icon: PlayerMenuIconToken.danmakuList,
-        title: '弹幕列表',
-        visibilityPredicate: (ctx) => false, // [QBSenHook] 已移除弹幕
-      ),
-      PlayerMenuItemDefinition(
-        paneId: PlayerMenuPaneId.danmakuOffset,
-        category: PlayerMenuCategory.danmaku,
-        icon: PlayerMenuIconToken.danmakuOffset,
-        title: '弹幕偏移',
-        visibilityPredicate: (ctx) => false, // [QBSenHook] 已移除弹幕
-      ),
-      PlayerMenuItemDefinition(
         paneId: PlayerMenuPaneId.seekStep,
         category: PlayerMenuCategory.playbackControl,
         icon: PlayerMenuIconToken.seekStep,

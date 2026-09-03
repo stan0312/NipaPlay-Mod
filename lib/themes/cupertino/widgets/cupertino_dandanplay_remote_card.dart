@@ -1,7 +1,6 @@
 import 'package:nipaplay/themes/cupertino/cupertino_imports.dart';
 import 'package:nipaplay/l10n/l10n.dart';
 
-import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class CupertinoDandanplayRemoteCard extends StatelessWidget {
   const CupertinoDandanplayRemoteCard({

@@ -357,23 +357,6 @@ List<UnifiedSettingEntry> _buildUnifiedSettingEntryDefinitions() {
       contentType: UnifiedSettingContentType.player,
     ),
     UnifiedSettingEntry(
-      id: UnifiedSettingEntryIds.danmaku,
-      section: UnifiedSettingSection.general,
-      titleBuilder: (context, surface) => _text(context, '弹幕', '彈幕', 'Danmaku'),
-      pageTitleBuilder: (context, surface) =>
-          _text(context, '弹幕设置', '彈幕設定', 'Danmaku Settings'),
-      subtitleBuilder: (context, surface) => _text(
-        context,
-        '渲染、防剧透与匹配',
-        '渲染、防劇透與匹配',
-        'Rendering, spoiler filtering, and matching.',
-      ),
-      icon: Ionicons.hardware_chip_outline,
-      phoneIcon: cupertino.CupertinoIcons.bubble_left_bubble_right,
-      visible: (context, surface) => false, // [QBSenHook] 已移除弹幕
-      contentType: UnifiedSettingContentType.danmaku,
-    ),
-    UnifiedSettingEntry(
       id: UnifiedSettingEntryIds.externalPlayer,
       section: UnifiedSettingSection.general,
       titleBuilder: (context, surface) => context.l10n.externalCall,

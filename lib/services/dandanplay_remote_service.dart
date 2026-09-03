@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class DandanplayRemoteService {
   DandanplayRemoteService._internal();

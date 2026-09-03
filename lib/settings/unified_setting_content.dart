@@ -3,7 +3,6 @@ import 'package:nipaplay/pages/shortcuts_settings_page.dart';
 import 'package:nipaplay/settings/adaptive_settings_navigation.dart';
 import 'package:nipaplay/settings/pages/about_settings_content.dart';
 import 'package:nipaplay/settings/pages/appearance_settings_content.dart';
-import 'package:nipaplay/settings/pages/danmaku_settings_content.dart';
 import 'package:nipaplay/settings/pages/developer_options_settings_content.dart';
 import 'package:nipaplay/settings/pages/downloader_settings_content.dart';
 import 'package:nipaplay/settings/pages/external_player_settings_content.dart';
