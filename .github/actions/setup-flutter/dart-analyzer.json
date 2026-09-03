@@ -1,0 +1,16 @@
+{
+  "problemMatcher": [
+    {
+      "owner": "dart",
+      "pattern": [
+        {
+          "regexp": "^\\s*Error\\s+line\\s+(\\d+)(?:\\s+col\\s+(\\d+))?\\s+of\\s+\\[?file\\]?\\s*:\\s*(.+)$",
+          "file": 3,
+          "line": 1,
+          "column": 2,
+          "message": 3
+        }
+      ]
+    }
+  ]
+}
