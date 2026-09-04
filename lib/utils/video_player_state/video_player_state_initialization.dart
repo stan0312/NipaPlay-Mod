@@ -294,7 +294,8 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
     _notifyListeners();
 
     _brightnessIndicatorTimer?.cancel();
-    _brightnessIndicatorTimer = Timer(const Duration(seconds: 2), () {
+    // [QBSenHook] v7.5.4: 与播放控件一致，3 秒后自动隐藏；拖动期间每次更新都会重置计时
+    _brightnessIndicatorTimer = Timer(const Duration(seconds: 3), () {
       _hideBrightnessIndicator();
     });
     // The final _notifyListeners() from the original method is already covered above.
@@ -361,7 +362,8 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
     _notifyListeners();
 
     _volumeIndicatorTimer?.cancel();
-    _volumeIndicatorTimer = Timer(const Duration(seconds: 2), () {
+    // [QBSenHook] v7.5.4: 与播放控件一致，3 秒后自动隐藏；拖动期间每次更新都会重置计时
+    _volumeIndicatorTimer = Timer(const Duration(seconds: 3), () {
       _hideVolumeIndicator();
     });
   }
