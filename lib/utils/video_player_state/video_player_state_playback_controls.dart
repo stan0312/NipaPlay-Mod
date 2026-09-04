@@ -1269,6 +1269,8 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
 
   void endVolumeDrag() {
     if (!globals.isMobilePlatform) return;
+    // [QBSenHook] v7.5.4: 手指离开立即隐藏音量指示条
+    _hideVolumeIndicator();
     debugPrint("Volume drag ended. Current volume: $_currentVolume");
     _scheduleVolumePersistence(immediate: true);
   }

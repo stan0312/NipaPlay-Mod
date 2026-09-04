@@ -249,9 +249,9 @@ extension VideoPlayerStateInitialization on VideoPlayerState {
 
   void endBrightnessDrag() {
     if (!globals.isMobilePlatform) return;
+    // [QBSenHook] v7.5.4: 手指离开立即隐藏亮度指示条
+    _hideBrightnessIndicator();
     // _initialDragBrightness is already updated at the start of the next drag.
-    // The indicator will hide via its own timer.
-    // No specific action needed here unless we want to immediately save or something.
     // debugPrint("Brightness drag ended. Current brightness: $_currentBrightness");
   }
 

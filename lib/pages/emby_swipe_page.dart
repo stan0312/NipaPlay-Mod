@@ -105,6 +105,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   late final VideoPlayerState _videoState;
   // 持续 seek 拖拽状态：起始位置与累计偏移
   bool _seekDragging = false;
+  // [QBSenHook] v7.5.4: 左右滑快进快退时，底部显示极细播放进度条
+  bool _seekBarVisible = false;
   Duration _seekDragStartPos = Duration.zero;
   double _seekDragAccum = 0.0;
   // 左右边缘手势起始模式：brightness / volume
@@ -1062,9 +1064,43 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             ],
           ),
         ),
-        // [QBSenHook] v7.5.2: 播放控件面板（单击调出，2秒自动隐藏）
+        // [QBSenHook] v7.5.2: 播放控件面板（单击调出，3秒自动隐藏）
         if (_controlsVisible) _buildControlPanel(),
+        // [QBSenHook] v7.5.4: 左右滑快进快退时底部极细播放进度条
+        if (_seekBarVisible) _buildSeekBar(),
         ],
+      ),
+    );
+  }
+
+  /// [QBSenHook] v7.5.4: 底部极细一条播放进度条（左右滑快进快退时显示）
+  Widget _buildSeekBar() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: IgnorePointer(
+        child: Consumer<VideoPlayerState>(
+          builder: (context, videoState, child) {
+            final double pos =
+                videoState.hasVideo && videoState.duration.inMilliseconds > 0
+                    ? (videoState.position.inMilliseconds /
+                            videoState.duration.inMilliseconds)
+                        .clamp(0.0, 1.0)
+                    : 0.0;
+            return Container(
+              height: 2.5,
+              color: Colors.black.withValues(alpha: 0.35),
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: pos,
+                child: Container(
+                  color: Colors.white.withValues(alpha: 0.9),
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1106,23 +1142,23 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   /// [QBSenHook] v7.5.2: 播放控件面板（底部浮层，2 秒自动隐藏）。
   Widget _buildControlPanel() {
-    // [QBSenHook] v7.5.4: 播放控件面板靠边、窄化、半透明圆角
+    // [QBSenHook] v7.5.4: 播放控件面板贴底一条、窄化、半透明圆角（仅顶部圆角）
     return Positioned(
       left: 14,
       right: 14,
-      bottom: 6,
+      bottom: 0,
       child: SafeArea(
         top: false,
         child: Container(
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
             border: Border.all(
               color: Colors.white.withValues(alpha: 0.15),
               width: 0.6,
             ),
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1195,6 +1231,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     _seekDragging = true;
     _seekDragStartPos = videoState.position;
     _seekDragAccum = 0.0;
+    if (mounted) setState(() => _seekBarVisible = true);
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
@@ -1216,6 +1253,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   void _onHorizontalDragEnd(DragEndDetails details) {
     _seekDragging = false;
     _seekDragAccum = 0.0;
+    if (mounted) setState(() => _seekBarVisible = false);
   }
 
   // [QBSenHook] v7.5.3: 视频区左右边缘手势条——左边缘上下滑调亮度、
