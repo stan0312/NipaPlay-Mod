@@ -1153,7 +1153,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       final steps = (_seekDragAccum / pxPerStep).round();
       final target =
           _seekDragStartPos + Duration(seconds: steps * secondsPerStep);
-      unawaited(videoState.seekTo(target));
+      videoState.seekTo(target);
       _seekDragStartPos = videoState.position;
       _seekDragAccum = 0.0;
     }
