@@ -310,7 +310,8 @@ class _CupertinoMainPageState extends State<CupertinoMainPage> {
                     ),
                   ),
                   Positioned(
-                    top: MediaQuery.paddingOf(context).top + 4,
+                    // [QBSenHook] v7.5.4: 灵动岛机型顶部控件组下移，避免被状态栏手势区遮挡点不到
+                    top: MediaQuery.paddingOf(context).top + 14,
                     right: pageActionsTrailingOffset,
                     child: CupertinoAppPageActions(
                       actionIds: selectedPage.actionIds,

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
@@ -8,6 +9,7 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/pages/emby_folder_browser_page.dart';
 import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
+import 'package:nipaplay/pages/emby_track_menu.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -650,8 +652,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   }
 
   void _openFolderBrowser() {
+    // [QBSenHook] v7.5.4: 文件夹浏览页用 Cupertino 路由，支持左缘右滑返回
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      CupertinoPageRoute<void>(
         builder: (_) => const EmbyFolderBrowserPage(),
       ),
     );
@@ -742,54 +745,66 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   }
 
   Widget _buildTopBar() {
+    // [QBSenHook] v7.5.4: 顶部信息栏半透明圆角、左右留边、窄化，避开灵动岛
     return Positioned(
       top: 0,
       left: 0,
       right: 0,
       child: Container(
         padding: EdgeInsets.only(
-          top: MediaQuery.of(context).padding.top + 6,
-          left: 6,
-          right: 6,
-          bottom: 6,
+          top: MediaQuery.of(context).padding.top + 8,
+          left: 14,
+          right: 14,
+          bottom: 4,
         ),
-        child: Row(
-          children: [
-            IconButton(
-              icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                  color: Colors.white),
-              onPressed: () => Navigator.pop(context),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.38),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.15),
+              width: 0.6,
             ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: GestureDetector(
-                onTap: _openSourcePicker,
-                behavior: HitTestBehavior.opaque,
-                child: Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        _sourceTitle,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          child: Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                    color: Colors.white),
+                onPressed: () => Navigator.pop(context),
+              ),
+              const SizedBox(width: 2),
+              Expanded(
+                child: GestureDetector(
+                  onTap: _openSourcePicker,
+                  behavior: HitTestBehavior.opaque,
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          _sourceTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                    ),
-                    const Icon(Icons.arrow_drop_down_rounded,
-                        color: Colors.white),
-                  ],
+                      const Icon(Icons.arrow_drop_down_rounded,
+                          color: Colors.white),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
-              onPressed: _load,
-            ),
-          ],
+              IconButton(
+                icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+                onPressed: _load,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1037,15 +1052,23 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   /// [QBSenHook] v7.5.2: 播放控件面板（底部浮层，2 秒自动隐藏）。
   Widget _buildControlPanel() {
+    // [QBSenHook] v7.5.4: 播放控件面板靠边、窄化、半透明圆角
     return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 0,
+      left: 14,
+      right: 14,
+      bottom: 6,
       child: SafeArea(
         top: false,
         child: Container(
-          color: Colors.black.withValues(alpha: 0.55),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.15),
+              width: 0.6,
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1072,7 +1095,31 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
+              // [QBSenHook] v7.5.4: 音轨/字幕选择行
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _panelButton(
+                    '音轨',
+                    false,
+                    () => _panelAction(
+                      () => EmbyTrackMenu.showAudioTracks(
+                          context, _videoState),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _panelButton(
+                    '字幕',
+                    false,
+                    () => _panelAction(
+                      () => EmbyTrackMenu.showSubtitleTracks(
+                          context, _videoState),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
               // 播放控制行
               Consumer<VideoPlayerState>(
                 builder: (context, videoState, child) {

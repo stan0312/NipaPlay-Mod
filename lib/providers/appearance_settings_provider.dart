@@ -35,6 +35,9 @@ class AppearanceSettingsProvider extends ChangeNotifier {
   static const String _recentWatchingStyleKey = 'recent_watching_style';
   static const String _uiScaleKey = 'ui_scale_factor';
   static const String _showAnimeCardSummaryKey = 'show_anime_card_summary';
+  static const String _showCardRatingKey = 'show_card_rating';
+  static const String _showCardResolutionKey = 'show_card_resolution';
+  static const String _showCardReleaseDateKey = 'show_card_release_date';
   static const String _windowDisplayModeKey = 'nipaplay_window_display_mode';
   static const String _accentColorPresetKey = 'app_accent_color_preset';
   static const String _folderNameDisplayModeKey = 'folder_name_display_mode';
@@ -53,6 +56,9 @@ class AppearanceSettingsProvider extends ChangeNotifier {
   late RecentWatchingStyle _recentWatchingStyle;
   late double _uiScale;
   late bool _showAnimeCardSummary;
+  late bool _showCardRating;
+  late bool _showCardResolution;
+  late bool _showCardReleaseDate;
   late NipaplayWindowDisplayMode _windowDisplayMode;
   late AppAccentColorPreset _accentColorPreset;
   late FolderNameDisplayMode _folderNameDisplayMode;
@@ -68,6 +74,9 @@ class AppearanceSettingsProvider extends ChangeNotifier {
   RecentWatchingStyle get recentWatchingStyle => _recentWatchingStyle;
   double get uiScale => _uiScale;
   bool get showAnimeCardSummary => _showAnimeCardSummary;
+  bool get showCardRating => _showCardRating;
+  bool get showCardResolution => _showCardResolution;
+  bool get showCardReleaseDate => _showCardReleaseDate;
   NipaplayWindowDisplayMode get windowDisplayMode => _windowDisplayMode;
   AppAccentColorPreset get accentColorPreset => _accentColorPreset;
   FolderNameDisplayMode get folderNameDisplayMode => _folderNameDisplayMode;
@@ -91,6 +100,9 @@ class AppearanceSettingsProvider extends ChangeNotifier {
     _recentWatchingStyle = RecentWatchingStyle.simple; // 默认简洁版
     _uiScale = _resolveDefaultUiScale();
     _showAnimeCardSummary = true; // 默认显示番剧卡片简介
+    _showCardRating = true; // 默认显示评分
+    _showCardResolution = true; // 默认显示分辨率
+    _showCardReleaseDate = true; // 默认显示发行日期
     _windowDisplayMode = _resolveDefaultWindowDisplayMode();
     _accentColorPreset = AppAccentColorPreset.rose;
     _folderNameDisplayMode = FolderNameDisplayMode.ellipsis;
@@ -123,6 +135,9 @@ class AppearanceSettingsProvider extends ChangeNotifier {
       _showDanmakuDensityChart =
           prefs.getBool(SettingsKeys.showDanmakuDensityChart) ?? true;
       _showAnimeCardSummary = prefs.getBool(_showAnimeCardSummaryKey) ?? true;
+      _showCardRating = prefs.getBool(_showCardRatingKey) ?? true;
+      _showCardResolution = prefs.getBool(_showCardResolutionKey) ?? true;
+      _showCardReleaseDate = prefs.getBool(_showCardReleaseDateKey) ?? true;
       _diffuseLowResolutionPosters =
           prefs.getBool(_diffuseLowResolutionPostersKey) ?? true;
       _accentColorPreset = AppAccentColorPreset.fromStorageKey(
@@ -258,6 +273,42 @@ class AppearanceSettingsProvider extends ChangeNotifier {
       await prefs.setBool(_showAnimeCardSummaryKey, value);
     } catch (e) {
       debugPrint('保存番剧卡片简介显示设置时出错: $e');
+    }
+  }
+
+  Future<void> setShowCardRating(bool value) async {
+    if (_showCardRating == value) return;
+    _showCardRating = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_showCardRatingKey, value);
+    } catch (e) {
+      debugPrint('保存评分显示设置时出错: $e');
+    }
+  }
+
+  Future<void> setShowCardResolution(bool value) async {
+    if (_showCardResolution == value) return;
+    _showCardResolution = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_showCardResolutionKey, value);
+    } catch (e) {
+      debugPrint('保存分辨率显示设置时出错: $e');
+    }
+  }
+
+  Future<void> setShowCardReleaseDate(bool value) async {
+    if (_showCardReleaseDate == value) return;
+    _showCardReleaseDate = value;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_showCardReleaseDateKey, value);
+    } catch (e) {
+      debugPrint('保存发行日期显示设置时出错: $e');
     }
   }
 

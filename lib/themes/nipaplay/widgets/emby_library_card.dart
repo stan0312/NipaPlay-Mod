@@ -209,6 +209,8 @@ class EmbyLibraryCard extends StatelessWidget {
         return Icons.book;
       case 'photos':
         return Icons.photo;
+      case 'homevideos':
+        return Icons.photo_library;
       default:
         return Icons.folder;
     }

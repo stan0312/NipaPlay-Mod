@@ -43,6 +43,8 @@ abstract class NetworkMediaItem {
   int? get episodeCount;
   int? get watchedEpisodeCount;
   double? get userRating;
+  int? get releaseYear;
+  String? get resolution;
   bool get isFolder;
   String? get progress; // 新增
   bool get isPlayed; // 服务器端记录的已观看状态
@@ -75,6 +77,10 @@ class JellyfinMediaItemAdapter implements NetworkMediaItem {
       null; // Jellyfin doesn't have this field directly
   @override
   double? get userRating => null; // Convert from string if needed
+  @override
+  int? get releaseYear => null;
+  @override
+  String? get resolution => null;
   @override
   bool get isFolder => _item.isFolder;
 
@@ -123,7 +129,22 @@ class EmbyMediaItemAdapter implements NetworkMediaItem {
   @override
   int? get watchedEpisodeCount => null; // Emby doesn't have this field directly
   @override
-  double? get userRating => null; // Convert from string if needed
+  double? get userRating => double.tryParse(_item.communityRating ?? '');
+  @override
+  int? get releaseYear => _item.productionYear;
+  @override
+  String? get resolution {
+    final w = _item.width;
+    final h = _item.height;
+    if (w == null || h == null || w <= 0 || h <= 0) return null;
+    final longEdge = w > h ? w : h;
+    if (longEdge >= 3840) return '4K';
+    if (longEdge >= 2560) return '2K';
+    if (longEdge >= 1920) return '1080P';
+    if (longEdge >= 1280) return '720P';
+    if (longEdge >= 854) return '480P';
+    return null;
+  }
   @override
   bool get isFolder => _item.isFolder;
 
@@ -1220,7 +1241,9 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
                         crossAxisSpacing: 16,
                         mainAxisSpacing: 16,
                       ),
-                      padding: const EdgeInsets.all(20),
+                      // [QBSenHook] v7.5.4: 顶部留出灵动岛安全区，分类卡片下移
+                      padding: EdgeInsets.fromLTRB(
+                          20, MediaQuery.of(context).padding.top + 16, 20, 20),
                       cacheExtent: 800,
                       clipBehavior: Clip.hardEdge,
                       physics: const AlwaysScrollableScrollPhysics(
@@ -1338,7 +1361,9 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
                             crossAxisSpacing: 4,
                             mainAxisSpacing: 4,
                           ),
-                          padding: const EdgeInsets.fromLTRB(6, 4, 6, 24),
+                          // [QBSenHook] v7.5.4: 顶部留出灵动岛安全区
+                          padding: EdgeInsets.fromLTRB(
+                              6, MediaQuery.of(context).padding.top + 10, 6, 24),
                           cacheExtent: 800,
                           clipBehavior: Clip.hardEdge,
                           physics: const AlwaysScrollableScrollPhysics(
@@ -1469,6 +1494,8 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
         imageUrl: imageUrl,
         source: _serverName,
         rating: item.userRating,
+        releaseYear: item.releaseYear,
+        resolution: item.resolution,
         onTap: () => _openMediaDetail(item),
         enableBackgroundBlur: false,
         enableShadow: false,

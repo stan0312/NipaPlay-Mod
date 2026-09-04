@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
@@ -135,8 +136,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
 
   void _openSwipeInCurrentFolder() {
     if (_currentId == null) return;
+    // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      CupertinoPageRoute<void>(
         builder: (_) => EmbySwipePage(
           title: '$_currentName 刷片',
           initialParentId: _currentId,
@@ -151,8 +153,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     // [QBSenHook] v7.5.3: 点视频直接进入抖音式刷片播放，
     // 播放列表 = 当前文件夹内全部视频，定位到点击的这个视频开始播放；
     // 往下滑依次播放文件夹内下一个视频。
+    // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      CupertinoPageRoute<void>(
         builder: (_) => EmbySwipePage(
           title: '$_currentName 刷片',
           initialParentId: _currentId,

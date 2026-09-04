@@ -1893,8 +1893,9 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
         onPlaybackStarted?.call();
         if (mounted) {
           // [QBSenHook] v7.5.3: 点播放直接进抖音式刷片页（竖屏上下滑），不跳全屏横屏
+          // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
           Navigator.of(context).push(
-            MaterialPageRoute(
+            CupertinoPageRoute(
               builder: (_) => EmbySwipePage(
                 title: '刷片',
                 initialItemId: _mediaDetail?.id,
@@ -1938,8 +1939,9 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     if (mounted) {
       onPlaybackStarted?.call();
       // [QBSenHook] v7.5.3: 直接进入抖音式刷片页（竖屏上下滑播放），不跳全屏横屏
+      // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
       Navigator.of(context).push(
-        MaterialPageRoute(
+        CupertinoPageRoute(
           builder: (_) => EmbySwipePage(
             title: '刷片',
             initialItemId: _mediaDetail?.id,

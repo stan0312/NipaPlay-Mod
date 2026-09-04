@@ -18,6 +18,8 @@ class AnimeCard extends StatefulWidget {
   final bool isOnAir;
   final String? source; // 新增：来源信息（本地/Emby/Jellyfin）
   final double? rating; // 新增：评分信息
+  final int? releaseYear; // 发行年份
+  final String? resolution; // 分辨率（1080P/4K 等）
   final Map<String, dynamic>? ratingDetails; // 新增：详细评分信息
   final bool delayLoad; // 新增：延迟加载参数
   final bool useLegacyImageLoadMode; // 新增：是否启用旧版图片加载模式
@@ -34,6 +36,8 @@ class AnimeCard extends StatefulWidget {
     this.isOnAir = false,
     this.source, // 新增：来源信息
     this.rating, // 新增：评分信息
+    this.releaseYear,
+    this.resolution,
     this.ratingDetails, // 新增：详细评分信息
     this.delayLoad = false, // 默认不延迟
     this.useLegacyImageLoadMode = false, // 默认关闭
@@ -85,9 +89,27 @@ class _AnimeCardState extends State<AnimeCard> {
     }
   }
 
+  // [QBSenHook] v7.5.4: 卡片 meta 行（评分·分辨率·发行年份，设置里可开关）
+  String _buildMetaLine(AppearanceSettingsProvider settings) {
+    final List<String> parts = [];
+    if (settings.showCardRating &&
+        widget.rating != null &&
+        widget.rating! > 0) {
+      parts.add('★ ${widget.rating!.toStringAsFixed(1)}');
+    }
+    if (settings.showCardResolution &&
+        widget.resolution != null &&
+        widget.resolution!.isNotEmpty) {
+      parts.add(widget.resolution!);
+    }
+    if (settings.showCardReleaseDate && widget.releaseYear != null) {
+      parts.add('${widget.releaseYear}');
+    }
+    return parts.join(' · ');
+  }
+
   // 格式化评分信息用于显示
-  String _formatRatingInfo() {
-    List<String> ratingInfo = [];
+  String _formatRatingInfo() {    List<String> ratingInfo = [];
 
     // 添加来源信息
     if (widget.source != null) {
@@ -316,6 +338,24 @@ class _AnimeCardState extends State<AnimeCard> {
               textAlign: TextAlign.left,
             ),
           ),
+
+          // [QBSenHook] v7.5.4: Emby 原生评分/分辨率/发行日期（设置里可开关）
+          if (_buildMetaLine(settings).isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(2, 3, 2, 0),
+              child: Text(
+                _buildMetaLine(settings),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  fontSize: 11,
+                  height: 1.2,
+                  color: Colors.white.withValues(alpha: 0.75),
+                  fontWeight: FontWeight.w400,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.left,
+              ),
+            ),
         ],
       ),
     );

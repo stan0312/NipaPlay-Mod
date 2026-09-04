@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:nipaplay/pages/emby_track_menu.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:provider/provider.dart';
 
@@ -521,6 +522,49 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
             child: Text(
               _orientationLabel(),
               style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // [QBSenHook] v7.5.4: 音轨选择
+        InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => EmbyTrackMenu.showAudioTracks(context, videoState),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white12,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.audiotrack_rounded,
+                    color: Colors.white, size: 15),
+                SizedBox(width: 4),
+                Text('音轨', style: TextStyle(color: Colors.white, fontSize: 13)),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // [QBSenHook] v7.5.4: 字幕选择
+        InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => EmbyTrackMenu.showSubtitleTracks(context, videoState),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white12,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.subtitles_rounded, color: Colors.white, size: 15),
+                SizedBox(width: 4),
+                Text('字幕', style: TextStyle(color: Colors.white, fontSize: 13)),
+              ],
             ),
           ),
         ),

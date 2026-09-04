@@ -43,6 +43,8 @@ class EmbyMediaItem {
   final bool isFolder;
   final EmbyUserData? userData; // 新增
   final int? size; // 文件大小（字节），Emby Items 返回 Size 字段，用于按大小排序
+  final int? width; // 视频像素宽度（Fields=Width）
+  final int? height; // 视频像素高度（Fields=Height）
   
   EmbyMediaItem({
     required this.id,
@@ -59,6 +61,8 @@ class EmbyMediaItem {
     this.isFolder = false,
     this.userData,
     this.size,
+    this.width,
+    this.height,
   });
   
   factory EmbyMediaItem.fromJson(Map<String, dynamic> json) {
@@ -82,6 +86,8 @@ class EmbyMediaItem {
       isFolder: resolvedIsFolder,
       userData: json['UserData'] != null ? EmbyUserData.fromJson(json['UserData']) : null,
       size: json['Size'] is num ? (json['Size'] as num).toInt() : null,
+      width: json['Width'] is num ? (json['Width'] as num).toInt() : null,
+      height: json['Height'] is num ? (json['Height'] as num).toInt() : null,
     );
   }
 

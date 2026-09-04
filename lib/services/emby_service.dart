@@ -461,10 +461,11 @@ class EmbyService extends MediaServerServiceBase
         for (var item in items) {
           final String collectionType =
               _resolveCollectionType(item['CollectionType']);
-          // 处理电视剧、电影与混合媒体库
+          // 处理电视剧、电影、混合与家庭视频(照片)媒体库
           if (collectionType == 'tvshows' ||
               collectionType == 'movies' ||
-              collectionType == 'mixed') {
+              collectionType == 'mixed' ||
+              collectionType == 'homevideos') {
             final String libraryId = item['Id'];
 
             // 根据媒体库类型选择不同的IncludeItemTypes
@@ -473,6 +474,8 @@ class EmbyService extends MediaServerServiceBase
               includeItemTypes = 'Series';
             } else if (collectionType == 'movies') {
               includeItemTypes = 'Movie';
+            } else if (collectionType == 'homevideos') {
+              includeItemTypes = 'Video,Photo';
             } else {
               includeItemTypes = 'Movie,Episode,Video';
             }
@@ -590,6 +593,8 @@ class EmbyService extends MediaServerServiceBase
         includeItemTypes = 'Series';
       } else if (collectionType == 'movies') {
         includeItemTypes = 'Movie';
+      } else if (collectionType == 'homevideos') {
+        includeItemTypes = 'Video,Photo';
       } else {
         includeItemTypes = 'Movie,Episode,Video';
       }
@@ -638,6 +643,8 @@ class EmbyService extends MediaServerServiceBase
         includeItemTypes = 'Series';
       } else if (collectionType == 'movies') {
         includeItemTypes = 'Movie';
+      } else if (collectionType == 'homevideos') {
+        includeItemTypes = 'Video,Photo';
       } else {
         includeItemTypes = 'Movie,Episode,Video';
       }
@@ -696,6 +703,8 @@ class EmbyService extends MediaServerServiceBase
               includeItemTypes = 'Series';
             } else if (collectionType == 'movies') {
               includeItemTypes = 'Movie';
+            } else if (collectionType == 'homevideos') {
+              includeItemTypes = 'Video,Photo';
             } else {
               includeItemTypes = 'Movie,Episode,Video';
             }
@@ -707,7 +716,7 @@ class EmbyService extends MediaServerServiceBase
               'Recursive': 'true',
               'Limit': limitPerLibrary.toString(),
               'Fields':
-                  'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear',
+                  'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear,Width,Height',
               'SortBy': defaultSortBy,
               'SortOrder': defaultSortOrder,
             };
@@ -1903,6 +1912,8 @@ class EmbyService extends MediaServerServiceBase
         includeItemTypes = ['Series'];
       } else if (collectionType == 'movies') {
         includeItemTypes = ['Movie'];
+      } else if (collectionType == 'homevideos') {
+        includeItemTypes = ['Video', 'Photo'];
       } else if (collectionType == 'mixed') {
         includeItemTypes = [
           'Folder',

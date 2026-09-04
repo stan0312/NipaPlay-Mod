@@ -734,6 +734,8 @@ class _NetworkMediaServerDialogState extends State<NetworkMediaServerDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _buildLibrariesSection(),
+                  SizedBox(height: 20),
+                  _buildCardInfoSection(),
                   if (_supportsTranscode) ...[
                     SizedBox(height: 20),
                     _buildTranscodeSection(),
@@ -770,6 +772,8 @@ class _NetworkMediaServerDialogState extends State<NetworkMediaServerDialog> {
           SizedBox(height: 20),
         ],
         _buildLibrariesSection(),
+        SizedBox(height: 20),
+        _buildCardInfoSection(),
         if (_supportsTranscode) ...[
           SizedBox(height: 20),
           _buildTranscodeSection(),
@@ -936,6 +940,104 @@ class _NetworkMediaServerDialogState extends State<NetworkMediaServerDialog> {
               : _buildLibrariesList(),
         ),
       ],
+    );
+  }
+
+  // [QBSenHook] v7.5.4: 内容卡片信息显示开关（评分/分辨率/发行日期）
+  Widget _buildCardInfoSection() {
+    final appearance = context.watch<AppearanceSettingsProvider>();
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _panelColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _accentColor.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.info_outline, color: _accentColor, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                '内容卡片信息显示',
+                locale: const Locale("zh-Hans", "zh"),
+                style: TextStyle(
+                  color: _textColor,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _buildCardInfoRow(
+            title: '显示评分',
+            subtitle: '在内容卡片上显示 Emby 原生评分',
+            value: appearance.showCardRating,
+            onChanged: appearance.setShowCardRating,
+          ),
+          _buildCardInfoRow(
+            title: '显示分辨率',
+            subtitle: '在内容卡片上显示 4K/1080P 等分辨率',
+            value: appearance.showCardResolution,
+            onChanged: appearance.setShowCardResolution,
+          ),
+          _buildCardInfoRow(
+            title: '显示发行日期',
+            subtitle: '在内容卡片上显示发行年份',
+            value: appearance.showCardReleaseDate,
+            onChanged: appearance.setShowCardReleaseDate,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCardInfoRow({
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  locale: const Locale("zh-Hans", "zh"),
+                  style: TextStyle(
+                    color: _textColor,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  locale: const Locale("zh-Hans", "zh"),
+                  style: TextStyle(color: _subTextColor, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FluentSettingsSwitch(value: value, onChanged: onChanged),
+        ],
+      ),
     );
   }
 

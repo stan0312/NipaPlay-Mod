@@ -119,10 +119,11 @@ class CupertinoAppPageActions extends StatelessWidget {
             ),
           );
         } else if (action.id == AppActionIds.swipe) {
-          // [QBSenHook] v7.5: 顶部抖音刷片入口 → 刷片页（默认全部数据源）
+          // [QBSenHook] v7.5.4: 顶部抖音刷片入口 → 刷片页（Material 路由，
+          // 排除左缘右滑返回，避免与亮度/音量边缘手势冲突）
           unawaited(
             Navigator.of(context).push(
-              CupertinoPageRoute<void>(
+              MaterialPageRoute<void>(
                 builder: (_) => const EmbySwipePage(),
               ),
             ),
