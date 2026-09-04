@@ -896,7 +896,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           ),
         ),
         ],
-        ),
       ),
     );
   }
