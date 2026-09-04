@@ -61,18 +61,9 @@ List<UnifiedAppPage> buildUnifiedAppPages(
     AppActionIds.settings,
   ];
 
+  // [QBSenHook] v7.3: 只保留媒体库 tab。去掉"视频播放"和"个人中心"tab，
+  // 打开 App 即进媒体库；个人中心/设置统一从媒体库右上角设置入口进入。
   return <UnifiedAppPage>[
-    UnifiedAppPage(
-      id: AppPageIds.video,
-      titleBuilder: (localizations) => localizations.tabVideoPlay,
-      phoneIcon: CupertinoIcons.play_rectangle,
-      phoneActiveIcon: CupertinoIcons.play_rectangle_fill,
-      phoneSymbol: 'play.rectangle',
-      phoneActiveSymbol: 'play.rectangle.fill',
-      components: const [
-        AppPageComponent(id: 'playback', type: AppPageComponentType.playback),
-      ],
-    ),
     UnifiedAppPage(
       id: AppPageIds.mediaLibrary,
       titleBuilder: (localizations) => localizations.tabMediaLibrary,
@@ -85,18 +76,6 @@ List<UnifiedAppPage> buildUnifiedAppPages(
           id: 'media-library',
           type: AppPageComponentType.mediaLibrary,
         ),
-      ],
-      actionIds: commonActions,
-    ),
-    UnifiedAppPage(
-      id: AppPageIds.account,
-      titleBuilder: (localizations) => localizations.tabAccount,
-      phoneIcon: CupertinoIcons.person_crop_circle,
-      phoneActiveIcon: CupertinoIcons.person_crop_circle_fill,
-      phoneSymbol: 'person.crop.circle',
-      phoneActiveSymbol: 'person.crop.circle.fill',
-      components: const [
-        AppPageComponent(id: 'account', type: AppPageComponentType.account),
       ],
       actionIds: commonActions,
     ),

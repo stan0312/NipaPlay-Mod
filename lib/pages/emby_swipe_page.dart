@@ -80,6 +80,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   String? _playingItemId;
   // 正在加载中的条目（initializePlayer 尚未完成时立即反馈）
   String? _pendingPlayId;
+  // 当前条目的播放错误（有值时在卡片上显示红字提示）
+  String? _playbackError;
   int _playbackGeneration = 0;
 
   @override
@@ -202,6 +204,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     setState(() {
       _loading = true;
       _error = null;
+      _playbackError = null;
     });
     await _stopPlayback();
     try {
@@ -258,6 +261,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       setState(() {
         _pendingPlayId = item.id;
         _playingItemId = null;
+        _playbackError = null;
       });
     }
     try {
@@ -273,6 +277,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         isFromScan: false,
       );
       final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+      // [QBSenHook] v7.3: 内嵌播放必须绑定本页 context（视频 tab 已移除，
+      // 不再有播放器页帮忙 setContext）。
+      videoState.setContext(context);
       // 预创建播放会话；失败不放弃，交给播放器内部处理
       PlaybackSession? session;
       try {
@@ -298,16 +305,44 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         playbackDetailContext: detailContext,
       );
       if (!mounted || gen != _playbackGeneration) return;
+      // [QBSenHook] v7.3: initializePlayer 内部失败会置 error 而非抛异常，
+      // 必须显式检查，否则卡片会一直只显示缩略图、用户看不到原因。
+      final initError = videoState.error;
+      final hasVideo = videoState.hasVideo;
+      if (initError != null && initError.trim().isNotEmpty) {
+        setState(() {
+          _playingItemId = null;
+          _pendingPlayId = null;
+          _playbackError = initError.trim();
+        });
+        return;
+      }
+      if (!hasVideo) {
+        setState(() {
+          _playingItemId = null;
+          _pendingPlayId = null;
+          _playbackError = '播放器未能建立视频画面';
+        });
+        return;
+      }
       setState(() {
         _playingItemId = item.id;
         _pendingPlayId = null;
+        _playbackError = null;
       });
-    } catch (e) {
-      debugPrint('刷片自动播放失败: $e');
+      // 自动开始播放（initializePlayer 已就绪，直接 play）
+      try {
+        await videoState.play();
+      } catch (e) {
+        debugPrint('刷片 play() 失败: $e');
+      }
+    } catch (e, s) {
+      debugPrint('刷片自动播放失败: $e\n$s');
       if (mounted && gen == _playbackGeneration) {
         setState(() {
           _playingItemId = null;
           _pendingPlayId = null;
+          _playbackError = '播放出错: $e';
         });
       }
     }
@@ -325,6 +360,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     }
     _playingItemId = null;
     _pendingPlayId = null;
+    _playbackError = null;
   }
 
   Widget _buildVideoSurface() {
@@ -667,6 +703,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     final isPlayingNow = _playingItemId == item.id;
     final isActiveCard =
         index == _currentIndex && (isPending || isPlayingNow);
+    final showPlaybackError =
+        _playbackError != null && index == _currentIndex;
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -679,6 +717,50 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             right: 12,
             top: MediaQuery.of(context).padding.top + 54,
             child: _buildPlaybackStatusBanner(),
+          ),
+        // 播放失败红字提示（当前卡片）
+        if (showPlaybackError)
+          Positioned(
+            left: 16,
+            right: 16,
+            top: MediaQuery.of(context).padding.top + 200,
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.65),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.redAccent, width: 1),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.error_outline,
+                          color: Colors.redAccent, size: 18),
+                      SizedBox(width: 6),
+                      Text(
+                        '播放失败',
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _playbackError!,
+                    textAlign: TextAlign.center,
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
           ),
         // 背景图（尚未出画面时显示，含加载中）
         if (!isPlayingNow)

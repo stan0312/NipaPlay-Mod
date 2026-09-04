@@ -22,6 +22,9 @@ class EmbyInlinePlayer extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<VideoPlayerState>(
       builder: (context, videoState, child) {
+        // [QBSenHook] v7.3: 视频 tab 已移除，播放器页不再存在。
+        // 这里绑定详情页 context，确保播放器内部有可用上下文。
+        videoState.setContext(context);
         final hasVideo = videoState.hasVideo;
         final loading = videoState.status == PlayerStatus.loading ||
             videoState.status == PlayerStatus.recognizing;

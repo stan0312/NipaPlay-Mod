@@ -997,7 +997,15 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       }
 
       if (!fastPlaybackStartup) {
-        await loadInitialDanmaku();
+        // [QBSenHook] v7.3: 弹幕已彻底移除，但此处旧代码仍会执行弹幕加载逻辑。
+        // 防御性包裹：即使底层弹幕状态不完整（如插件被移除后返回 null），
+        // 也绝不能抛出异常中断播放初始化。
+        try {
+          await loadInitialDanmaku();
+        } catch (e, s) {
+          debugPrint('初始化弹幕(已移除功能)被防御性跳过: $e\n$s');
+          _clearDanmakuAutoLoadState();
+        }
       }
 
       // 设置进入最终加载阶段，以优化动画性能
@@ -1131,11 +1139,31 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         // _status 为 ready 时：play() 异步尚未完成，不干预，让底层自然过渡到播放。
         // 若底层最终未进入播放，Ticker 的异常检测会捕获并设置 error 状态。
       }
-    } catch (e) {
+    } catch (e, s) {
       if (_isDisposed || initializationGeneration != _playbackGeneration) {
         return;
       }
       //debugPrint('初始化视频播放器时出错: $e');
+      // [QBSenHook] v7.3: 提取首个业务代码帧，便于定位"裸 Null check"等编程错误
+      final String stackHint;
+      try {
+        final lines = s.toString().split('\n');
+        String first = '';
+        for (final line in lines) {
+          final t = line.trim();
+          if (t.startsWith('#') &&
+              (t.contains('lib\\') || t.contains('lib/'))) {
+            first = t;
+            break;
+          }
+        }
+        if (first.isEmpty && lines.isNotEmpty) {
+          first = lines.first.trim();
+        }
+        stackHint = first;
+      } catch (_) {
+        stackHint = '';
+      }
       if (kIsWeb) {
         final errorText = e.toString();
         final bool isUnsupportedFormat = e is PlatformException &&
@@ -1158,7 +1186,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
           mediaLoadError: player.mediaLoadError,
           fallback: e,
         );
-        final message = '播放器打开媒体失败: $detail';
+        final message = '播放器打开媒体失败: $detail${stackHint.isNotEmpty ? ' [$stackHint]' : ''}';
         debugPrint(
           '[VideoPlayerState] Media prepare failed for $videoPath: $detail',
         );
@@ -1169,7 +1197,8 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         );
         return;
       }
-      _error = '初始化视频播放器时出错: $e';
+      _error =
+          '初始化视频播放器时出错: $e${stackHint.isNotEmpty ? ' [$stackHint]' : ''}';
       _setStatus(PlayerStatus.error, message: '播放器初始化失败');
       // 尝试恢复
       _tryRecoverFromError();

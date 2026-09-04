@@ -1813,9 +1813,32 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
         );
       }
       await _startEpisodePlayback(playableHistoryItem, playbackSession);
-    } catch (e) {
-      if (mounted) BlurSnackBar.show(context, '播放出错: $e');
-      debugPrint('播放Jellyfin媒体出错: $e');
+    } catch (e, s) {
+      // [QBSenHook] v7.3: 附带首帧堆栈，便于定位"裸 Null check"来源
+      final stackHint = _compactStackHint(s);
+      if (mounted) {
+        BlurSnackBar.show(context, '播放出错: $e${stackHint.isNotEmpty ? '\n$stackHint' : ''}');
+      }
+      debugPrint('播放Jellyfin媒体出错: $e\n$s');
+    }
+  }
+
+  /// 提取堆栈中第一个业务代码帧（lib/ 开头），用于诊断定位。
+  String _compactStackHint(StackTrace stackTrace) {
+    try {
+      final lines = stackTrace.toString().split('\n');
+      for (final line in lines) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('#') && trimmed.contains('lib\\')) {
+          return trimmed;
+        }
+        if (trimmed.startsWith('#') && trimmed.contains('lib/')) {
+          return trimmed;
+        }
+      }
+      return lines.isEmpty ? '' : lines.first.trim();
+    } catch (_) {
+      return '';
     }
   }
 
@@ -1853,6 +1876,9 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
         Provider.of<VideoPlayerState>(context, listen: false);
     // [QBSenHook] 已移除：tabChangeNotifier?.changePage(AppPageIds.video);
     // 不再跳转到首页最左边的视频播放页，改为在当前详情页内嵌播放。
+    // [QBSenHook] v7.3: 内嵌播放必须绑定本页 context，否则播放器内部
+    // 需要 context 的逻辑（如进度保存/字幕通知/错误弹窗）会拿到空上下文。
+    videoPlayerState.setContext(context);
 
     final isEmbyPlayback = historyItem.filePath.startsWith('emby://');
     if (!isEmbyPlayback) {
@@ -1873,17 +1899,30 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
 
     // [QBSenHook] emby 播放：不再 pop 详情页，直接初始化内嵌播放
     await Future<void>.delayed(const Duration(milliseconds: 100));
-    await initializeEmbyPlayerAttempt(
-      initialize: () => videoPlayerState.initializePlayer(
-        historyItem.filePath,
-        historyItem: historyItem,
-        playbackSession: playbackSession,
-        embyTrackSelection: embyTrackSelection,
-      ),
-      readError: () => videoPlayerState.error,
-      hasVideo: () => videoPlayerState.hasVideo,
-      play: () async => videoPlayerState.play(),
-    );
+    try {
+      await initializeEmbyPlayerAttempt(
+        initialize: () => videoPlayerState.initializePlayer(
+          historyItem.filePath,
+          historyItem: historyItem,
+          playbackSession: playbackSession,
+          embyTrackSelection: embyTrackSelection,
+        ),
+        readError: () => videoPlayerState.error,
+        hasVideo: () => videoPlayerState.hasVideo,
+        play: () async => videoPlayerState.play(),
+      );
+    } catch (e, s) {
+      // [QBSenHook] v7.3: 附带堆栈定位，避免再次出现"裸 Null check"无从查起
+      final stackHint = _compactStackHint(s);
+      debugPrint('Emby 内嵌播放初始化失败: $e\n$s');
+      if (mounted) {
+        BlurSnackBar.show(
+          context,
+          '播放出错: $e${stackHint.isNotEmpty ? '\n$stackHint' : ''}',
+        );
+      }
+      return;
+    }
     if (mounted) {
       onPlaybackStarted?.call();
     }
