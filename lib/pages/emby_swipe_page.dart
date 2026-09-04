@@ -9,7 +9,6 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/pages/emby_folder_browser_page.dart';
 import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
-import 'package:nipaplay/pages/emby_track_menu.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -1092,30 +1091,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                     '尺寸:${_fitMode.label}',
                     false,
                     () => _panelAction(_cycleFitMode),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              // [QBSenHook] v7.5.4: 音轨/字幕选择行
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  _panelButton(
-                    '音轨',
-                    false,
-                    () => _panelAction(
-                      () => EmbyTrackMenu.showAudioTracks(
-                          context, _videoState),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _panelButton(
-                    '字幕',
-                    false,
-                    () => _panelAction(
-                      () => EmbyTrackMenu.showSubtitleTracks(
-                          context, _videoState),
-                    ),
                   ),
                 ],
               ),
