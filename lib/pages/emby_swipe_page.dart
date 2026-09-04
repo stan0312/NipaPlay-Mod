@@ -1083,12 +1083,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     }
   }
 
-  /// [QBSenHook] v7.5.4: 不再进入全屏播放页 —— 竖屏/横屏在刷片页内直接切换画面方向。
-  void _enterFullscreen(String orientation) {
-    setState(() => _fullscreenOrientation = orientation);
-  }
-
-  /// [QBSenHook] v7.5.2: 单击调出播放控件面板，2 秒后自动隐藏。
+  /// [QBSenHook] v7.5.2: 单击调出播放控件面板，3 秒后自动隐藏。
   void _showControlPanel() {
     if (!mounted) return;
     setState(() => _controlsVisible = true);
@@ -1134,22 +1129,10 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 方向 + 尺寸选择行（页内切换，不跳全屏）
+              // [QBSenHook] v7.5.4: 尺寸调整行（抖音页不进入全屏，仅页内调整画面尺寸）
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _panelButton(
-                    '竖屏',
-                    _fullscreenOrientation == 'portrait',
-                    () => _panelAction(() => _enterFullscreen('portrait')),
-                  ),
-                  const SizedBox(width: 8),
-                  _panelButton(
-                    '横屏',
-                    _fullscreenOrientation == 'landscape',
-                    () => _panelAction(() => _enterFullscreen('landscape')),
-                  ),
-                  const SizedBox(width: 8),
                   _panelButton(
                     '尺寸:${_fitMode.label}',
                     false,
