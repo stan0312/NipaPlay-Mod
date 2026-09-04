@@ -331,8 +331,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         _playbackError = null;
       });
       // 自动开始播放（initializePlayer 已就绪，直接 play）
+      // [QBSenHook] v7.3: play() 是同步 void，不可 await
       try {
-        await videoState.play();
+        videoState.play();
       } catch (e) {
         debugPrint('刷片 play() 失败: $e');
       }

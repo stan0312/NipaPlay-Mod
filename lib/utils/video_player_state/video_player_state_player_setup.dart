@@ -1145,7 +1145,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       }
       //debugPrint('初始化视频播放器时出错: $e');
       // [QBSenHook] v7.3: 提取首个业务代码帧，便于定位"裸 Null check"等编程错误
-      final String stackHint;
+      var stackHint = '';
       try {
         final lines = s.toString().split('\n');
         String first = '';
