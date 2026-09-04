@@ -8,6 +8,7 @@ import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/pages/emby_folder_browser_page.dart';
+import 'package:nipaplay/pages/emby_fullscreen_player_page.dart' show EmbyFitMode;
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
