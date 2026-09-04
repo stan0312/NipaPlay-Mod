@@ -19,6 +19,7 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/services/playback_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
+import 'package:nipaplay/widgets/emby_inline_player.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
@@ -28,8 +29,6 @@ import 'package:nipaplay/providers/appearance_settings_provider.dart';
 import 'package:nipaplay/services/jellyfin_dandanplay_matcher.dart';
 import 'package:nipaplay/services/emby_dandanplay_matcher.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
-import 'package:nipaplay/utils/tab_change_notifier.dart';
-import 'package:nipaplay/app/app_page_ids.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/network_media_server_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/anime_detail_shell.dart';
@@ -1453,6 +1452,8 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // [QBSenHook] 内嵌播放器：点击播放后直接在详情页显示画面，不跳转播放器页
+          const EmbyInlinePlayer(),
           if (_mediaDetail!.originalTitle != null &&
               _mediaDetail!.originalTitle!.isNotEmpty &&
               _mediaDetail!.originalTitle != _mediaDetail!.name)
@@ -1848,56 +1849,44 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     }
 
     if (!mounted) return;
-    final detailNavigator = Navigator.of(context);
     final videoPlayerState =
         Provider.of<VideoPlayerState>(context, listen: false);
-    TabChangeNotifier? tabChangeNotifier;
-    try {
-      tabChangeNotifier =
-          Provider.of<TabChangeNotifier>(context, listen: false);
-    } catch (e) {
-      debugPrint('无法获取TabChangeNotifier: $e');
-    }
-    tabChangeNotifier?.changePage(AppPageIds.video);
+    // [QBSenHook] 已移除：tabChangeNotifier?.changePage(AppPageIds.video);
+    // 不再跳转到首页最左边的视频播放页，改为在当前详情页内嵌播放。
 
     final isEmbyPlayback = historyItem.filePath.startsWith('emby://');
     if (!isEmbyPlayback) {
-      Navigator.of(context).pop();
-      Future<void>.delayed(const Duration(milliseconds: 100), () async {
-        try {
-          await videoPlayerState.initializePlayer(
-            historyItem.filePath,
-            historyItem: historyItem,
-            playbackSession: playbackSession,
-          );
-          videoPlayerState.play();
-        } catch (playError) {
-          debugPrint('异步播放流媒体时出错: $playError');
-        }
-      });
+      // [QBSenHook] 不再 pop 详情页：直接在当前页内嵌播放
+      try {
+        await videoPlayerState.initializePlayer(
+          historyItem.filePath,
+          historyItem: historyItem,
+          playbackSession: playbackSession,
+        );
+        videoPlayerState.play();
+      } catch (playError) {
+        debugPrint('异步播放流媒体时出错: $playError');
+        if (mounted) BlurSnackBar.show(context, '播放出错: $playError');
+      }
       return;
     }
 
-    await startEmbyPlaybackAndCloseDetail(
-      detailNavigator: detailNavigator,
-      startPlayback: () async {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-        await initializeEmbyPlayerAttempt(
-          initialize: () => videoPlayerState.initializePlayer(
-            historyItem.filePath,
-            historyItem: historyItem,
-            playbackSession: playbackSession,
-            embyTrackSelection: embyTrackSelection,
-          ),
-          readError: () => videoPlayerState.error,
-          hasVideo: () => videoPlayerState.hasVideo,
-          play: () async => videoPlayerState.play(),
-        );
-        if (mounted) {
-          onPlaybackStarted?.call();
-        }
-      },
+    // [QBSenHook] emby 播放：不再 pop 详情页，直接初始化内嵌播放
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await initializeEmbyPlayerAttempt(
+      initialize: () => videoPlayerState.initializePlayer(
+        historyItem.filePath,
+        historyItem: historyItem,
+        playbackSession: playbackSession,
+        embyTrackSelection: embyTrackSelection,
+      ),
+      readError: () => videoPlayerState.error,
+      hasVideo: () => videoPlayerState.hasVideo,
+      play: () async => videoPlayerState.play(),
     );
+    if (mounted) {
+      onPlaybackStarted?.call();
+    }
   }
 
   Widget _buildEpisodesListForSelectedSeason() {

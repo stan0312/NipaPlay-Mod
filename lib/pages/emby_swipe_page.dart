@@ -78,6 +78,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   // 内嵌播放状态
   String? _playingItemId;
+  // 正在加载中的条目（initializePlayer 尚未完成时立即反馈）
+  String? _pendingPlayId;
   int _playbackGeneration = 0;
 
   @override
@@ -251,6 +253,13 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   Future<void> _autoPlay(EmbyMediaItem item) async {
     final gen = ++_playbackGeneration;
+    // 立即反馈：正在加载播放，避免用户以为点击没反应
+    if (mounted) {
+      setState(() {
+        _pendingPlayId = item.id;
+        _playingItemId = null;
+      });
+    }
     try {
       final historyItem = WatchHistoryItem(
         filePath: 'emby://${item.id}',
@@ -289,11 +298,17 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         playbackDetailContext: detailContext,
       );
       if (!mounted || gen != _playbackGeneration) return;
-      setState(() => _playingItemId = item.id);
+      setState(() {
+        _playingItemId = item.id;
+        _pendingPlayId = null;
+      });
     } catch (e) {
       debugPrint('刷片自动播放失败: $e');
       if (mounted && gen == _playbackGeneration) {
-        setState(() => _playingItemId = null);
+        setState(() {
+          _playingItemId = null;
+          _pendingPlayId = null;
+        });
       }
     }
   }
@@ -309,6 +324,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       debugPrint('停止刷片播放失败: $e');
     }
     _playingItemId = null;
+    _pendingPlayId = null;
   }
 
   Widget _buildVideoSurface() {
@@ -647,23 +663,25 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     final imageUri = item.imagePrimaryTag != null
         ? Uri.tryParse(service.getImageUrl(item.id, tag: item.imagePrimaryTag))
         : null;
-    final isCurrentPlaying =
-        index == _currentIndex && _playingItemId == item.id;
+    final isPending = _pendingPlayId == item.id;
+    final isPlayingNow = _playingItemId == item.id;
+    final isActiveCard =
+        index == _currentIndex && (isPending || isPlayingNow);
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 正在播放的视频画面（仅当前页）
-        if (isCurrentPlaying) ...[
-          Positioned.fill(child: _buildVideoSurface()),
+        // 已开始播放：显示视频画面
+        if (isPlayingNow) Positioned.fill(child: _buildVideoSurface()),
+        // 状态提示条（加载中/播放中/出错时显示）
+        if (isActiveCard)
           Positioned(
             left: 12,
             right: 12,
             top: MediaQuery.of(context).padding.top + 54,
             child: _buildPlaybackStatusBanner(),
           ),
-        ],
-        // 背景图（未播放时显示）
-        if (!isCurrentPlaying)
+        // 背景图（尚未出画面时显示，含加载中）
+        if (!isPlayingNow)
           if (imageUri != null)
             MediaServerNetworkImage(
               imageUri,
@@ -703,13 +721,17 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               ),
               const SizedBox(height: 18),
               _buildActionButton(
-                icon: isCurrentPlaying
+                icon: isPlayingNow
                     ? Icons.pause_circle_filled_rounded
-                    : Icons.play_circle_fill_rounded,
+                    : (isPending
+                        ? Icons.hourglass_top_rounded
+                        : Icons.play_circle_fill_rounded),
                 color: Colors.white,
-                label: isCurrentPlaying ? '播放中' : '播放',
+                label: isPlayingNow
+                    ? '播放中'
+                    : (isPending ? '加载中' : '播放'),
                 onTap: () {
-                  if (_playingItemId != item.id) {
+                  if (!isPending && !isPlayingNow) {
                     _autoPlay(item);
                   }
                 },
