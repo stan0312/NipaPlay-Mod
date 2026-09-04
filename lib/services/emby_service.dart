@@ -773,17 +773,16 @@ class EmbyService extends MediaServerServiceBase
       String path;
       if (playlistId != null) {
         path =
-            '/emby/Playlists//Items?UserId=&Limit=&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated';
+            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated';
       } else {
         final filter = favoritesOnly ? '&Filters=IsFavorite' : '';
         final parent = libraryId != null && libraryId.isNotEmpty
-            ? '&ParentId='
+            ? '&ParentId=$libraryId'
             : '';
-        final includeTypes = libraryId != null
-            ? 'Movie,Episode,Video'
-            : 'Movie,Series,Episode,Video';
+        // 直接查可播放项（不含 Series；Recursive=true 会把剧集展开成 Episode）
+        const includeTypes = 'Movie,Episode,Video';
         path =
-            '/emby/Users//Items?Recursive=true&IncludeItemTypes=&Limit=&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated&SortBy=DateCreated&SortOrder=Descending';
+            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated&SortBy=DateCreated&SortOrder=Descending';
       }
       final response = await _makeAuthenticatedRequest(path);
       if (response.statusCode != 200) {
@@ -809,7 +808,7 @@ class EmbyService extends MediaServerServiceBase
     if (!_isConnected || _userId == null) return [];
     try {
       final response = await _makeAuthenticatedRequest(
-          '/emby/Users//Items?IncludeItemTypes=Playlist&Recursive=true&Limit=');
+          '/emby/Users/$_userId/Items?IncludeItemTypes=Playlist&Recursive=true&Limit=$limit');
       if (response.statusCode != 200) return [];
       final data = json.decode(response.body);
       final items = data['Items'];
@@ -827,7 +826,7 @@ class EmbyService extends MediaServerServiceBase
     try {
       final method = isFavorite ? 'DELETE' : 'POST';
       final response = await _makeAuthenticatedRequest(
-        '/emby/Users//FavoriteItems/',
+        '/emby/Users/$_userId/FavoriteItems/$itemId',
         method: method,
       );
       return response.statusCode == 200;

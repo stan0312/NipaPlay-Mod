@@ -553,8 +553,10 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     }
   }
 
-  // [QBSenHook] 将电影信息转换为虚拟剧集，复用剧集完整播放流程
-  EmbyEpisodeInfo _createVirtualEmbyEpisodeFromMovie(EmbyMovieInfo movie) {
+  // [QBSenHook] 将电影信息转换为虚拟剧集，复用剧集完整播放流程。
+  // 注意：详情页 _mediaDetail 实际是 EmbyMediaItemDetail，因此参数用 dynamic，
+  // 通过字段访问取值，避免类型不匹配运行时错误。
+  EmbyEpisodeInfo _createVirtualEmbyEpisodeFromMovie(dynamic movie) {
     return EmbyEpisodeInfo(
       id: movie.id,
       name: movie.name,
@@ -572,9 +574,7 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     );
   }
 
-  JellyfinEpisodeInfo _createVirtualJellyfinEpisodeFromMovie(
-    JellyfinMovieInfo movie,
-  ) {
+  JellyfinEpisodeInfo _createVirtualJellyfinEpisodeFromMovie(dynamic movie) {
     return JellyfinEpisodeInfo(
       id: movie.id,
       name: movie.name,
