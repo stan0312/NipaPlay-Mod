@@ -8,7 +8,6 @@ import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/pages/emby_folder_browser_page.dart';
-import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -421,6 +420,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     _playbackError = null;
   }
 
+  /// [QBSenHook] v7.5.4: 刷片页页内画面渲染 —— 不进入全屏页，
+  /// 方向（竖屏/横屏）+ 尺寸模式在页面内直接作用于画面。
   Widget _buildVideoSurface() {
     return Consumer<VideoPlayerState>(
       builder: (context, videoState, child) {
@@ -442,7 +443,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               final double maxW = constraints.maxWidth;
               final double maxH = constraints.maxHeight;
               if (maxW <= 0 || maxH <= 0) return const SizedBox.shrink();
-              final double hForWidth = maxW / ratio;
               final Widget texture = ValueListenableBuilder<int?>(
                 valueListenable: player.textureId,
                 builder: (context, textureId, child) {
@@ -457,8 +457,63 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                   );
                 },
               );
+
+              // [QBSenHook] v7.5.4: 横屏模式 —— 画面旋转 90° 横铺
+              if (_fullscreenOrientation == 'landscape') {
+                final double side = maxW < maxH ? maxW : maxH;
+                // 旋转后宽度优先铺满：取 side 宽、side/ratio 高的竖放区域
+                final double hForW = side / ratio;
+                final Widget rot = RotatedBox(
+                  quarterTurns: 1,
+                  child: hForW <= side
+                      ? SizedBox(width: side, height: hForW, child: texture)
+                      : FittedBox(
+                          fit: BoxFit.contain,
+                          child:
+                              SizedBox(width: side, height: hForW, child: texture),
+                        ),
+                );
+                return Center(
+                  child: SizedBox(width: side, height: side, child: rot),
+                );
+              }
+
+              // 竖屏模式：按 _fitMode 控制画面尺寸
+              switch (_fitMode) {
+                case EmbyFitMode.cover:
+                  return SizedBox.expand(
+                    child: FittedBox(
+                      fit: BoxFit.cover,
+                      clipBehavior: Clip.hardEdge,
+                      child: SizedBox(
+                        width: maxW,
+                        height: maxW / ratio,
+                        child: texture,
+                      ),
+                    ),
+                  );
+                case EmbyFitMode.r16_9:
+                case EmbyFitMode.r4_3:
+                case EmbyFitMode.r1_1:
+                case EmbyFitMode.r9_16:
+                  final double targetRatio = _fitModeRatio(_fitMode);
+                  final double hTarget = maxW / targetRatio;
+                  return Center(
+                    child: FittedBox(
+                      fit: BoxFit.contain,
+                      child: SizedBox(
+                        width: maxW,
+                        height: hTarget,
+                        child: texture,
+                      ),
+                    ),
+                  );
+                case EmbyFitMode.original:
+                  break;
+              }
+              // 原始模式：宽铺满（横屏视频上下留白），高度受限时 contain
+              final double hForWidth = maxW / ratio;
               if (hForWidth <= maxH) {
-                // 宽铺满（横屏视频上下留白）
                 return Align(
                   alignment: Alignment.topCenter,
                   child: SizedBox(
@@ -468,7 +523,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                   ),
                 );
               }
-              // 高度受限：contain 居中（竖屏视频左右留白，不裁剪）
               return FittedBox(
                 fit: BoxFit.contain,
                 child: SizedBox(
@@ -484,6 +538,22 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         }
       },
     );
+  }
+
+  /// [QBSenHook] v7.5.4: 尺寸模式对应的目标宽高比。
+  double _fitModeRatio(EmbyFitMode mode) {
+    switch (mode) {
+      case EmbyFitMode.r16_9:
+        return 16 / 9;
+      case EmbyFitMode.r4_3:
+        return 4 / 3;
+      case EmbyFitMode.r1_1:
+        return 1.0;
+      case EmbyFitMode.r9_16:
+        return 9 / 16;
+      default:
+        return 16 / 9;
+    }
   }
 
   /// 从播放器媒体信息读取视频宽高比（未知时返回 null，走 16:9 默认）。
@@ -1013,16 +1083,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     }
   }
 
-  /// [QBSenHook] v7.5.2: 进入全屏播放页（带方向与画面尺寸选择，默认竖屏）。
+  /// [QBSenHook] v7.5.4: 不再进入全屏播放页 —— 竖屏/横屏在刷片页内直接切换画面方向。
   void _enterFullscreen(String orientation) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => EmbyFullscreenPlayerPage(
-          preferredOrientation: orientation,
-          initialFitMode: _fitMode,
-        ),
-      ),
-    );
+    setState(() => _fullscreenOrientation = orientation);
   }
 
   /// [QBSenHook] v7.5.2: 单击调出播放控件面板，2 秒后自动隐藏。
@@ -1071,18 +1134,18 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 方向 + 尺寸选择行（横屏/竖屏直接进入全屏，默认竖屏）
+              // 方向 + 尺寸选择行（页内切换，不跳全屏）
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   _panelButton(
-                    '竖屏播放',
+                    '竖屏',
                     _fullscreenOrientation == 'portrait',
                     () => _panelAction(() => _enterFullscreen('portrait')),
                   ),
                   const SizedBox(width: 8),
                   _panelButton(
-                    '横屏播放',
+                    '横屏',
                     _fullscreenOrientation == 'landscape',
                     () => _panelAction(() => _enterFullscreen('landscape')),
                   ),
