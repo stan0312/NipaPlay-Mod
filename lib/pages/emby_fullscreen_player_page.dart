@@ -71,7 +71,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     super.dispose();
   }
 
-  /// 显示控件并重置 2 秒自动隐藏计时。
+  /// 显示控件并重置 3 秒自动隐藏计时。
   void _showControls() {
     if (!mounted) return;
     setState(() => _controlsVisible = true);
@@ -80,7 +80,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
 
   void _startControlsTimer() {
     _controlsTimer?.cancel();
-    _controlsTimer = Timer(const Duration(seconds: 2), () {
+    _controlsTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _controlsVisible = false);
     });
   }

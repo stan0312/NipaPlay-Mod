@@ -19,7 +19,7 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/services/playback_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
-import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
+import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
@@ -1892,9 +1892,13 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
         videoPlayerState.play();
         onPlaybackStarted?.call();
         if (mounted) {
+          // [QBSenHook] v7.5.3: 点播放直接进抖音式刷片页（竖屏上下滑），不跳全屏横屏
           Navigator.of(context).push(
             MaterialPageRoute(
-              builder: (_) => const EmbyFullscreenPlayerPage(),
+              builder: (_) => EmbySwipePage(
+                title: '刷片',
+                initialItemId: _mediaDetail?.id,
+              ),
             ),
           );
         }
@@ -1933,10 +1937,13 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     }
     if (mounted) {
       onPlaybackStarted?.call();
-      // [QBSenHook] v7.5: 直接进入全屏播放界面（复用同一 VideoPlayerState/texture）
+      // [QBSenHook] v7.5.3: 直接进入抖音式刷片页（竖屏上下滑播放），不跳全屏横屏
       Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => const EmbyFullscreenPlayerPage(),
+          builder: (_) => EmbySwipePage(
+            title: '刷片',
+            initialItemId: _mediaDetail?.id,
+          ),
         ),
       );
     }

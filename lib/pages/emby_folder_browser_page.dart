@@ -86,17 +86,14 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   }
 
   void _openFolder(EmbyMediaItem folder) {
-    // [QBSenHook] v7.5.2: 点击文件夹直接进入抖音模式播放，
-    // 播放列表 = 该文件夹内的所有视频文件。
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => EmbySwipePage(
-          title: '${folder.name} 刷片',
-          initialParentId: folder.id,
-          parentName: folder.name,
-        ),
-      ),
-    );
+    // [QBSenHook] v7.5.3: 文件夹模式真实层级浏览——
+    // 点文件夹继续进入子文件夹（一层层下钻），点视频才进抖音式刷片播放。
+    setState(() {
+      _path.add(_FolderEntry(folder.id, folder.name));
+      _currentId = folder.id;
+      _currentName = folder.name;
+    });
+    _load();
   }
 
   void _enterLibrary(EmbyLibrary lib) {
@@ -149,15 +146,18 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     );
   }
 
-  void _openVideoSwipe() {
+  void _openVideoSwipe(EmbyMediaItem video) {
     if (_currentId == null) return;
-    // 在该文件夹内上下滑播放（从第一个视频开始）
+    // [QBSenHook] v7.5.3: 点视频直接进入抖音式刷片播放，
+    // 播放列表 = 当前文件夹内全部视频，定位到点击的这个视频开始播放；
+    // 往下滑依次播放文件夹内下一个视频。
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => EmbySwipePage(
           title: '$_currentName 刷片',
           initialParentId: _currentId,
           parentName: _currentName,
+          initialItemId: video.id,
         ),
       ),
     );
@@ -406,7 +406,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
             service.getImageUrl(video.id, tag: video.imagePrimaryTag))
         : null;
     return _Card(
-      onTap: _openVideoSwipe,
+      onTap: () => _openVideoSwipe(video),
       child: Stack(
         fit: StackFit.expand,
         children: [

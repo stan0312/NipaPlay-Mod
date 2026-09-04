@@ -28,6 +28,7 @@ class EmbySwipePage extends StatefulWidget {
     this.playlistName,
     this.initialParentId,
     this.parentName,
+    this.initialItemId,
   });
 
   final String title;
@@ -39,6 +40,9 @@ class EmbySwipePage extends StatefulWidget {
   /// 文件夹模式：从文件夹浏览页进入，在此文件夹内上下滑播放
   final String? initialParentId;
   final String? parentName;
+
+  /// [QBSenHook] v7.5.3: 初始定位条目：进入后直接跳到该条目并从它开始播放
+  final String? initialItemId;
 
   @override
   State<EmbySwipePage> createState() => _EmbySwipePageState();
@@ -54,6 +58,9 @@ enum SwipeSort {
   const SwipeSort(this.label);
   final String label;
 }
+
+/// [QBSenHook] v7.5.3: 视频区左右边缘手势：左侧调亮度、右侧调音量（尽量靠边）
+enum EdgeGestureSide { left, right }
 
 class _EmbySwipePageState extends State<EmbySwipePage> {
   final PageController _pageController = PageController();
@@ -88,13 +95,22 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   String? _playbackError;
   int _playbackGeneration = 0;
 
-  // [QBSenHook] v7.5.2: 单击调出的播放控件面板（2 秒自动隐藏）
+  // [QBSenHook] v7.5.2: 单击调出的播放控件面板（3 秒自动隐藏）
   bool _controlsVisible = false;
   Timer? _controlsTimer;
   // 全屏播放方向选择（默认竖屏）
   String _fullscreenOrientation = 'portrait';
   // 画面尺寸模式
   EmbyFitMode _fitMode = EmbyFitMode.original;
+
+  // [QBSenHook] v7.5.3: 缓存播放器引用，dispose 时停止播放（退出后立即无声音）
+  late final VideoPlayerState _videoState;
+  // 持续 seek 拖拽状态：起始位置与累计偏移
+  bool _seekDragging = false;
+  Duration _seekDragStartPos = Duration.zero;
+  double _seekDragAccum = 0.0;
+  // 左右边缘手势起始模式：brightness / volume
+  String? _edgeDragMode;
 
   @override
   void initState() {
@@ -103,6 +119,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
     ]);
+    _videoState = Provider.of<VideoPlayerState>(context, listen: false);
     _libraryId = widget.initialLibraryId;
     _favoritesOnly = widget.favoritesOnly;
     _playlistId = widget.playlistId;
@@ -116,12 +133,18 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   @override
   void dispose() {
     _controlsTimer?.cancel();
+    // [QBSenHook] v7.5.3: 退出刷片页立即停止播放，避免"退出后仍有声音"
+    _playbackGeneration++;
+    try {
+      unawaited(_videoState.stop());
+    } catch (e) {
+      debugPrint('退出刷片页停止播放失败: $e');
+    }
     // [QBSenHook] v7.5.1: 离开刷片页恢复竖屏（全局默认竖屏）
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
     ]);
     _pageController.dispose();
-    _playbackGeneration++;
     _playingItemId = null;
     super.dispose();
   }
@@ -130,8 +153,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     try {
       final prefs = await SharedPreferences.getInstance();
       if (!mounted) return;
-      // 仅在非显式指定来源时恢复上次选择
-      if (widget.initialLibraryId == null &&
+      // 仅在非显式指定来源时恢复上次选择；initialItemId 场景（详情页直进）不覆盖来源
+      if (widget.initialItemId == null &&
+          widget.initialLibraryId == null &&
           !widget.favoritesOnly &&
           widget.playlistId == null &&
           widget.initialParentId == null) {
@@ -237,21 +261,27 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         favoritesOnly: _favoritesOnly,
         playlistId: _playlistId,
         sortBy: _sort.name,
-        limit: 80,
+        limit: 500,
       );
       if (!mounted) return;
+      // [QBSenHook] v7.5.3: initialItemId 定位到该条目（详情页/文件夹点视频直进）
+      var startIndex = 0;
+      if (widget.initialItemId != null) {
+        final idx = items.indexWhere((e) => e.id == widget.initialItemId);
+        if (idx >= 0) startIndex = idx;
+      }
       setState(() {
         _items = items;
         _loading = false;
-        _currentIndex = 0;
+        _currentIndex = startIndex;
       });
       if (_pageController.hasClients) {
-        _pageController.jumpToPage(0);
+        _pageController.jumpToPage(startIndex);
       }
       _loadSourceOptions();
       _savePreferences();
-      if (items.isNotEmpty) {
-        _autoPlay(items.first);
+      if (items.isNotEmpty && startIndex < items.length) {
+        _autoPlay(items[startIndex]);
       }
     } catch (e) {
       if (!mounted) return;
@@ -286,12 +316,17 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       });
     }
     try {
+      // [QBSenHook] v7.5.3: 续播——从 Emby 服务端的观看进度(PlaybackPositionTicks)恢复
+      // ticks 转毫秒 = ticks / 10000
+      final resumeMs =
+          (item.userData?.playbackPositionTicks ?? 0.0) / 10000.0;
+      final resumePositionMs = resumeMs > 0 ? resumeMs.round() : 0;
       final historyItem = WatchHistoryItem(
         filePath: 'emby://${item.id}',
         animeName: item.name,
         episodeTitle: null,
         watchProgress: 0.0,
-        lastPosition: 0,
+        lastPosition: resumePositionMs,
         duration: 0,
         lastWatchTime: DateTime.now(),
         animeId: null,
@@ -771,18 +806,24 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         index == _currentIndex && (isPending || isPlayingNow);
     final showPlaybackError =
         _playbackError != null && index == _currentIndex;
-    // [QBSenHook] v7.5.2: 单击调出播放控件面板（2秒自动隐藏）、
-    // 双击暂停/播放、左右滑快进/快退（与进度条拖动平行）。
+    // [QBSenHook] v7.5.3: 单击调出播放控件面板（3秒自动隐藏）、
+    // 双击暂停/播放、左右滑持续快进/快退（慢速持续滑动一直快进快退）。
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _showControlPanel,
       onDoubleTap: _togglePlayPause,
+      onHorizontalDragStart: _onHorizontalDragStart,
+      onHorizontalDragUpdate: _onHorizontalDragUpdate,
       onHorizontalDragEnd: _onHorizontalDragEnd,
       child: Stack(
         fit: StackFit.expand,
         children: [
-        // 已开始播放：显示视频画面
-        if (isPlayingNow) Positioned.fill(child: _buildVideoSurface()),
+        // 已开始播放：显示视频画面（叠加左右边缘亮度/音量手势区）
+        if (isPlayingNow) ...[
+          Positioned.fill(child: _buildVideoSurface()),
+          _buildEdgeGestureArea(EdgeGestureSide.left),
+          _buildEdgeGestureArea(EdgeGestureSide.right),
+        ],
         // 状态提示条（加载中/播放中/出错时显示）
         if (isActiveCard)
           Positioned(
@@ -975,12 +1016,12 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     if (!mounted) return;
     setState(() => _controlsVisible = true);
     _controlsTimer?.cancel();
-    _controlsTimer = Timer(const Duration(seconds: 2), () {
+    _controlsTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _controlsVisible = false);
     });
   }
 
-  /// 面板按钮动作：执行操作并重置 2 秒隐藏计时。
+  /// 面板按钮动作：执行操作并重置 3 秒隐藏计时。
   void _panelAction(VoidCallback action) {
     action();
     _showControlPanel();
@@ -1092,15 +1133,85 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   }
 
   /// [QBSenHook] v7.5: 左右滑快进/快退（左滑快进、右滑快退，各 10 秒）。
-  void _onHorizontalDragEnd(DragEndDetails details) {
-    final velocity = details.primaryVelocity ?? 0;
+  // [QBSenHook] v7.5.3: 左右滑持续快进/快退——
+  // 按下记录起点，拖动每累计 24px 跳 5 秒（慢速持续滑动就一直快进/快退），松手结束。
+  void _onHorizontalDragStart(DragStartDetails details) {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!videoState.hasVideo) return;
-    if (velocity < -300) {
-      videoState.seekForwardByStep();
-    } else if (velocity > 300) {
-      videoState.seekBackwardByStep();
+    _seekDragging = true;
+    _seekDragStartPos = videoState.position;
+    _seekDragAccum = 0.0;
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails details) {
+    final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    if (!_seekDragging || !videoState.hasVideo) return;
+    _seekDragAccum += details.delta.dx;
+    const double pxPerStep = 24.0;
+    const int secondsPerStep = 5;
+    if (_seekDragAccum.abs() >= pxPerStep) {
+      final steps = (_seekDragAccum / pxPerStep).round();
+      final target =
+          _seekDragStartPos + Duration(seconds: steps * secondsPerStep);
+      unawaited(videoState.seekTo(target));
+      _seekDragStartPos = videoState.position;
+      _seekDragAccum = 0.0;
     }
+  }
+
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    _seekDragging = false;
+    _seekDragAccum = 0.0;
+  }
+
+  // [QBSenHook] v7.5.3: 视频区左右边缘手势条——左边缘上下滑调亮度、
+  // 右边缘上下滑调音量，宽度约为屏宽 22%（尽量靠边），中间区域留给上下滑切页。
+  Widget _buildEdgeGestureArea(EdgeGestureSide side) {
+    return Positioned(
+      left: side == EdgeGestureSide.left ? 0 : null,
+      right: side == EdgeGestureSide.right ? 0 : null,
+      top: 0,
+      bottom: 0,
+      width: MediaQuery.of(context).size.width * 0.22,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _showControlPanel,
+        onDoubleTap: _togglePlayPause,
+        onVerticalDragStart: (details) {
+          _edgeDragMode = side == EdgeGestureSide.left
+              ? 'brightness'
+              : 'volume';
+          if (_edgeDragMode == 'brightness') {
+            _videoState.startBrightnessDrag();
+          } else {
+            _videoState.startVolumeDrag();
+          }
+        },
+        onVerticalDragUpdate: (details) {
+          if (_edgeDragMode == 'brightness') {
+            _videoState.updateBrightnessOnDrag(details.delta.dy, context);
+          } else if (_edgeDragMode == 'volume') {
+            _videoState.updateVolumeOnDrag(details.delta.dy, context);
+          }
+        },
+        onVerticalDragEnd: (details) {
+          if (_edgeDragMode == 'brightness') {
+            _videoState.endBrightnessDrag();
+          } else if (_edgeDragMode == 'volume') {
+            _videoState.endVolumeDrag();
+          }
+          _edgeDragMode = null;
+        },
+        onVerticalDragCancel: () {
+          if (_edgeDragMode == 'brightness') {
+            _videoState.endBrightnessDrag();
+          } else if (_edgeDragMode == 'volume') {
+            _videoState.endVolumeDrag();
+          }
+          _edgeDragMode = null;
+        },
+      ),
+    );
   }
 
   Widget _buildPlaybackStatusBanner() {
