@@ -764,16 +764,26 @@ class EmbyService extends MediaServerServiceBase
     String? libraryId,
     bool favoritesOnly = false,
     String? playlistId,
+    String? sortBy, // dateCreated(默认) / name / random / size
     int limit = 60,
   }) async {
     if (!_isConnected || _userId == null || _accessToken == null) {
       return [];
     }
     try {
+      // 排序：random/size 在客户端处理，服务端统一用 DateCreated 拉取
+      String sortQuery;
+      switch (sortBy) {
+        case 'name':
+          sortQuery = '&SortBy=SortName&SortOrder=Ascending';
+          break;
+        default:
+          sortQuery = '&SortBy=DateCreated&SortOrder=Descending';
+      }
       String path;
       if (playlistId != null) {
         path =
-            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated';
+            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
       } else {
         final filter = favoritesOnly ? '&Filters=IsFavorite' : '';
         final parent = libraryId != null && libraryId.isNotEmpty
@@ -782,7 +792,7 @@ class EmbyService extends MediaServerServiceBase
         // 直接查可播放项（不含 Series；Recursive=true 会把剧集展开成 Episode）
         const includeTypes = 'Movie,Episode,Video';
         path =
-            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated&SortBy=DateCreated&SortOrder=Descending';
+            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
       }
       final response = await _makeAuthenticatedRequest(path);
       if (response.statusCode != 200) {
@@ -793,12 +803,40 @@ class EmbyService extends MediaServerServiceBase
       final data = json.decode(response.body);
       final items = data['Items'];
       if (items is! List) return [];
-      return items
+      final result = items
           .map((e) => EmbyMediaItem.fromJson(e))
           .where((e) => !e.isFolder)
           .toList();
+      if (sortBy == 'random') {
+        result.shuffle();
+      } else if (sortBy == 'size') {
+        result.sort(
+            (a, b) => (b.size ?? 0).compareTo(a.size ?? 0));
+      }
+      return result;
     } catch (e) {
       DebugLogService().addLog('EmbyService: 获取刷片条目异常: ');
+      return [];
+    }
+  }
+
+  // 列出父文件夹下的直接子项（文件夹 + 可播放项），用于文件夹方式浏览
+  Future<List<EmbyMediaItem>> getFolderChildren(String parentId) async {
+    if (!_isConnected || _userId == null || _accessToken == null) {
+      return [];
+    }
+    try {
+      final response = await _makeAuthenticatedRequest(
+          '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false&SortBy=SortName&SortOrder=Ascending&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size&Limit=300');
+      if (response.statusCode != 200) {
+        return [];
+      }
+      final data = json.decode(response.body);
+      final items = data['Items'];
+      if (items is! List) return [];
+      return items.map((e) => EmbyMediaItem.fromJson(e)).toList();
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 获取文件夹子项异常: ');
       return [];
     }
   }

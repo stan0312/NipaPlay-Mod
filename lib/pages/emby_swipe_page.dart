@@ -2,12 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/pages/emby_folder_browser_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
-import 'package:nipaplay/services/playback_service.dart';
+import 'package:nipaplay/services/playback_source_service.dart';
+import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-/// [QBSenHook] 抖音式刷片页：竖屏上下滑浏览 Emby 媒体库/收藏/播放列表。
-/// 数据来自 NAS Emby 服务端，播放走现有 media_kit(mpv) 内核。
+/// [QBSenHook] 抖音式刷片页：竖屏上下滑浏览 Emby 媒体库/收藏/播放列表/文件夹。
+/// 数据来自 NAS Emby 服务端，播放内嵌在刷片页内（不跳转播放器页），
+/// 滑动到哪一页就自动播放哪一页。
 class EmbySwipePage extends StatefulWidget {
   const EmbySwipePage({
     super.key,
@@ -16,6 +21,8 @@ class EmbySwipePage extends StatefulWidget {
     this.favoritesOnly = false,
     this.playlistId,
     this.playlistName,
+    this.initialParentId,
+    this.parentName,
   });
 
   final String title;
@@ -24,8 +31,23 @@ class EmbySwipePage extends StatefulWidget {
   final String? playlistId;
   final String? playlistName;
 
+  /// 文件夹模式：从文件夹浏览页进入，在此文件夹内上下滑播放
+  final String? initialParentId;
+  final String? parentName;
+
   @override
   State<EmbySwipePage> createState() => _EmbySwipePageState();
+}
+
+/// 排序方式
+enum SwipeSort {
+  dateCreated('按时间添加'),
+  name('按文件名'),
+  random('随机'),
+  size('按大小');
+
+  const SwipeSort(this.label);
+  final String label;
 }
 
 class _EmbySwipePageState extends State<EmbySwipePage> {
@@ -40,6 +62,11 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   bool _favoritesOnly = false;
   String? _playlistId;
   String? _playlistName;
+  String? _parentId; // 文件夹模式
+  String? _parentName;
+
+  // 排序
+  SwipeSort _sort = SwipeSort.dateCreated;
 
   List<EmbyLibrary> _libraries = [];
   List<EmbyLibrary> _playlists = [];
@@ -48,6 +75,10 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   final Set<String> _favoriteOn = {};
   final Set<String> _favoriteOff = {};
 
+  // 内嵌播放状态
+  String? _playingItemId;
+  int _playbackGeneration = 0;
+
   @override
   void initState() {
     super.initState();
@@ -55,16 +86,104 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     _favoritesOnly = widget.favoritesOnly;
     _playlistId = widget.playlistId;
     _playlistName = widget.playlistName;
+    _parentId = widget.initialParentId;
+    _parentName = widget.parentName;
+    _restorePreferences();
     _load();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    _playbackGeneration++;
+    _playingItemId = null;
     super.dispose();
   }
 
+  Future<void> _restorePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      // 仅在非显式指定来源时恢复上次选择
+      if (widget.initialLibraryId == null &&
+          !widget.favoritesOnly &&
+          widget.playlistId == null &&
+          widget.initialParentId == null) {
+        final type = prefs.getString('qbsen_swipe_source_type') ?? 'all';
+        final id = prefs.getString('qbsen_swipe_source_id');
+        setState(() {
+          switch (type) {
+            case 'favorites':
+              _favoritesOnly = true;
+              break;
+            case 'playlist':
+              _playlistId = id;
+              break;
+            case 'library':
+              _libraryId = id;
+              break;
+            case 'folder':
+              _parentId = id;
+              _parentName = prefs.getString('qbsen_swipe_source_name');
+              break;
+            default:
+              break;
+          }
+        });
+      }
+      final sortName = prefs.getString('qbsen_swipe_sort');
+      if (sortName != null) {
+        for (final s in SwipeSort.values) {
+          if (s.name == sortName) {
+            setState(() => _sort = s);
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('刷片恢复偏好失败: $e');
+    }
+  }
+
+  Future<void> _savePreferences() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String type;
+      String? id;
+      String? name;
+      if (_parentId != null) {
+        type = 'folder';
+        id = _parentId;
+        name = _parentName;
+      } else if (_playlistId != null) {
+        type = 'playlist';
+        id = _playlistId;
+        name = _playlistName;
+      } else if (_favoritesOnly) {
+        type = 'favorites';
+      } else if (_libraryId != null) {
+        type = 'library';
+        id = _libraryId;
+      } else {
+        type = 'all';
+      }
+      await prefs.setString('qbsen_swipe_source_type', type);
+      if (id != null) {
+        await prefs.setString('qbsen_swipe_source_id', id);
+      } else {
+        await prefs.remove('qbsen_swipe_source_id');
+      }
+      if (name != null) {
+        await prefs.setString('qbsen_swipe_source_name', name);
+      }
+      await prefs.setString('qbsen_swipe_sort', _sort.name);
+    } catch (e) {
+      debugPrint('保存刷片偏好失败: $e');
+    }
+  }
+
   String get _sourceTitle {
+    if (_parentId != null) return _parentName ?? '文件夹';
     if (_playlistId != null) return _playlistName ?? '播放列表';
     if (_favoritesOnly) return '我的收藏';
     if (_libraryId != null) {
@@ -81,12 +200,16 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       _loading = true;
       _error = null;
     });
+    _stopPlayback();
     try {
       final service = EmbyService.instance;
+      // 文件夹模式用 parentId 作为数据源
+      final sourceId = _parentId ?? _libraryId;
       final items = await service.getSwipeItems(
-        libraryId: _libraryId,
+        libraryId: sourceId,
         favoritesOnly: _favoritesOnly,
         playlistId: _playlistId,
+        sortBy: _sort.name,
         limit: 80,
       );
       if (!mounted) return;
@@ -99,6 +222,10 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         _pageController.jumpToPage(0);
       }
       _loadSourceOptions();
+      _savePreferences();
+      if (items.isNotEmpty) {
+        _autoPlay(items.first);
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -118,6 +245,93 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       _playlists = playlists;
     });
   }
+
+  // ============ 内嵌播放 ============
+
+  Future<void> _autoPlay(EmbyMediaItem item) async {
+    final gen = ++_playbackGeneration;
+    try {
+      final historyItem = WatchHistoryItem(
+        filePath: 'emby://${item.id}',
+        animeName: item.name,
+        episodeTitle: null,
+        watchProgress: 0.0,
+        lastPosition: 0,
+        duration: 0,
+        lastWatchTime: DateTime.now(),
+        animeId: null,
+        isFromScan: false,
+      );
+      final playbackSession = await EmbyService.instance
+          .createPlaybackSession(itemId: item.id);
+      if (!mounted || gen != _playbackGeneration) return;
+      final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+      final playable = PlayableItem(
+        videoPath: historyItem.filePath,
+        title: item.name,
+        historyItem: historyItem,
+        playbackSession: playbackSession,
+      );
+      final detailContext =
+          await PlaybackSourceService.resolve(context, playable);
+      if (!mounted || gen != _playbackGeneration) return;
+      await videoState.initializePlayer(
+        playable.videoPath,
+        historyItem: historyItem,
+        playbackSession: playbackSession,
+        playbackDetailContext: detailContext,
+      );
+      if (!mounted || gen != _playbackGeneration) return;
+      setState(() => _playingItemId = item.id);
+    } catch (e) {
+      debugPrint('刷片自动播放失败: $e');
+      if (mounted && gen == _playbackGeneration) {
+        setState(() => _playingItemId = null);
+      }
+    }
+  }
+
+  void _stopPlayback() {
+    _playbackGeneration++;
+    if (!mounted) return;
+    try {
+      final videoState =
+          Provider.of<VideoPlayerState>(context, listen: false);
+      videoState.stop();
+    } catch (e) {
+      debugPrint('停止刷片播放失败: $e');
+    }
+    _playingItemId = null;
+  }
+
+  Widget _buildVideoSurface() {
+    return Consumer<VideoPlayerState>(
+      builder: (context, videoState, child) {
+        if (!videoState.hasVideo) return const SizedBox.shrink();
+        final player = videoState.player;
+        try {
+          if (player.prefersPlatformVideoSurface) {
+            final surface = player.buildPlatformVideoSurface(
+              debugLabel: 'swipe',
+            );
+            if (surface != null) return surface;
+          }
+          final textureId = player.textureId.value;
+          if (textureId == null || textureId < 0) {
+            return const SizedBox.shrink();
+          }
+          return Texture(
+            textureId: textureId,
+            filterQuality: FilterQuality.medium,
+          );
+        } catch (e) {
+          return const SizedBox.shrink();
+        }
+      },
+    );
+  }
+
+  // ============ 收藏 ============
 
   bool _isFavorite(EmbyMediaItem item) {
     if (_favoriteOn.contains(item.id)) return true;
@@ -148,33 +362,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     }
   }
 
-  Future<void> _playItem(EmbyMediaItem item) async {
-    try {
-      final historyItem = WatchHistoryItem(
-        filePath: 'emby://${item.id}',
-        animeName: item.name,
-        episodeTitle: null,
-        watchProgress: 0.0,
-        lastPosition: 0,
-        duration: 0,
-        lastWatchTime: DateTime.now(),
-        animeId: null,
-        isFromScan: false,
-      );
-      final playbackSession = await EmbyService.instance
-          .createPlaybackSession(itemId: item.id);
-      if (!mounted) return;
-      await PlaybackService().play(PlayableItem(
-        videoPath: historyItem.filePath,
-        title: item.name,
-        historyItem: historyItem,
-        playbackSession: playbackSession,
-      ));
-    } catch (e) {
-      if (mounted) _showTip('播放失败: $e');
-    }
-  }
-
   void _showTip(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -186,6 +373,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     );
   }
 
+  // ============ 数据源 + 排序选择 ============
+
   void _openSourcePicker() {
     showModalBottomSheet<void>(
       context: context,
@@ -194,9 +383,21 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           shrinkWrap: true,
           children: [
             ListTile(
+              leading: const Icon(Icons.folder_open_rounded),
+              title: const Text('以文件夹方式浏览'),
+              subtitle: const Text('按目录结构浏览并上下滑播放'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () {
+                Navigator.pop(sheetContext);
+                _openFolderBrowser();
+              },
+            ),
+            const Divider(),
+            ListTile(
               leading: const Icon(Icons.grid_view_rounded),
               title: const Text('全部'),
-              selected: _libraryId == null &&
+              selected: _parentId == null &&
+                  _libraryId == null &&
                   !_favoritesOnly &&
                   _playlistId == null,
               onTap: () {
@@ -205,7 +406,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               },
             ),
             ListTile(
-              leading: const Icon(Icons.favorite_rounded, color: Colors.redAccent),
+              leading: const Icon(Icons.favorite_rounded,
+                  color: Colors.redAccent),
               title: const Text('我的收藏'),
               selected: _favoritesOnly,
               onTap: () {
@@ -244,17 +446,52 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                 ListTile(
                   leading: const Icon(Icons.video_library_rounded),
                   title: Text(l.name),
-                  selected: _libraryId == l.id,
+                  selected: _parentId == null &&
+                      _libraryId == l.id &&
+                      !_favoritesOnly,
                   onTap: () {
                     Navigator.pop(sheetContext);
                     _switchSource(libraryId: l.id);
                   },
                 ),
             ],
+            const Divider(),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Text(
+                '排序方式',
+                style: TextStyle(fontSize: 12, color: Colors.grey),
+              ),
+            ),
+            for (final s in SwipeSort.values)
+              RadioListTile<SwipeSort>(
+                value: s,
+                groupValue: _sort,
+                title: Text(s.label),
+                onChanged: (v) {
+                  if (v == null) return;
+                  Navigator.pop(sheetContext);
+                  _switchSort(v);
+                },
+              ),
           ],
         ),
       ),
     );
+  }
+
+  void _openFolderBrowser() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const EmbyFolderBrowserPage(),
+      ),
+    );
+  }
+
+  void _switchSort(SwipeSort sort) {
+    _sort = sort;
+    _savePreferences();
+    _load();
   }
 
   void _switchSource({
@@ -267,53 +504,70 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     _favoritesOnly = favoritesOnly;
     _playlistId = playlistId;
     _playlistName = playlistName;
+    _parentId = null;
+    _parentName = null;
+    _savePreferences();
     _load();
   }
 
+  // ============ UI ============
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          if (_loading)
-            const Center(
-              child: CircularProgressIndicator(color: Colors.white),
-            )
-          else if (_error != null)
-            _buildError()
-          else if (_items.isEmpty)
-            _buildEmpty()
-          else
-            PageView.builder(
-              controller: _pageController,
-              scrollDirection: Axis.vertical,
-              itemCount: _items.length,
-              onPageChanged: (i) => setState(() => _currentIndex = i),
-              itemBuilder: (context, index) =>
-                  _buildSwipeCard(_items[index], index),
-            ),
-          // 顶部栏
-          _buildTopBar(),
-          // 页码指示
-          if (_items.isNotEmpty)
-            Positioned(
-              top: MediaQuery.of(context).padding.top + 10,
-              right: 14,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  '${_currentIndex + 1}/${_items.length}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) return;
+        _stopPlayback();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Stack(
+          children: [
+            if (_loading)
+              const Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              )
+            else if (_error != null)
+              _buildError()
+            else if (_items.isEmpty)
+              _buildEmpty()
+            else
+              PageView.builder(
+                controller: _pageController,
+                scrollDirection: Axis.vertical,
+                itemCount: _items.length,
+                onPageChanged: (i) {
+                  setState(() => _currentIndex = i);
+                  if (i >= 0 && i < _items.length) {
+                    _autoPlay(_items[i]);
+                  }
+                },
+                itemBuilder: (context, index) =>
+                    _buildSwipeCard(_items[index], index),
+              ),
+            // 顶部栏
+            _buildTopBar(),
+            // 页码指示
+            if (_items.isNotEmpty)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 10,
+                right: 14,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(
+                    '${_currentIndex + 1}/${_items.length}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -377,18 +631,24 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     final imageUri = item.imagePrimaryTag != null
         ? Uri.tryParse(service.getImageUrl(item.id, tag: item.imagePrimaryTag))
         : null;
+    final isCurrentPlaying =
+        index == _currentIndex && _playingItemId == item.id;
     return Stack(
       fit: StackFit.expand,
       children: [
-        // 背景图
-        if (imageUri != null)
-          MediaServerNetworkImage(
-            imageUri,
-            fit: BoxFit.cover,
-            errorBuilder: (c, e, st) => _buildPlaceholder(item),
-          )
-        else
-          _buildPlaceholder(item),
+        // 正在播放的视频画面（仅当前页）
+        if (isCurrentPlaying)
+          Positioned.fill(child: _buildVideoSurface()),
+        // 背景图（未播放时显示）
+        if (!isCurrentPlaying)
+          if (imageUri != null)
+            MediaServerNetworkImage(
+              imageUri,
+              fit: BoxFit.cover,
+              errorBuilder: (c, e, st) => _buildPlaceholder(item),
+            )
+          else
+            _buildPlaceholder(item),
         // 底部渐变
         Container(
           decoration: BoxDecoration(
@@ -420,10 +680,16 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               ),
               const SizedBox(height: 18),
               _buildActionButton(
-                icon: Icons.play_circle_fill_rounded,
+                icon: isCurrentPlaying
+                    ? Icons.pause_circle_filled_rounded
+                    : Icons.play_circle_fill_rounded,
                 color: Colors.white,
-                label: '播放',
-                onTap: () => _playItem(item),
+                label: isCurrentPlaying ? '播放中' : '播放',
+                onTap: () {
+                  if (_playingItemId != item.id) {
+                    _autoPlay(item);
+                  }
+                },
               ),
             ],
           ),
@@ -546,7 +812,10 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           const SizedBox(height: 12),
           const Text('这里还没有内容', style: TextStyle(color: Colors.white54)),
           const SizedBox(height: 16),
-          OutlinedButton(onPressed: _openSourcePicker, child: const Text('换个数据源')),
+          OutlinedButton(
+            onPressed: _openSourcePicker,
+            child: const Text('换个数据源'),
+          ),
         ],
       ),
     );
