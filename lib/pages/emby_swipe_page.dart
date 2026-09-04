@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nipaplay/models/emby_model.dart';
@@ -86,6 +88,14 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   String? _playbackError;
   int _playbackGeneration = 0;
 
+  // [QBSenHook] v7.5.2: 单击调出的播放控件面板（2 秒自动隐藏）
+  bool _controlsVisible = false;
+  Timer? _controlsTimer;
+  // 全屏播放方向选择（默认竖屏）
+  String _fullscreenOrientation = 'portrait';
+  // 画面尺寸模式
+  EmbyFitMode _fitMode = EmbyFitMode.original;
+
   @override
   void initState() {
     super.initState();
@@ -105,6 +115,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   @override
   void dispose() {
+    _controlsTimer?.cancel();
     // [QBSenHook] v7.5.1: 离开刷片页恢复竖屏（全局默认竖屏）
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
@@ -760,12 +771,12 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         index == _currentIndex && (isPending || isPlayingNow);
     final showPlaybackError =
         _playbackError != null && index == _currentIndex;
-    // [QBSenHook] v7.4: 单击暂停/播放，双击进入全屏（全屏内双击返回本页）。
-    // [QBSenHook] v7.5: 左右滑快进/快退。
+    // [QBSenHook] v7.5.2: 单击调出播放控件面板（2秒自动隐藏）、
+    // 双击暂停/播放、左右滑快进/快退（与进度条拖动平行）。
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: _togglePlayPause,
-      onDoubleTap: _enterFullscreen,
+      onTap: _showControlPanel,
+      onDoubleTap: _togglePlayPause,
       onHorizontalDragEnd: _onHorizontalDragEnd,
       child: Stack(
         fit: StackFit.expand,
@@ -929,12 +940,14 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             ],
           ),
         ),
+        // [QBSenHook] v7.5.2: 播放控件面板（单击调出，2秒自动隐藏）
+        if (_controlsVisible) _buildControlPanel(),
         ],
       ),
     );
   }
 
-  /// [QBSenHook] v7.4: 单击切换播放/暂停。
+  /// [QBSenHook] v7.4: 切换播放/暂停（双击触发）。
   void _togglePlayPause() {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!videoState.hasVideo) return;
@@ -945,10 +958,136 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     }
   }
 
-  /// [QBSenHook] v7.5: 双击进入全屏播放页。
-  void _enterFullscreen() {
+  /// [QBSenHook] v7.5.2: 进入全屏播放页（带方向与画面尺寸选择，默认竖屏）。
+  void _enterFullscreen(String orientation) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const EmbyFullscreenPlayerPage()),
+      MaterialPageRoute(
+        builder: (_) => EmbyFullscreenPlayerPage(
+          preferredOrientation: orientation,
+          initialFitMode: _fitMode,
+        ),
+      ),
+    );
+  }
+
+  /// [QBSenHook] v7.5.2: 单击调出播放控件面板，2 秒后自动隐藏。
+  void _showControlPanel() {
+    if (!mounted) return;
+    setState(() => _controlsVisible = true);
+    _controlsTimer?.cancel();
+    _controlsTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _controlsVisible = false);
+    });
+  }
+
+  /// 面板按钮动作：执行操作并重置 2 秒隐藏计时。
+  void _panelAction(VoidCallback action) {
+    action();
+    _showControlPanel();
+  }
+
+  /// [QBSenHook] v7.5.2: 循环切换画面尺寸模式。
+  void _cycleFitMode() {
+    setState(() {
+      final values = EmbyFitMode.values;
+      _fitMode = values[(_fitMode.index + 1) % values.length];
+    });
+  }
+
+  /// [QBSenHook] v7.5.2: 播放控件面板（底部浮层，2 秒自动隐藏）。
+  Widget _buildControlPanel() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          color: Colors.black.withValues(alpha: 0.55),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 方向 + 尺寸选择行（横屏/竖屏直接进入全屏，默认竖屏）
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _panelButton(
+                    '竖屏播放',
+                    _fullscreenOrientation == 'portrait',
+                    () => _panelAction(() => _enterFullscreen('portrait')),
+                  ),
+                  const SizedBox(width: 8),
+                  _panelButton(
+                    '横屏播放',
+                    _fullscreenOrientation == 'landscape',
+                    () => _panelAction(() => _enterFullscreen('landscape')),
+                  ),
+                  const SizedBox(width: 8),
+                  _panelButton(
+                    '尺寸:${_fitMode.label}',
+                    false,
+                    () => _panelAction(_cycleFitMode),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // 播放控制行
+              Consumer<VideoPlayerState>(
+                builder: (context, videoState, child) {
+                  final bool isPlaying =
+                      videoState.status == PlayerStatus.playing;
+                  return Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.replay_10,
+                            color: Colors.white, size: 28),
+                        onPressed: () =>
+                            _panelAction(() => videoState.seekBackwardByStep()),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          isPlaying ? Icons.pause : Icons.play_arrow,
+                          color: Colors.white,
+                          size: 36,
+                        ),
+                        onPressed: () => _panelAction(_togglePlayPause),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.forward_10,
+                            color: Colors.white, size: 28),
+                        onPressed: () =>
+                            _panelAction(() => videoState.seekForwardByStep()),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _panelButton(
+      String label, bool selected, VoidCallback onTap) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white24 : Colors.white12,
+          borderRadius: BorderRadius.circular(8),
+          border: selected ? Border.all(color: Colors.white70) : null,
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+        ),
+      ),
     );
   }
 

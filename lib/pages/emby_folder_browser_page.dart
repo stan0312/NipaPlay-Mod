@@ -86,12 +86,17 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   }
 
   void _openFolder(EmbyMediaItem folder) {
-    setState(() {
-      _path.add(_FolderEntry(folder.id, folder.name));
-      _currentId = folder.id;
-      _currentName = folder.name;
-    });
-    _load();
+    // [QBSenHook] v7.5.2: 点击文件夹直接进入抖音模式播放，
+    // 播放列表 = 该文件夹内的所有视频文件。
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => EmbySwipePage(
+          title: '${folder.name} 刷片',
+          initialParentId: folder.id,
+          parentName: folder.name,
+        ),
+      ),
+    );
   }
 
   void _enterLibrary(EmbyLibrary lib) {
