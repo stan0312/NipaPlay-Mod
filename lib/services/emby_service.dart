@@ -758,6 +758,85 @@ class EmbyService extends MediaServerServiceBase
     return [];
   }
 
+  // ============ [QBSenHook] 抖音式刷片 数据源 ============
+  // 获取刷片条目（竖屏上下滑浏览）：支持 全部/媒体库/收藏/播放列表
+  Future<List<EmbyMediaItem>> getSwipeItems({
+    String? libraryId,
+    bool favoritesOnly = false,
+    String? playlistId,
+    int limit = 60,
+  }) async {
+    if (!_isConnected || _userId == null || _accessToken == null) {
+      return [];
+    }
+    try {
+      String path;
+      if (playlistId != null) {
+        path =
+            '/emby/Playlists//Items?UserId=&Limit=&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated';
+      } else {
+        final filter = favoritesOnly ? '&Filters=IsFavorite' : '';
+        final parent = libraryId != null && libraryId.isNotEmpty
+            ? '&ParentId='
+            : '';
+        final includeTypes = libraryId != null
+            ? 'Movie,Episode,Video'
+            : 'Movie,Series,Episode,Video';
+        path =
+            '/emby/Users//Items?Recursive=true&IncludeItemTypes=&Limit=&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated&SortBy=DateCreated&SortOrder=Descending';
+      }
+      final response = await _makeAuthenticatedRequest(path);
+      if (response.statusCode != 200) {
+        DebugLogService().addLog(
+            'EmbyService: 获取刷片条目失败 HTTP ');
+        return [];
+      }
+      final data = json.decode(response.body);
+      final items = data['Items'];
+      if (items is! List) return [];
+      return items
+          .map((e) => EmbyMediaItem.fromJson(e))
+          .where((e) => !e.isFolder)
+          .toList();
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 获取刷片条目异常: ');
+      return [];
+    }
+  }
+
+  // 获取播放列表（用户创建的）
+  Future<List<EmbyLibrary>> getPlaylists({int limit = 50}) async {
+    if (!_isConnected || _userId == null) return [];
+    try {
+      final response = await _makeAuthenticatedRequest(
+          '/emby/Users//Items?IncludeItemTypes=Playlist&Recursive=true&Limit=');
+      if (response.statusCode != 200) return [];
+      final data = json.decode(response.body);
+      final items = data['Items'];
+      if (items is! List) return [];
+      return items.map((e) => EmbyLibrary.fromJson(e)).toList();
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 获取播放列表异常: ');
+      return [];
+    }
+  }
+
+  // 切换收藏状态（isFavorite=true 表示当前已收藏，需取消；false 表示未收藏，需添加）
+  Future<bool> toggleFavorite(String itemId, {required bool isFavorite}) async {
+    if (!_isConnected || _userId == null || _accessToken == null) return false;
+    try {
+      final method = isFavorite ? 'DELETE' : 'POST';
+      final response = await _makeAuthenticatedRequest(
+        '/emby/Users//FavoriteItems/',
+        method: method,
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 切换收藏异常: ');
+      return false;
+    }
+  }
+
   // 获取最新电影列表
   Future<List<EmbyMovieInfo>> getLatestMovies({int limit = 99999}) async {
     if (!_isConnected || _selectedLibraryIds.isEmpty || _userId == null) {
