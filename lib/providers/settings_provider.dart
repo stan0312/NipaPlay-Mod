@@ -22,7 +22,7 @@ class SettingsProvider with ChangeNotifier {
 
   DanmakuAutoLoadStrategy _danmakuAutoLoadStrategy =
       DanmakuAutoLoadStrategy.remoteAndLocal;
-  bool _skipDanmakuMatching = false;
+  bool _skipDanmakuMatching = true; // [QBSenHook] 默认跳过弹幕匹配（去弹幕）
   bool _fastPlaybackStartup = false;
 
   // 外部播放器设置

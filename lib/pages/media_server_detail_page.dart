@@ -537,10 +537,9 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
       return;
     }
 
-    if (context.read<SettingsProvider>().skipDanmakuMatching) {
-      Navigator.of(context).pop(_mediaDetail!.toWatchHistoryItem());
-      return;
-    }
+    // [QBSenHook] 已移除弹幕自动匹配：点击播放直接进入播放，不再匹配弹幕
+    Navigator.of(context).pop(_mediaDetail!.toWatchHistoryItem());
+    return;
 
     try {
       final playableItem =
@@ -1740,17 +1739,8 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
 
       debugPrint('准备创建播放会话');
 
-      final skipDanmakuMatching =
-          context.read<SettingsProvider>().skipDanmakuMatching;
-      if (mounted && !skipDanmakuMatching) {
-        BlurSnackBar.show(context, '正在匹配弹幕信息...');
-      }
-
-      final historyItem = skipDanmakuMatching
-          ? episode.toWatchHistoryItem()
-          : await _runDetailAutoMatchTask<WatchHistoryItem?>(
-              () => _createWatchHistoryItem(episode),
-            );
+      // [QBSenHook] 已移除弹幕自动匹配：直接使用剧集播放信息，不匹配弹幕
+      final historyItem = episode.toWatchHistoryItem();
       if (historyItem == null) return;
 
       debugPrint(

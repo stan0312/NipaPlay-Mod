@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:nipaplay/app/app_page_component.dart';
 import 'package:nipaplay/media_library/adaptive_media_library_page.dart';
-import 'package:nipaplay/themes/nipaplay/pages/account/material_account_page.dart';
+import 'package:nipaplay/settings/unified_settings_page.dart';
 import 'package:nipaplay/widgets/desktop_player_page_slot.dart';
 
 class AdaptiveAppPageContent extends StatelessWidget {
@@ -45,7 +45,8 @@ class UnifiedAppControlRegistry {
       AppPageComponentType.webdavBrowser => const SizedBox.shrink(),
       AppPageComponentType.mediaLibrary => const AdaptiveMediaLibraryPage(),
       AppPageComponentType.torrentTasks => const SizedBox.shrink(),
-      AppPageComponentType.account => const UnifiedAccountPage(),
+      // [QBSenHook] account 页直接显示设置（个人中心已替换为设置）
+      AppPageComponentType.account => const UnifiedSettingsPage(),
       AppPageComponentType.externalPlayerConsole => const SizedBox.shrink(),
     };
   }
