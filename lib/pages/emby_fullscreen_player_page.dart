@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -5,14 +7,15 @@ import 'package:provider/provider.dart';
 
 /// [QBSenHook] v7.4: 抖音式刷片页的全屏播放页。
 ///
-/// [QBSenHook] v7.5 增强：
+/// [QBSenHook] v7.5.x 增强：
 /// - 按视频分辨率自动横竖屏（横屏视频 → 横屏，竖屏视频 → 竖屏），
 ///   离开本页自动恢复竖屏；
-/// - 视频按原始比例 contain 居中（不扭曲）；
-/// - 单击：暂停/播放并切换控件显隐
-/// - 双击：返回刷片页（pop）
-/// - 左右滑：快进/快退（各 10 秒）
-/// - 底部完整播放器控件：播放/暂停、快退、快进、进度条、时间
+/// - 视频以最大画面 contain 显示、不拉伸（可用画面尺寸按钮切换为
+///   cover 填满裁剪，同样不拉伸）；
+/// - 单击画面：暂停/播放；双击：返回刷片页（pop）；
+/// - 左右滑：快进/快退（各 10 秒）；
+/// - 底部完整播放器控件（常驻可交互）：
+///   播放/暂停、快退、快进、倍速、画面尺寸、进度条、时间
 class EmbyFullscreenPlayerPage extends StatefulWidget {
   const EmbyFullscreenPlayerPage({super.key});
 
@@ -22,8 +25,11 @@ class EmbyFullscreenPlayerPage extends StatefulWidget {
 }
 
 class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
-  bool _controlsVisible = true;
   bool _orientationApplied = false;
+  bool _fillMode = false; // false=contain(原始比例最大画面) true=cover(填满裁剪)
+  double? _dragValue; // 拖动进度条时的临时值（跟手）
+
+  static const List<double> _speedOptions = [1.0, 1.25, 1.5, 2.0];
 
   double? _aspectRatio(VideoPlayerState videoState) {
     try {
@@ -76,10 +82,6 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     }
   }
 
-  void _toggleControls() {
-    setState(() => _controlsVisible = !_controlsVisible);
-  }
-
   /// [QBSenHook] v7.5: 左右滑快进/快退（左滑快进、右滑快退，各 10 秒）。
   void _onHorizontalDragEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
@@ -90,6 +92,15 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     } else if (velocity > 300) {
       videoState.seekBackwardByStep();
     }
+  }
+
+  /// [QBSenHook] v7.5.1: 循环切换倍速（1.0 → 1.25 → 1.5 → 2.0 → 1.0）。
+  void _cyclePlaybackRate(VideoPlayerState videoState) {
+    final current = videoState.playbackRate;
+    int idx = _speedOptions.indexWhere((s) => (s - current).abs() < 0.001);
+    if (idx < 0) idx = 0;
+    final next = _speedOptions[(idx + 1) % _speedOptions.length];
+    unawaited(videoState.setPlaybackRate(next));
   }
 
   String _formatDuration(Duration d) {
@@ -132,49 +143,27 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
           return Stack(
             fit: StackFit.expand,
             children: [
-              // 视频画面（单击暂停/播放并切控件、双击返回、左右滑快进快退）
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () {
-                  _togglePlayPause();
-                  _toggleControls();
-                },
-                onDoubleTap: () => Navigator.of(context).pop(),
-                onHorizontalDragEnd: _onHorizontalDragEnd,
-                child: Center(
-                  child: FittedBox(
-                    fit: BoxFit.contain,
-                    child: SizedBox(
-                      width: 100,
-                      height: 100 / ratio,
-                      child: ValueListenableBuilder<int?>(
-                        valueListenable: videoState.player.textureId,
-                        builder: (context, textureId, _) {
-                          if (textureId == null || textureId < 0) {
-                            return const SizedBox.shrink();
-                          }
-                          return SizedBox.expand(
-                            child: Texture(
-                              textureId: textureId,
-                              filterQuality: FilterQuality.medium,
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
+              // 视频画面区（单击暂停/播放、双击返回、左右滑快进快退）
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _togglePlayPause,
+                  onDoubleTap: () => Navigator.of(context).pop(),
+                  onHorizontalDragEnd: _onHorizontalDragEnd,
+                  child: _buildVideo(videoState, ratio),
                 ),
               ),
               // 顶部：返回按钮 + 标题
-              AnimatedOpacity(
-                opacity: _controlsVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 200),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
                 child: SafeArea(
                   bottom: false,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 8, vertical: 4),
-                    color: Colors.black.withValues(alpha: 0.35),
+                    color: Colors.black.withValues(alpha: 0.4),
                     child: Row(
                       children: [
                         _buildCloseButton(),
@@ -193,24 +182,22 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                   ),
                 ),
               ),
-              // 底部：播放器控件
-              AnimatedOpacity(
-                opacity: _controlsVisible ? 1 : 0,
-                duration: const Duration(milliseconds: 200),
-                child: Align(
-                  alignment: Alignment.bottomCenter,
+              // 底部：播放器控件（常驻，独立于视频手势区，可交互）
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: SafeArea(
+                  top: false,
                   child: Container(
                     padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-                    color: Colors.black.withValues(alpha: 0.5),
-                    child: SafeArea(
-                      top: false,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _buildProgressRow(videoState),
-                          _buildControlRow(videoState),
-                        ],
-                      ),
+                    color: Colors.black.withValues(alpha: 0.55),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildProgressRow(videoState),
+                        _buildControlRow(videoState),
+                      ],
                     ),
                   ),
                 ),
@@ -219,6 +206,63 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
           );
         },
       ),
+    );
+  }
+
+  Widget _buildVideo(VideoPlayerState videoState, double ratio) {
+    final player = videoState.player;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double maxW = constraints.maxWidth;
+        final double maxH = constraints.maxHeight;
+        if (maxW <= 0 || maxH <= 0) return const SizedBox.shrink();
+        final double hForWidth = maxW / ratio;
+        final Widget texture = ValueListenableBuilder<int?>(
+          valueListenable: player.textureId,
+          builder: (context, textureId, child) {
+            if (textureId == null || textureId < 0) {
+              return const SizedBox.shrink();
+            }
+            return SizedBox.expand(
+              child: Texture(
+                textureId: textureId,
+                filterQuality: FilterQuality.medium,
+              ),
+            );
+          },
+        );
+        if (_fillMode) {
+          // cover：填满屏幕、居中裁剪，不拉伸
+          return FittedBox(
+            fit: BoxFit.cover,
+            clipBehavior: Clip.hardEdge,
+            child: SizedBox(
+              width: maxW,
+              height: hForWidth,
+              child: texture,
+            ),
+          );
+        }
+        // contain：以最大画面显示原始比例，不拉伸
+        if (hForWidth <= maxH) {
+          return Align(
+            alignment: Alignment.center,
+            child: SizedBox(
+              width: maxW,
+              height: hForWidth,
+              child: texture,
+            ),
+          );
+        }
+        return FittedBox(
+          fit: BoxFit.contain,
+          child: SizedBox(
+            width: maxW,
+            height: hForWidth,
+            child: texture,
+          ),
+        );
+      },
     );
   }
 
@@ -234,30 +278,34 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     final Duration pos = videoState.position;
     final double totalMs = total.inMilliseconds.toDouble();
     final double maxMs = totalMs > 0 ? totalMs : 1.0;
-    final double value =
-        (pos.inMilliseconds.toDouble() / maxMs).clamp(0.0, 1.0);
+    final double value = (_dragValue ??
+            (pos.inMilliseconds.toDouble() / maxMs).clamp(0.0, 1.0))
+        .clamp(0.0, 1.0);
     return Row(
       children: [
         Text(
-          _formatDuration(pos),
+          _formatDuration(_dragValue != null
+              ? Duration(milliseconds: (_dragValue! * maxMs).round())
+              : pos),
           style: const TextStyle(color: Colors.white70, fontSize: 12),
         ),
         Expanded(
           child: SliderTheme(
             data: SliderThemeData(
               trackHeight: 2,
-              thumbShape:
-                  const RoundSliderThumbShape(enabledThumbRadius: 6),
-              overlayShape:
-                  const RoundSliderOverlayShape(overlayRadius: 12),
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
               activeTrackColor: Colors.white,
               inactiveTrackColor: Colors.white24,
               thumbColor: Colors.white,
             ),
             child: Slider(
               value: value,
-              onChanged: (v) {
-                videoState.seekTo(Duration(milliseconds: (v * maxMs).round()));
+              onChanged: (v) => setState(() => _dragValue = v),
+              onChangeEnd: (v) {
+                videoState.seekTo(
+                    Duration(milliseconds: (v * maxMs).round()));
+                setState(() => _dragValue = null);
               },
             ),
           ),
@@ -290,6 +338,32 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
         IconButton(
           icon: const Icon(Icons.forward_10, color: Colors.white, size: 30),
           onPressed: () => videoState.seekForwardByStep(),
+        ),
+        // [QBSenHook] v7.5.1: 倍速切换按钮
+        InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => _cyclePlaybackRate(videoState),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.white12,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '${videoState.playbackRate.toStringAsFixed(2)}x',
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        // [QBSenHook] v7.5.1: 画面尺寸切换按钮（contain ↔ cover）
+        IconButton(
+          icon: Icon(
+            _fillMode ? Icons.aspect_ratio : Icons.fit_screen_outlined,
+            color: Colors.white,
+            size: 26,
+          ),
+          onPressed: () => setState(() => _fillMode = !_fillMode),
         ),
       ],
     );

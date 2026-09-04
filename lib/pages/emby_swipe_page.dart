@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
@@ -88,6 +89,10 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   @override
   void initState() {
     super.initState();
+    // [QBSenHook] v7.5.1: 抖音式刷片页锁定竖屏，防止播放横屏视频时自动旋转
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+    ]);
     _libraryId = widget.initialLibraryId;
     _favoritesOnly = widget.favoritesOnly;
     _playlistId = widget.playlistId;
@@ -100,6 +105,10 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   @override
   void dispose() {
+    // [QBSenHook] v7.5.1: 离开刷片页恢复竖屏（全局默认竖屏）
+    SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+    ]);
     _pageController.dispose();
     _playbackGeneration++;
     _playingItemId = null;
@@ -378,34 +387,50 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             if (surface != null) return surface;
             return const SizedBox.shrink();
           }
-          // [QBSenHook] v7.5: 刷片页固定竖屏画框（3:4），视频按真实比例 contain，
-          // 不拉伸画面；横屏视频在竖屏框内上下留黑边。
+          // [QBSenHook] v7.5.1: 竖屏刷片，宽度优先铺满、不拉伸。
+          // 横屏视频 → 宽铺满、上下留白；竖屏视频 → 正常竖屏（高度受限时 contain）。
           final ratio = _videoAspectRatio(videoState) ?? 16 / 9;
-          return Center(
-            child: AspectRatio(
-              aspectRatio: 3 / 4, // 竖屏画框
-              child: FittedBox(
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final double maxW = constraints.maxWidth;
+              final double maxH = constraints.maxHeight;
+              if (maxW <= 0 || maxH <= 0) return const SizedBox.shrink();
+              final double hForWidth = maxW / ratio;
+              final Widget texture = ValueListenableBuilder<int?>(
+                valueListenable: player.textureId,
+                builder: (context, textureId, child) {
+                  if (textureId == null || textureId < 0) {
+                    return const SizedBox.shrink();
+                  }
+                  return SizedBox.expand(
+                    child: Texture(
+                      textureId: textureId,
+                      filterQuality: FilterQuality.medium,
+                    ),
+                  );
+                },
+              );
+              if (hForWidth <= maxH) {
+                // 宽铺满（横屏视频上下留白）
+                return Align(
+                  alignment: Alignment.topCenter,
+                  child: SizedBox(
+                    width: maxW,
+                    height: hForWidth,
+                    child: texture,
+                  ),
+                );
+              }
+              // 高度受限：contain 居中（竖屏视频左右留白，不裁剪）
+              return FittedBox(
                 fit: BoxFit.contain,
                 child: SizedBox(
-                  width: 100,
-                  height: 100 / ratio,
-                  child: ValueListenableBuilder<int?>(
-                    valueListenable: player.textureId,
-                    builder: (context, textureId, child) {
-                      if (textureId == null || textureId < 0) {
-                        return const SizedBox.shrink();
-                      }
-                      return SizedBox.expand(
-                        child: Texture(
-                          textureId: textureId,
-                          filterQuality: FilterQuality.medium,
-                        ),
-                      );
-                    },
-                  ),
+                  width: maxW,
+                  height: hForWidth,
+                  child: texture,
                 ),
-              ),
-            ),
+              );
+            },
           );
         } catch (e) {
           return const SizedBox.shrink();
