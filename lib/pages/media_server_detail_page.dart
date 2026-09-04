@@ -537,76 +537,59 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
       return;
     }
 
-    // [QBSenHook] 已移除弹幕自动匹配：点击播放直接进入播放，不再匹配弹幕
-    Navigator.of(context).pop(_mediaDetail!.toWatchHistoryItem());
-    return;
-
+    // [QBSenHook] 已移除弹幕自动匹配：电影复用剧集完整播放流程，
+    // 确保无论从哪个入口进入都能直接开始播放（不弹匹配弹窗、不卡播放）
     try {
-      final playableItem =
-          await _runDetailAutoMatchTask<WatchHistoryItem?>(() async {
-        if (widget.serverType == MediaServerType.jellyfin) {
-          final movieInfo = JellyfinMovieInfo(
-            id: _mediaDetail!.id,
-            name: _mediaDetail!.name,
-            overview: _mediaDetail!.overview,
-            originalTitle: _mediaDetail!.originalTitle,
-            imagePrimaryTag: _mediaDetail!.imagePrimaryTag,
-            imageBackdropTag: _mediaDetail!.imageBackdropTag,
-            productionYear: _mediaDetail!.productionYear,
-            dateAdded: _mediaDetail!.dateAdded,
-            premiereDate: _mediaDetail!.premiereDate,
-            communityRating: _mediaDetail!.communityRating,
-            genres: _mediaDetail!.genres,
-            officialRating: _mediaDetail!.officialRating,
-            cast: _mediaDetail!.cast,
-            directors: _mediaDetail!.directors,
-            runTimeTicks: _mediaDetail!.runTimeTicks,
-            studio: _mediaDetail!.seriesStudio,
-          );
-          return JellyfinDandanplayMatcher.instance
-              .createPlayableHistoryItemFromMovie(context, movieInfo);
-        }
-
-        final movieInfo = EmbyMovieInfo(
-          id: _mediaDetail!.id,
-          name: _mediaDetail!.name,
-          overview: _mediaDetail!.overview,
-          originalTitle: _mediaDetail!.originalTitle,
-          imagePrimaryTag: _mediaDetail!.imagePrimaryTag,
-          imageBackdropTag: _mediaDetail!.imageBackdropTag,
-          productionYear: _mediaDetail!.productionYear,
-          dateAdded: _mediaDetail!.dateAdded,
-          premiereDate: _mediaDetail!.premiereDate,
-          communityRating: _mediaDetail!.communityRating,
-          genres: _mediaDetail!.genres,
-          officialRating: _mediaDetail!.officialRating,
-          cast: _mediaDetail!.cast,
-          directors: _mediaDetail!.directors,
-          runTimeTicks: _mediaDetail!.runTimeTicks,
-          studio: _mediaDetail!.seriesStudio,
+      if (widget.serverType == MediaServerType.jellyfin) {
+        await _playEpisode(
+          _createVirtualJellyfinEpisodeFromMovie(_mediaDetail!),
         );
-        return EmbyDandanplayMatcher.instance
-            .createPlayableHistoryItemFromMovie(context, movieInfo);
-      });
-
-      if (playableItem == null) {
-        if (!_detailAutoMatchCancelled && mounted) {
-          BlurSnackBar.show(context, '未能找到匹配的弹幕信息，但仍可播放。');
-          final basicItem = _mediaDetail!.toWatchHistoryItem();
-          Navigator.of(context).pop(basicItem);
-        }
-        return;
-      }
-
-      if (mounted) {
-        Navigator.of(context).pop(playableItem);
+      } else {
+        await _playEpisode(_createVirtualEmbyEpisodeFromMovie(_mediaDetail!));
       }
     } catch (e) {
-      if (mounted) {
-        BlurSnackBar.show(context, '播放失败: $e');
-      }
+      if (mounted) BlurSnackBar.show(context, '播放失败: $e');
       debugPrint('电影播放失败: $e');
     }
+  }
+
+  // [QBSenHook] 将电影信息转换为虚拟剧集，复用剧集完整播放流程
+  EmbyEpisodeInfo _createVirtualEmbyEpisodeFromMovie(EmbyMovieInfo movie) {
+    return EmbyEpisodeInfo(
+      id: movie.id,
+      name: movie.name,
+      overview: movie.overview,
+      seriesId: movie.id,
+      seriesName: movie.name,
+      seasonId: null,
+      seasonName: null,
+      indexNumber: 1,
+      parentIndexNumber: null,
+      imagePrimaryTag: movie.imagePrimaryTag,
+      dateAdded: movie.dateAdded,
+      premiereDate: movie.premiereDate,
+      runTimeTicks: movie.runTimeTicks,
+    );
+  }
+
+  JellyfinEpisodeInfo _createVirtualJellyfinEpisodeFromMovie(
+    JellyfinMovieInfo movie,
+  ) {
+    return JellyfinEpisodeInfo(
+      id: movie.id,
+      name: movie.name,
+      overview: movie.overview,
+      seriesId: movie.id,
+      seriesName: movie.name,
+      seasonId: null,
+      seasonName: null,
+      indexNumber: 1,
+      parentIndexNumber: null,
+      imagePrimaryTag: movie.imagePrimaryTag,
+      dateAdded: movie.dateAdded,
+      premiereDate: movie.premiereDate,
+      runTimeTicks: movie.runTimeTicks,
+    );
   }
 
   String _formatRuntime(int? runTimeTicks) {
