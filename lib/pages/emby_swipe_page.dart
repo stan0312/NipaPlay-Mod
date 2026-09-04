@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:nipaplay/models/emby_model.dart';
+import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/pages/emby_folder_browser_page.dart';
@@ -200,7 +201,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       _loading = true;
       _error = null;
     });
-    _stopPlayback();
+    await _stopPlayback();
     try {
       final service = EmbyService.instance;
       // 文件夹模式用 parentId 作为数据源
@@ -262,15 +263,21 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         animeId: null,
         isFromScan: false,
       );
-      final playbackSession = await EmbyService.instance
-          .createPlaybackSession(itemId: item.id);
-      if (!mounted || gen != _playbackGeneration) return;
       final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+      // 预创建播放会话；失败不放弃，交给播放器内部处理
+      PlaybackSession? session;
+      try {
+        session = await EmbyService.instance
+            .createPlaybackSession(itemId: item.id);
+      } catch (e) {
+        debugPrint('刷片预创建播放会话失败(将由播放器内部处理): $e');
+      }
+      if (!mounted || gen != _playbackGeneration) return;
       final playable = PlayableItem(
         videoPath: historyItem.filePath,
         title: item.name,
         historyItem: historyItem,
-        playbackSession: playbackSession,
+        playbackSession: session,
       );
       final detailContext =
           await PlaybackSourceService.resolve(context, playable);
@@ -278,7 +285,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       await videoState.initializePlayer(
         playable.videoPath,
         historyItem: historyItem,
-        playbackSession: playbackSession,
+        playbackSession: session,
         playbackDetailContext: detailContext,
       );
       if (!mounted || gen != _playbackGeneration) return;
@@ -291,13 +298,13 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     }
   }
 
-  void _stopPlayback() {
+  Future<void> _stopPlayback() async {
     _playbackGeneration++;
     if (!mounted) return;
     try {
       final videoState =
           Provider.of<VideoPlayerState>(context, listen: false);
-      videoState.stop();
+      await videoState.stop();
     } catch (e) {
       debugPrint('停止刷片播放失败: $e');
     }
@@ -315,14 +322,23 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               debugLabel: 'swipe',
             );
             if (surface != null) return surface;
-          }
-          final textureId = player.textureId.value;
-          if (textureId == null || textureId < 0) {
             return const SizedBox.shrink();
           }
-          return Texture(
-            textureId: textureId,
-            filterQuality: FilterQuality.medium,
+          // iOS/Android：texture 模式，textureId 是异步更新的 ValueNotifier，
+          // 必须用 ValueListenableBuilder 监听变化，否则画面永远不出现。
+          return ValueListenableBuilder<int?>(
+            valueListenable: player.textureId,
+            builder: (context, textureId, child) {
+              if (textureId == null || textureId < 0) {
+                return const SizedBox.shrink();
+              }
+              return SizedBox.expand(
+                child: Texture(
+                  textureId: textureId,
+                  filterQuality: FilterQuality.medium,
+                ),
+              );
+            },
           );
         } catch (e) {
           return const SizedBox.shrink();
@@ -637,8 +653,15 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       fit: StackFit.expand,
       children: [
         // 正在播放的视频画面（仅当前页）
-        if (isCurrentPlaying)
+        if (isCurrentPlaying) ...[
           Positioned.fill(child: _buildVideoSurface()),
+          Positioned(
+            left: 12,
+            right: 12,
+            top: MediaQuery.of(context).padding.top + 54,
+            child: _buildPlaybackStatusBanner(),
+          ),
+        ],
         // 背景图（未播放时显示）
         if (!isCurrentPlaying)
           if (imageUri != null)
@@ -741,6 +764,59 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildPlaybackStatusBanner() {
+    return Consumer<VideoPlayerState>(
+      builder: (context, videoState, child) {
+        String? text;
+        switch (videoState.status) {
+          case PlayerStatus.loading:
+            text = '正在加载播放…';
+            break;
+          case PlayerStatus.recognizing:
+            text = '正在准备…';
+            break;
+          case PlayerStatus.ready:
+          case PlayerStatus.playing:
+            return const SizedBox.shrink();
+          case PlayerStatus.paused:
+            text = '已暂停';
+            break;
+          case PlayerStatus.error:
+            text = '播放出错：${videoState.error ?? '未知错误'}';
+            break;
+          default:
+            return const SizedBox.shrink();
+        }
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  text,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
