@@ -378,25 +378,32 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             if (surface != null) return surface;
             return const SizedBox.shrink();
           }
-          // [QBSenHook] v7.4: 保持视频原始比例（contain），不拉伸变形。
-          // 竖屏手机里横屏视频居中显示、左右留黑边；竖屏视频铺满。
-          final ratio = _videoAspectRatio(videoState);
+          // [QBSenHook] v7.5: 刷片页固定竖屏画框（3:4），视频按真实比例 contain，
+          // 不拉伸画面；横屏视频在竖屏框内上下留黑边。
+          final ratio = _videoAspectRatio(videoState) ?? 16 / 9;
           return Center(
             child: AspectRatio(
-              aspectRatio: ratio ?? 16 / 9,
-              child: ValueListenableBuilder<int?>(
-                valueListenable: player.textureId,
-                builder: (context, textureId, child) {
-                  if (textureId == null || textureId < 0) {
-                    return const SizedBox.shrink();
-                  }
-                  return SizedBox.expand(
-                    child: Texture(
-                      textureId: textureId,
-                      filterQuality: FilterQuality.medium,
-                    ),
-                  );
-                },
+              aspectRatio: 3 / 4, // 竖屏画框
+              child: FittedBox(
+                fit: BoxFit.contain,
+                child: SizedBox(
+                  width: 100,
+                  height: 100 / ratio,
+                  child: ValueListenableBuilder<int?>(
+                    valueListenable: player.textureId,
+                    builder: (context, textureId, child) {
+                      if (textureId == null || textureId < 0) {
+                        return const SizedBox.shrink();
+                      }
+                      return SizedBox.expand(
+                        child: Texture(
+                          textureId: textureId,
+                          filterQuality: FilterQuality.medium,
+                        ),
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           );
@@ -729,10 +736,12 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     final showPlaybackError =
         _playbackError != null && index == _currentIndex;
     // [QBSenHook] v7.4: 单击暂停/播放，双击进入全屏（全屏内双击返回本页）。
+    // [QBSenHook] v7.5: 左右滑快进/快退。
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _togglePlayPause,
       onDoubleTap: _enterFullscreen,
+      onHorizontalDragEnd: _onHorizontalDragEnd,
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -911,11 +920,23 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     }
   }
 
-  /// [QBSenHook] v7.4: 双击进入全屏播放页。
+  /// [QBSenHook] v7.5: 双击进入全屏播放页。
   void _enterFullscreen() {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => const EmbyFullscreenPlayerPage()),
     );
+  }
+
+  /// [QBSenHook] v7.5: 左右滑快进/快退（左滑快进、右滑快退，各 10 秒）。
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    if (!videoState.hasVideo) return;
+    if (velocity < -300) {
+      videoState.seekForwardByStep();
+    } else if (velocity > 300) {
+      videoState.seekBackwardByStep();
+    }
   }
 
   Widget _buildPlaybackStatusBanner() {

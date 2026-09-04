@@ -57,6 +57,9 @@ class UnifiedAppPage {
 List<UnifiedAppPage> buildUnifiedAppPages(
     {required AppPageAvailability availability}) {
   const commonActions = <String>[
+    // [QBSenHook] v7.5: 顶部统一控件组：搜索、抖音刷片、夜间模式、设置（同排同大小）
+    AppActionIds.search,
+    AppActionIds.swipe,
     AppActionIds.toggleTheme,
     AppActionIds.settings,
   ];

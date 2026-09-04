@@ -19,7 +19,7 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/services/playback_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
-import 'package:nipaplay/widgets/emby_inline_player.dart';
+import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
@@ -1452,8 +1452,8 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // [QBSenHook] 内嵌播放器：点击播放后直接在详情页显示画面，不跳转播放器页
-          const EmbyInlinePlayer(),
+          // [QBSenHook] v7.5: 移除详情页内嵌预览播放器，
+          // 点击播放改为直接进入全屏播放界面。
           if (_mediaDetail!.originalTitle != null &&
               _mediaDetail!.originalTitle!.isNotEmpty &&
               _mediaDetail!.originalTitle != _mediaDetail!.name)
@@ -1882,7 +1882,7 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
 
     final isEmbyPlayback = historyItem.filePath.startsWith('emby://');
     if (!isEmbyPlayback) {
-      // [QBSenHook] 不再 pop 详情页：直接在当前页内嵌播放
+      // [QBSenHook] v7.5: 初始化后直接进入全屏播放界面，不再内嵌预览。
       try {
         await videoPlayerState.initializePlayer(
           historyItem.filePath,
@@ -1890,6 +1890,14 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
           playbackSession: playbackSession,
         );
         videoPlayerState.play();
+        onPlaybackStarted?.call();
+        if (mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => const EmbyFullscreenPlayerPage(),
+            ),
+          );
+        }
       } catch (playError) {
         debugPrint('异步播放流媒体时出错: $playError');
         if (mounted) BlurSnackBar.show(context, '播放出错: $playError');
@@ -1897,7 +1905,7 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
       return;
     }
 
-    // [QBSenHook] emby 播放：不再 pop 详情页，直接初始化内嵌播放
+    // [QBSenHook] v7.5: emby 播放成功后直接进入全屏播放界面。
     await Future<void>.delayed(const Duration(milliseconds: 100));
     try {
       await initializeEmbyPlayerAttempt(
@@ -1925,6 +1933,12 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     }
     if (mounted) {
       onPlaybackStarted?.call();
+      // [QBSenHook] v7.5: 直接进入全屏播放界面（复用同一 VideoPlayerState/texture）
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => const EmbyFullscreenPlayerPage(),
+        ),
+      );
     }
   }
 

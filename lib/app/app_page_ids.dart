@@ -42,6 +42,9 @@ class AppActionIds {
 
   static const String toggleTheme = 'toggle_theme';
   static const String settings = 'settings';
+  // [QBSenHook] v7.5: 顶部统一控件组的两个新入口
+  static const String search = 'search';
+  static const String swipe = 'swipe';
 }
 
 class MediaLibrarySectionIds {

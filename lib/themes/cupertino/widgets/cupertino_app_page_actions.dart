@@ -4,6 +4,8 @@ import 'package:flutter/material.dart' show ThemeMode;
 import 'package:nipaplay/app/app_page_ids.dart';
 import 'package:nipaplay/app/unified_app_actions.dart';
 import 'package:nipaplay/app/unified_app_view_presenter.dart';
+import 'package:nipaplay/pages/emby_search_page.dart';
+import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_imports.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_glass_button_group.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_page_actions_scope.dart';
@@ -36,16 +38,37 @@ class CupertinoAppPageActions extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    return CupertinoGlassButtonGroup(
-      buttonSize: 44,
-      items: [
-        for (final action in pageActions)
+    // [QBSenHook] v7.5: 顶部统一控件组。按 actionIds 的顺序渲染，
+    // 让搜索、抖音刷片、夜间模式、设置同排、图标同大小（44）。
+    final List<CupertinoGlassButtonGroupItem> items = [];
+    for (final action in pageActions) {
+      items.add(
+        CupertinoGlassButtonGroupItem(
+          label: action.label,
+          icon: action.icon,
+          onPressed: action.onPressed,
+        ),
+      );
+    }
+    for (final id in actionIds) {
+      if (id == AppActionIds.search) {
+        items.add(
           CupertinoGlassButtonGroupItem(
-            label: action.label,
-            icon: action.icon,
-            onPressed: action.onPressed,
+            label: '搜索',
+            icon: CupertinoIcons.search,
+            onPressed: () => _performAction(context, AppActionIds.search),
           ),
-        if (actionIds.contains(AppActionIds.toggleTheme))
+        );
+      } else if (id == AppActionIds.swipe) {
+        items.add(
+          CupertinoGlassButtonGroupItem(
+            label: '抖音刷片',
+            icon: CupertinoIcons.play_rectangle_fill,
+            onPressed: () => _performAction(context, AppActionIds.swipe),
+          ),
+        );
+      } else if (id == AppActionIds.toggleTheme) {
+        items.add(
           CupertinoGlassButtonGroupItem(
             label: '切换深浅模式',
             icon: CupertinoTheme.brightnessOf(context) == Brightness.dark
@@ -53,13 +76,21 @@ class CupertinoAppPageActions extends StatelessWidget {
                 : CupertinoIcons.moon_fill,
             onPressed: () => _performAction(context, AppActionIds.toggleTheme),
           ),
-        if (actionIds.contains(AppActionIds.settings))
+        );
+      } else if (id == AppActionIds.settings) {
+        items.add(
           CupertinoGlassButtonGroupItem(
             label: '设置',
             icon: CupertinoIcons.gear_alt_fill,
             onPressed: () => _performAction(context, AppActionIds.settings),
           ),
-      ],
+        );
+      }
+    }
+
+    return CupertinoGlassButtonGroup(
+      buttonSize: 44,
+      items: items,
     );
   }
 
@@ -78,6 +109,24 @@ class CupertinoAppPageActions extends StatelessWidget {
       case UnifiedAppActionKind.command:
         if (action.id == AppActionIds.toggleTheme) {
           _toggleTheme(context);
+        } else if (action.id == AppActionIds.search) {
+          // [QBSenHook] v7.5: 顶部搜索入口 → 全屏 Emby 搜索页
+          unawaited(
+            Navigator.of(context).push(
+              CupertinoPageRoute<void>(
+                builder: (_) => const EmbySearchPage(),
+              ),
+            ),
+          );
+        } else if (action.id == AppActionIds.swipe) {
+          // [QBSenHook] v7.5: 顶部抖音刷片入口 → 刷片页（默认全部数据源）
+          unawaited(
+            Navigator.of(context).push(
+              CupertinoPageRoute<void>(
+                builder: (_) => const EmbySwipePage(),
+              ),
+            ),
+          );
         }
         return;
       case UnifiedAppActionKind.openView:

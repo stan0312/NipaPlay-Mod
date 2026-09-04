@@ -7,7 +7,6 @@ import 'package:nipaplay/models/jellyfin_model.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/pages/media_server_detail_page.dart';
-import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/providers/appearance_settings_provider.dart';
 import 'package:nipaplay/providers/jellyfin_provider.dart';
 import 'package:nipaplay/providers/emby_provider.dart';
@@ -1177,13 +1176,10 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
       );
     }
 
+    // [QBSenHook] v7.5: 抖音刷片/搜索入口已上移到右上角统一控件组，
+    // 这里不再渲染页内横幅与搜索栏，避免被悬浮按钮遮挡。
     return Column(
       children: [
-        // [QBSenHook] 抖音式刷片入口（仅 Emby）
-        if (widget.serverType == NetworkMediaServerType.emby)
-          _buildSwipeEntry(),
-        // 主页面搜索栏
-        _buildMainSearchBar(),
         // 媒体库网格或搜索结果
         Expanded(
           child: RepaintBoundary(
@@ -1650,72 +1646,8 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
     );
   }
 
-  // 构建主页面搜索栏（媒体库列表视图）
-  // [QBSenHook] 抖音式刷片入口横幅
-  Widget _buildSwipeEntry() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-      child: InkWell(
-        onTap: _openSwipePage,
-        borderRadius: BorderRadius.circular(14),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF7C3AED), Color(0xFFEC4899)],
-            ),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.smart_display_rounded,
-                  color: Colors.white, size: 22),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Text(
-                  '抖音式刷片',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              const Text(
-                '上下滑刷 Emby →',
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // [QBSenHook] 打开抖音式刷片页
-  void _openSwipePage() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => EmbySwipePage(title: '$_serverName 刷片'),
-      ),
-    );
-  }
-
-  Widget _buildMainSearchBar() {
-    return LocalLibraryControlBar(
-      searchController: _searchController,
-      currentSort: _currentSort,
-      onSearchChanged: _onMainSearchChanged,
-      onSortChanged: (type) {
-        setState(() => _currentSort = type);
-        _applySortAndFilter();
-      },
-      trailingActions: [
-        _buildRefreshAction(),
-        _buildServerSettingsAction(),
-      ],
-    );
-  }
+  // [QBSenHook] v7.5: 抖音刷片/搜索入口已上移到右上角统一控件组，
+  // 原 _buildSwipeEntry / _openSwipePage / _buildMainSearchBar 已移除。
 
   // 搜索输入变化处理（单个媒体库）
   void _onSearchChanged(String query) {

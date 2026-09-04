@@ -22,6 +22,10 @@ class UnifiedAppActionDefinition {
 
 const List<UnifiedAppActionDefinition> unifiedAppActions =
     <UnifiedAppActionDefinition>[
+  // [QBSenHook] v7.5: 搜索与抖音刷片为 command，在 CupertinoAppPageActions 中
+  // 直接 push 对应页面（EmbySearchPage / EmbySwipePage）。
+  UnifiedAppActionDefinition.command(id: AppActionIds.search),
+  UnifiedAppActionDefinition.command(id: AppActionIds.swipe),
   UnifiedAppActionDefinition.command(id: AppActionIds.toggleTheme),
   UnifiedAppActionDefinition.openView(
     id: AppActionIds.settings,
