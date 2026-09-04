@@ -14,6 +14,7 @@ import 'package:nipaplay/providers/emby_provider.dart';
 import 'package:nipaplay/services/jellyfin_service.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_card.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/anime_card.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/cached_network_image_widget.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
@@ -1244,8 +1245,6 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
   }
 
   Widget _buildLibraryContentView(dynamic provider, dynamic service) {
-    final showSummary =
-        context.watch<AppearanceSettingsProvider>().showAnimeCardSummary;
     if (_isLoadingLibraryContent) {
       return const Center(
         child: AdaptiveMediaActivityIndicator(),
@@ -1335,18 +1334,15 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
                       ? _buildEmptyResultsPlaceholder()
                       : GridView.builder(
                           controller: _gridScrollController,
+                          // [QBSenHook] v7.4: 手机端内容墙 3 列一排、窄边框。
                           gridDelegate:
-                              SliverGridDelegateWithMaxCrossAxisExtent(
-                            maxCrossAxisExtent: showSummary
-                                ? HorizontalAnimeCard.detailedGridMaxCrossAxisExtent
-                                : HorizontalAnimeCard.compactGridMaxCrossAxisExtent,
-                            mainAxisExtent: showSummary
-                                ? HorizontalAnimeCard.detailedCardHeight
-                                : HorizontalAnimeCard.compactCardHeight,
-                            crossAxisSpacing: 16,
-                            mainAxisSpacing: 16,
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            mainAxisExtent: 248,
+                            crossAxisSpacing: 4,
+                            mainAxisSpacing: 4,
                           ),
-                          padding: const EdgeInsets.all(16),
+                          padding: const EdgeInsets.fromLTRB(6, 4, 6, 24),
                           cacheExtent: 800,
                           clipBehavior: Clip.hardEdge,
                           physics: const AlwaysScrollableScrollPhysics(
@@ -1360,7 +1356,7 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
                             final item = _isSearching
                                 ? _searchResults[index]
                                 : _filteredMediaItems[index];
-                            return _buildMediaCard(item);
+                            return _buildMediaCard(item, poster: true);
                           },
                         ),
             ),
@@ -1446,7 +1442,7 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
     }
   }
 
-  Widget _buildMediaCard(NetworkMediaItem item) {
+  Widget _buildMediaCard(NetworkMediaItem item, {bool poster = false}) {
     String imageUrl = '';
     String uniqueId = '';
 
@@ -1466,6 +1462,22 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
             ? EmbyService.instance.getImageUrl(embyItem.id, width: 300)
             : '';
         break;
+    }
+
+    // [QBSenHook] v7.4: 内容页（poster=true）用竖版海报卡（配合 3 列窄边框网格）；
+    // 主页搜索保持横版卡片。
+    if (poster) {
+      return AnimeCard(
+        key: ValueKey(uniqueId),
+        name: item.title,
+        imageUrl: imageUrl,
+        source: _serverName,
+        rating: item.userRating,
+        onTap: () => _openMediaDetail(item),
+        enableBackgroundBlur: false,
+        enableShadow: false,
+        enableBackdropImage: false,
+      );
     }
 
     return HorizontalAnimeCard(

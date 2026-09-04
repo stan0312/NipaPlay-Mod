@@ -638,50 +638,11 @@ class _CupertinoMediaLibraryScaffold extends material.StatelessWidget {
 
   @override
   material.Widget build(material.BuildContext context) {
+    // [QBSenHook] v7.4: 去掉顶部"媒体库"标题、分区切换器和排序按钮，
+    // 打开即全屏展示媒体库内容（默认自动选中已连接的 Emby 分区）。
     return material.ColoredBox(
       color: material.Colors.transparent,
-      child: material.Column(
-        children: [
-          const CupertinoAppPageHeader(title: '媒体库', bottomPadding: 8),
-          const material.SizedBox(height: 8),
-          material.Padding(
-            padding: const material.EdgeInsets.symmetric(horizontal: 20),
-            child: material.Row(
-              children: [
-                material.Expanded(
-                  child: material.Align(
-                    alignment: material.Alignment.centerLeft,
-                    child: CupertinoMediaLibrarySectionPicker(
-                      sections: sections,
-                      selectedId: selectedSection.id,
-                      onSelected: onSectionSelected,
-                    ),
-                  ),
-                ),
-                cupertino.CupertinoButton(
-                  padding: const material.EdgeInsets.symmetric(horizontal: 8),
-                  onPressed: () => _showSectionOrderEditor(
-                    context,
-                    sections,
-                    onSectionOrderChanged,
-                  ),
-                  child: const material.Row(
-                    mainAxisSize: material.MainAxisSize.min,
-                    children: [
-                      material.Icon(cupertino.CupertinoIcons.sort_down,
-                          size: 18),
-                      material.SizedBox(width: 4),
-                      material.Text('排序'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const material.SizedBox(height: 4),
-          material.Expanded(child: child),
-        ],
-      ),
+      child: child,
     );
   }
 }

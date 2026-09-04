@@ -4,6 +4,7 @@ import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/pages/emby_folder_browser_page.dart';
+import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -377,27 +378,48 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             if (surface != null) return surface;
             return const SizedBox.shrink();
           }
-          // iOS/Android：texture 模式，textureId 是异步更新的 ValueNotifier，
-          // 必须用 ValueListenableBuilder 监听变化，否则画面永远不出现。
-          return ValueListenableBuilder<int?>(
-            valueListenable: player.textureId,
-            builder: (context, textureId, child) {
-              if (textureId == null || textureId < 0) {
-                return const SizedBox.shrink();
-              }
-              return SizedBox.expand(
-                child: Texture(
-                  textureId: textureId,
-                  filterQuality: FilterQuality.medium,
-                ),
-              );
-            },
+          // [QBSenHook] v7.4: 保持视频原始比例（contain），不拉伸变形。
+          // 竖屏手机里横屏视频居中显示、左右留黑边；竖屏视频铺满。
+          final ratio = _videoAspectRatio(videoState);
+          return Center(
+            child: AspectRatio(
+              aspectRatio: ratio ?? 16 / 9,
+              child: ValueListenableBuilder<int?>(
+                valueListenable: player.textureId,
+                builder: (context, textureId, child) {
+                  if (textureId == null || textureId < 0) {
+                    return const SizedBox.shrink();
+                  }
+                  return SizedBox.expand(
+                    child: Texture(
+                      textureId: textureId,
+                      filterQuality: FilterQuality.medium,
+                    ),
+                  );
+                },
+              ),
+            ),
           );
         } catch (e) {
           return const SizedBox.shrink();
         }
       },
     );
+  }
+
+  /// 从播放器媒体信息读取视频宽高比（未知时返回 null，走 16:9 默认）。
+  double? _videoAspectRatio(VideoPlayerState videoState) {
+    try {
+      final video = videoState.player.mediaInfo.video;
+      if (video == null || video.isEmpty) return null;
+      final codec = video.first.codec;
+      final w = codec.width;
+      final h = codec.height;
+      if (w <= 0 || h <= 0) return null;
+      return w / h;
+    } catch (_) {
+      return null;
+    }
   }
 
   // ============ 收藏 ============
@@ -706,9 +728,14 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         index == _currentIndex && (isPending || isPlayingNow);
     final showPlaybackError =
         _playbackError != null && index == _currentIndex;
-    return Stack(
-      fit: StackFit.expand,
-      children: [
+    // [QBSenHook] v7.4: 单击暂停/播放，双击进入全屏（全屏内双击返回本页）。
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _togglePlayPause,
+      onDoubleTap: _enterFullscreen,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
         // 已开始播放：显示视频画面
         if (isPlayingNow) Positioned.fill(child: _buildVideoSurface()),
         // 状态提示条（加载中/播放中/出错时显示）
@@ -868,7 +895,27 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             ],
           ),
         ),
-      ],
+        ],
+        ),
+      ),
+    );
+  }
+
+  /// [QBSenHook] v7.4: 单击切换播放/暂停。
+  void _togglePlayPause() {
+    final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    if (!videoState.hasVideo) return;
+    if (videoState.status == PlayerStatus.playing) {
+      videoState.pause();
+    } else {
+      videoState.play();
+    }
+  }
+
+  /// [QBSenHook] v7.4: 双击进入全屏播放页。
+  void _enterFullscreen() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const EmbyFullscreenPlayerPage()),
     );
   }
 

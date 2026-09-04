@@ -273,8 +273,10 @@ class _CupertinoMainPageState extends State<CupertinoMainPage> {
         final isFullscreenPlayback = selectedPage.id == AppPageIds.video &&
             videoState.hasVideo &&
             videoState.isFullscreen;
-        final isBottomNavigationVisible =
-            bottomBar.isBottomBarVisible && !isFullscreenPlayback;
+        // [QBSenHook] v7.4: 去掉底部"媒体库"导航条 —— 仅剩单个 tab 时隐藏底部导航。
+        final isBottomNavigationVisible = pages.length > 1 &&
+            bottomBar.isBottomBarVisible &&
+            !isFullscreenPlayback;
         final useWindowHostedVideoUnderlay =
             selectedPage.id == AppPageIds.video &&
                 videoState.hasVideo &&

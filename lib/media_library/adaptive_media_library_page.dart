@@ -59,6 +59,9 @@ class _AdaptiveMediaLibraryPageState extends State<AdaptiveMediaLibraryPage> {
   CupertinoPageActionsController? _pageActionsController;
   bool _connectionsInitialized = false;
   int _selectionRevision = 0;
+  // [QBSenHook] v7.4: 去掉分区切换条后，首次检测到已连接的媒体服务器分区时
+  // 自动切换过去（Emby 优先），保证打开 App 直接进入 Emby 内容。
+  bool _autoPinnedServerSection = false;
   late final MediaLibrarySectionOrderStore _sectionOrderStore;
 
   @override
@@ -321,6 +324,35 @@ class _AdaptiveMediaLibraryPageState extends State<AdaptiveMediaLibraryPage> {
 
         if (sections.isEmpty) {
           return const SizedBox.shrink();
+        }
+
+        // [QBSenHook] v7.4: 默认自动进入已连接的媒体服务器分区（Emby 优先）。
+        if (!_autoPinnedServerSection) {
+          UnifiedMediaLibrarySection? serverSection;
+          for (final s in sections) {
+            if (s.server == UnifiedMediaLibraryServer.emby) {
+              serverSection = s;
+              break;
+            }
+          }
+          if (serverSection == null) {
+            for (final s in sections) {
+              if (s.server != null) {
+                serverSection = s;
+                break;
+              }
+            }
+          }
+          if (serverSection != null) {
+            _autoPinnedServerSection = true;
+            final target = serverSection.id;
+            if (target != _selectedSectionId) {
+              // 避免 build 期间 setState，放到帧后执行。
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) _selectSection(target);
+              });
+            }
+          }
         }
 
         final selectedIndex = mediaLibrarySectionIndexById(
