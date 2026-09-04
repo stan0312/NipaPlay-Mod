@@ -98,8 +98,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   // [QBSenHook] v7.5.2: 单击调出的播放控件面板（3 秒自动隐藏）
   bool _controlsVisible = false;
   Timer? _controlsTimer;
-  // 全屏播放方向选择（默认竖屏）
-  String _fullscreenOrientation = 'portrait';
   // 画面尺寸模式
   EmbyFitMode _fitMode = EmbyFitMode.original;
 
@@ -458,23 +456,22 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                 },
               );
 
-              // [QBSenHook] v7.5.4: 横屏模式 —— 画面旋转 90° 横铺
-              if (_fullscreenOrientation == 'landscape') {
-                final double side = maxW < maxH ? maxW : maxH;
-                // 旋转后宽度优先铺满：取 side 宽、side/ratio 高的竖放区域
-                final double hForW = side / ratio;
-                final Widget rot = RotatedBox(
-                  quarterTurns: 1,
-                  child: hForW <= side
-                      ? SizedBox(width: side, height: hForW, child: texture)
-                      : FittedBox(
-                          fit: BoxFit.contain,
-                          child:
-                              SizedBox(width: side, height: hForW, child: texture),
-                        ),
-                );
-                return Center(
-                  child: SizedBox(width: side, height: side, child: rot),
+              // [QBSenHook] v7.5.4: 横屏视频（宽>高）自动旋转 90° 竖着铺满全屏，
+              // 等比不拉伸（cover 裁切左右），与抖音横视频观看一致；竖视频走下方正常逻辑
+              if (ratio > 1.0) {
+                return SizedBox.expand(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    clipBehavior: Clip.hardEdge,
+                    child: RotatedBox(
+                      quarterTurns: 1,
+                      child: SizedBox(
+                        width: maxW,
+                        height: maxW / ratio,
+                        child: texture,
+                      ),
+                    ),
+                  ),
                 );
               }
 
@@ -1149,12 +1146,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                   return Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.replay_10,
-                            color: Colors.white, size: 28),
-                        onPressed: () =>
-                            _panelAction(() => videoState.seekBackwardByStep()),
-                      ),
+                      // [QBSenHook] v7.5.4: 去掉快进/快退按钮，左右滑手势已可快进快退
                       IconButton(
                         icon: Icon(
                           isPlaying ? Icons.pause : Icons.play_arrow,
@@ -1162,12 +1154,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                           size: 36,
                         ),
                         onPressed: () => _panelAction(_togglePlayPause),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.forward_10,
-                            color: Colors.white, size: 28),
-                        onPressed: () =>
-                            _panelAction(() => videoState.seekForwardByStep()),
                       ),
                     ],
                   );

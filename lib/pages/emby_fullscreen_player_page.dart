@@ -459,10 +459,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        IconButton(
-          icon: const Icon(Icons.replay_10, color: Colors.white, size: 30),
-          onPressed: () => videoState.seekBackwardByStep(),
-        ),
+        // [QBSenHook] v7.5.4: 去掉快进/快退按钮，左右滑手势已可快进快退
         IconButton(
           icon: Icon(
             isPlaying ? Icons.pause : Icons.play_arrow,
@@ -470,10 +467,6 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
             size: 40,
           ),
           onPressed: () => _togglePlayPause(),
-        ),
-        IconButton(
-          icon: const Icon(Icons.forward_10, color: Colors.white, size: 30),
-          onPressed: () => videoState.seekForwardByStep(),
         ),
         // 倍速切换按钮
         InkWell(
