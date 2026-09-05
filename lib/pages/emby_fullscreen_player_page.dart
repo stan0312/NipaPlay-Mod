@@ -248,21 +248,25 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                   child: _buildVideo(videoState, ratio),
                 ),
               ),
-              // 顶部：返回按钮（常驻）+ 标题（随控件显隐）
+              // 顶部：返回按钮 + 文件名（无背景，半透明）
               Positioned(
                 top: 0,
                 left: 0,
                 right: 0,
                 child: SafeArea(
                   bottom: false,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4),
-                    color: Colors.black.withValues(alpha: 0.4),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
                     child: Row(
                       children: [
-                        _buildCloseButton(),
-                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.arrow_back_ios_new_rounded,
+                            color: Colors.white,
+                            size: 22,
+                          ),
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
                         Expanded(
                           child: AnimatedOpacity(
                             opacity: _controlsVisible ? 1 : 0,
@@ -271,8 +275,16 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                               videoState.currentMediaKey ?? '全屏播放',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 15),
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.85),
+                                fontSize: 14,
+                                shadows: const [
+                                  Shadow(
+                                    color: Colors.black45,
+                                    blurRadius: 4,
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -281,7 +293,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                   ),
                 ),
               ),
-              // 底部：播放器控件（2 秒自动隐藏，独立于视频手势区）
+              // 底部：极细进度条 + 控制按钮同一排（无背景，半透明）
               Positioned(
                 left: 0,
                 right: 0,
@@ -293,16 +305,9 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                     ignoring: !_controlsVisible,
                     child: SafeArea(
                       top: false,
-                      child: Container(
-                        padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-                        color: Colors.black.withValues(alpha: 0.55),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildProgressRow(videoState),
-                            _buildControlRow(videoState),
-                          ],
-                        ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 2, 8, 6),
+                        child: _buildControlRow(videoState),
                       ),
                     ),
                   ),
@@ -459,112 +464,107 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
 
   Widget _buildControlRow(VideoPlayerState videoState) {
     final bool isPlaying = videoState.status == PlayerStatus.playing;
+    final Duration total = videoState.duration;
+    final Duration pos = videoState.position;
+    final double totalMs = total.inMilliseconds.toDouble();
+    final double maxMs = totalMs > 0 ? totalMs : 1.0;
+    final double value =
+        (_dragValue ?? (pos.inMilliseconds.toDouble() / maxMs).clamp(0.0, 1.0))
+            .clamp(0.0, 1.0);
+    // [QBSenHook] v7.5.5: 极细进度条 + 控制按钮同一排、无背景、半透明精致样式
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // [QBSenHook] v7.5.4: 去掉快进/快退按钮，左右滑手势已可快进快退
+        Text(
+          _formatDuration(_dragValue != null
+              ? Duration(milliseconds: (_dragValue! * maxMs).round())
+              : pos),
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.85),
+            fontSize: 11,
+            shadows: const [Shadow(color: Colors.black54, blurRadius: 3)],
+          ),
+        ),
+        Expanded(
+          child: SliderTheme(
+            data: SliderThemeData(
+              trackHeight: 2,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+              activeTrackColor: Colors.white.withValues(alpha: 0.9),
+              inactiveTrackColor: Colors.white.withValues(alpha: 0.25),
+              thumbColor: Colors.white,
+            ),
+            child: Slider(
+              value: value,
+              onChanged: (v) => setState(() => _dragValue = v),
+              onChangeEnd: (v) {
+                videoState.seekTo(
+                    Duration(milliseconds: (v * maxMs).round()));
+                setState(() => _dragValue = null);
+              },
+            ),
+          ),
+        ),
+        Text(
+          _formatDuration(total),
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.85),
+            fontSize: 11,
+            shadows: const [Shadow(color: Colors.black54, blurRadius: 3)],
+          ),
+        ),
+        const SizedBox(width: 4),
         IconButton(
           icon: Icon(
-            isPlaying ? Icons.pause : Icons.play_arrow,
-            color: Colors.white,
-            size: 40,
+            isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+            color: Colors.white.withValues(alpha: 0.9),
+            size: 30,
           ),
           onPressed: () => _togglePlayPause(),
         ),
-        // 倍速切换按钮
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => _cyclePlaybackRate(videoState),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              '${videoState.playbackRate.toStringAsFixed(2)}x',
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        // 画面尺寸切换按钮
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: _cycleFitMode,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              _fitMode.label,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        // 方向切换按钮（自动→竖屏→横屏）
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: _cycleOrientation,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              _orientationLabel(),
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        // [QBSenHook] v7.5.4: 音轨选择
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => EmbyTrackMenu.showAudioTracks(context, videoState),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.audiotrack_rounded,
-                    color: Colors.white, size: 15),
-                SizedBox(width: 4),
-                Text('音轨', style: TextStyle(color: Colors.white, fontSize: 13)),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        // [QBSenHook] v7.5.4: 字幕选择
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => EmbyTrackMenu.showSubtitleTracks(context, videoState),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.subtitles_rounded, color: Colors.white, size: 15),
-                SizedBox(width: 4),
-                Text('字幕', style: TextStyle(color: Colors.white, fontSize: 13)),
-              ],
-            ),
-          ),
-        ),
+        _miniChip('${videoState.playbackRate.toStringAsFixed(2)}x',
+            () => _cyclePlaybackRate(videoState)),
+        const SizedBox(width: 6),
+        _miniChip(_fitMode.label, _cycleFitMode),
+        const SizedBox(width: 6),
+        _miniChip(_orientationLabel(), _cycleOrientation),
+        const SizedBox(width: 6),
+        _miniIcon(Icons.audiotrack_rounded,
+            () => EmbyTrackMenu.showAudioTracks(context, videoState)),
+        const SizedBox(width: 4),
+        _miniIcon(Icons.subtitles_rounded,
+            () => EmbyTrackMenu.showSubtitleTracks(context, videoState)),
       ],
+    );
+  }
+
+  /// [QBSenHook] v7.5.5: 紧凑文字按钮（无背景、半透明、带阴影）
+  Widget _miniChip(String label, VoidCallback onTap) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 6),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.9),
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+            shadows: const [Shadow(color: Colors.black54, blurRadius: 3)],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// [QBSenHook] v7.5.5: 紧凑图标按钮（无背景、半透明）
+  Widget _miniIcon(IconData icon, VoidCallback onTap) {
+    return IconButton(
+      icon: Icon(icon, color: Colors.white.withValues(alpha: 0.9), size: 20),
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 30, minHeight: 34),
+      onPressed: onTap,
     );
   }
 }

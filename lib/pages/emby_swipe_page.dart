@@ -520,7 +520,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               final double hForWidth = maxW / ratio;
               if (hForWidth <= maxH) {
                 return Align(
-                  alignment: Alignment.topCenter,
+                  alignment: Alignment.center,
                   child: SizedBox(
                     width: maxW,
                     height: hForWidth,
@@ -891,6 +891,10 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         : null;
     final isPending = _pendingPlayId == item.id;
     final isPlayingNow = _playingItemId == item.id;
+    // [QBSenHook] v7.5.5: 实际是否正在播放（暂停时显示播放图标）
+    final vState = Provider.of<VideoPlayerState>(context, listen: false);
+    final isActuallyPlaying =
+        isPlayingNow && vState.status == PlayerStatus.playing;
     final isActiveCard =
         index == _currentIndex && (isPending || isPlayingNow);
     final showPlaybackError =
@@ -899,8 +903,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     // 双击暂停/播放、左右滑持续快进/快退（慢速持续滑动一直快进快退）。
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: _showControlPanel,
-      onDoubleTap: _togglePlayPause,
       onHorizontalDragStart: _onHorizontalDragStart,
       onHorizontalDragUpdate: _onHorizontalDragUpdate,
       onHorizontalDragEnd: _onHorizontalDragEnd,
@@ -908,17 +910,14 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         fit: StackFit.expand,
         children: [
         // 已开始播放：显示视频画面（叠加左右边缘亮度/音量手势区）
-        if (isPlayingNow) ...[
+        if (isPlayingNow)
           Positioned.fill(child: _buildVideoSurface()),
-          _buildEdgeGestureArea(EdgeGestureSide.left),
-          _buildEdgeGestureArea(EdgeGestureSide.right),
-        ],
         // 状态提示条（加载中/播放中/出错时显示）
         if (isActiveCard)
           Positioned(
             left: 12,
             right: 12,
-            top: MediaQuery.of(context).padding.top + 54,
+            top: MediaQuery.of(context).padding.top + 128,
             child: _buildPlaybackStatusBanner(),
           ),
         // 播放失败红字提示（当前卡片）
@@ -1006,29 +1005,41 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               ),
               const SizedBox(height: 18),
               _buildActionButton(
-                icon: isPlayingNow
-                    ? Icons.pause_circle_filled_rounded
-                    : (isPending
-                        ? Icons.hourglass_top_rounded
+                icon: isPending
+                    ? Icons.hourglass_top_rounded
+                    : (isActuallyPlaying
+                        ? Icons.pause_circle_filled_rounded
                         : Icons.play_circle_fill_rounded),
                 color: Colors.white,
-                label: isPlayingNow
-                    ? '播放中'
-                    : (isPending ? '加载中' : '播放'),
+                label: isPending
+                    ? '加载中'
+                    : (isActuallyPlaying ? '暂停' : '播放'),
                 onTap: () {
-                  if (!isPending && !isPlayingNow) {
+                  if (isPending) return;
+                  if (isActuallyPlaying) {
+                    _togglePlayPause();
+                  } else if (isPlayingNow) {
+                    _togglePlayPause();
+                  } else {
                     _autoPlay(item);
                   }
                 },
               ),
+              const SizedBox(height: 18),
+              _buildActionButton(
+                icon: Icons.aspect_ratio_rounded,
+                color: Colors.white,
+                label: _fitMode.label,
+                onTap: _cycleFitMode,
+              ),
             ],
           ),
         ),
-        // 底部信息
+        // [QBSenHook] v7.5.5: 文件名移到上侧（顶部信息栏下方）
         Positioned(
-          left: 16,
-          right: 76,
-          bottom: 24,
+          left: 18,
+          right: 90,
+          top: MediaQuery.of(context).padding.top + 56,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1036,42 +1047,36 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                 item.name,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  fontSize: 19,
                   fontWeight: FontWeight.bold,
+                  shadows: const [
+                    Shadow(color: Colors.black87, blurRadius: 6),
+                  ],
                 ),
               ),
               if (item.productionYear != null ||
                   item.communityRating != null) ...[
-                const SizedBox(height: 6),
+                const SizedBox(height: 5),
                 Text(
                   [
                     if (item.productionYear != null) '${item.productionYear}',
                     if (item.communityRating != null)
                       '★ ${item.communityRating}',
                   ].join(' · '),
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-              ],
-              if (item.overview != null && item.overview!.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  item.overview!,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 13,
-                    height: 1.4,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    fontSize: 12,
+                    shadows: const [
+                      Shadow(color: Colors.black87, blurRadius: 4),
+                    ],
                   ),
                 ),
               ],
             ],
           ),
         ),
-        // [QBSenHook] v7.5.2: 播放控件面板（单击调出，3秒自动隐藏）
-        if (_controlsVisible) _buildControlPanel(),
         // [QBSenHook] v7.5.4: 左右滑快进快退时底部极细播放进度条
         if (_seekBarVisible) _buildSeekBar(),
         ],

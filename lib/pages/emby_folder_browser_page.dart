@@ -41,17 +41,33 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   String? _currentId;
   String? _currentName;
   List<EmbyMediaItem> _items = [];
+  // [QBSenHook] v7.5.5: 视频陈列模式数据
+  List<EmbyMediaItem> _videos = [];
   bool _loading = true;
   String? _error;
 
   List<EmbyLibrary> _rootLibraries = [];
+
+  // [QBSenHook] v7.5.5: 分类页默认视频陈列模式；排序；搜索词
+  bool _videoGridMode = true;
+  SwipeSort _sort = SwipeSort.dateCreated;
+  String _query = '';
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _currentId = widget.rootId;
     _currentName = widget.rootName;
+    // [QBSenHook] v7.5.5: 指定分类进入时默认视频陈列
+    _videoGridMode = widget.rootId != null;
     _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   String get _title {
@@ -72,8 +88,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
         setState(() {
           _rootLibraries = libs;
           _items = [];
+          _videos = [];
           _loading = false;
         });
+      } else if (_videoGridMode) {
+        // [QBSenHook] v7.5.5: 分类视频陈列（3 个一排）
+        await _loadVideoGrid();
       } else {
         final items =
             await EmbyService.instance.getFolderChildren(_currentId!);
@@ -110,6 +130,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
       _path.add(_FolderEntry(lib.id, lib.name));
       _currentId = lib.id;
       _currentName = lib.name;
+      // [QBSenHook] v7.5.5: 进入分类默认视频陈列（3 个一排）
+      _videoGridMode = true;
     });
     _load();
   }
@@ -139,6 +161,37 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
       }
     });
     _load();
+  }
+
+  /// [QBSenHook] v7.5.5: 循环切换排序（时间添加→文件名→随机→大小）。
+  void _cycleSort() {
+    setState(() {
+      final values = SwipeSort.values;
+      _sort = values[(_sort.index + 1) % values.length];
+    });
+    _load();
+  }
+
+  /// [QBSenHook] v7.5.5: 视频陈列模式加载（服务端排序）。
+  Future<void> _loadVideoGrid() async {
+    try {
+      final items = await EmbyService.instance.getSwipeItems(
+        libraryId: _currentId,
+        sortBy: _sort.name,
+        limit: 500,
+      );
+      if (!mounted) return;
+      setState(() {
+        _videos = items;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _loading = false;
+      });
+    }
   }
 
   void _openSwipeInCurrentFolder() {
@@ -230,24 +283,91 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        // [QBSenHook] v7.5.5: 返回 + 搜索框同一排靠左；按钮排（排序/文件夹/抖音/刷新）
+        titleSpacing: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded),
           onPressed: _goUp,
         ),
-        title: Text(
-          _title,
-          style: const TextStyle(color: Colors.white),
+        title: Container(
+          height: 36,
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.search_rounded,
+                  color: Colors.white60, size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  decoration: const InputDecoration(
+                    isCollapsed: true,
+                    border: InputBorder.none,
+                    hintText: '搜索',
+                    hintStyle:
+                        TextStyle(color: Colors.white38, fontSize: 14),
+                  ),
+                  onChanged: (v) => setState(() => _query = v.trim()),
+                ),
+              ),
+              if (_query.isNotEmpty)
+                GestureDetector(
+                  onTap: () {
+                    _searchController.clear();
+                    setState(() => _query = '');
+                  },
+                  child: const Icon(Icons.close_rounded,
+                      color: Colors.white54, size: 16),
+                ),
+            ],
+          ),
         ),
         actions: [
-          if (_currentId != null)
+          if (_currentId != null) ...[
+            // 排序切换
+            TextButton(
+              onPressed: _cycleSort,
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              child: Text(
+                _sort.label,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            // 文件夹模式切换（视频陈列 <-> 文件夹）
+            IconButton(
+              icon: Icon(
+                _videoGridMode
+                    ? Icons.folder_open_rounded
+                    : Icons.grid_view_rounded,
+                color: Colors.white,
+                size: 22,
+              ),
+              tooltip: _videoGridMode ? '切换到文件夹模式' : '切换到视频陈列',
+              onPressed: () {
+                setState(() => _videoGridMode = !_videoGridMode);
+                _load();
+              },
+            ),
+            // 抖音刷片
             IconButton(
               icon: const Icon(Icons.smart_display_rounded,
-                  color: Colors.white),
-              tooltip: '在此文件夹内上下滑播放',
+                  color: Colors.white, size: 22),
+              tooltip: '在此分类/文件夹内上下滑播放',
               onPressed: _openSwipeInCurrentFolder,
             ),
+          ],
           IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+            icon: const Icon(Icons.refresh_rounded,
+                color: Colors.white, size: 22),
             onPressed: _load,
           ),
         ],
@@ -309,6 +429,34 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
           final lib = _rootLibraries[index];
           return _buildLibraryCard(lib);
         },
+      );
+    }
+
+    // [QBSenHook] v7.5.5: 分类视频陈列模式：3 个一排，本地搜索过滤
+    if (_videoGridMode) {
+      final visible = _query.isEmpty
+          ? _videos
+          : _videos
+              .where((e) => e.name.toLowerCase().contains(_query.toLowerCase()))
+              .toList();
+      if (visible.isEmpty) {
+        return const Center(
+          child: Text(
+            '没有匹配的视频',
+            style: TextStyle(color: Colors.white54),
+          ),
+        );
+      }
+      return GridView.builder(
+        padding: const EdgeInsets.all(10),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 6,
+          mainAxisSpacing: 6,
+          childAspectRatio: 0.62,
+        ),
+        itemCount: visible.length,
+        itemBuilder: (context, index) => _buildVideoCard(visible[index]),
       );
     }
 
