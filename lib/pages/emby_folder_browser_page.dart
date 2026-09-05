@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:nipaplay/models/emby_model.dart';
+import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/services/playback_source_service.dart';
+import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
+import 'package:provider/provider.dart';
 
 /// [QBSenHook] Emby 文件夹方式浏览页：按目录结构浏览媒体库，
-/// 点击视频进入该文件夹内的上下滑播放（刷片模式）。
+/// 点击视频直接进入全屏播放器播放（按视频尺寸选择方向）。
 class EmbyFolderBrowserPage extends StatefulWidget {
   const EmbyFolderBrowserPage({
     super.key,
@@ -148,22 +153,72 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     );
   }
 
-  void _openVideoSwipe(EmbyMediaItem video) {
+  Future<void> _openVideoPlayer(EmbyMediaItem video) async {
     if (_currentId == null) return;
-    // [QBSenHook] v7.5.3: 点视频直接进入抖音式刷片播放，
-    // 播放列表 = 当前文件夹内全部视频，定位到点击的这个视频开始播放；
-    // 往下滑依次播放文件夹内下一个视频。
-    // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
-    Navigator.of(context).push(
-      CupertinoPageRoute<void>(
-        builder: (_) => EmbySwipePage(
-          title: '$_currentName 刷片',
-          initialParentId: _currentId,
-          parentName: _currentName,
-          initialItemId: video.id,
+    final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    // [QBSenHook] v7.5.4: 内嵌播放必须绑定本页 context
+    videoState.setContext(context);
+    try {
+      // 续播：从 Emby 服务端观看进度恢复
+      final resumeMs =
+          (video.userData?.playbackPositionTicks ?? 0.0) / 10000.0;
+      final resumePositionMs = resumeMs > 0 ? resumeMs.round() : 0;
+      final historyItem = WatchHistoryItem(
+        filePath: 'emby://${video.id}',
+        animeName: video.name,
+        episodeTitle: null,
+        watchProgress: 0.0,
+        lastPosition: resumePositionMs,
+        duration: 0,
+        lastWatchTime: DateTime.now(),
+        animeId: null,
+        isFromScan: false,
+      );
+      PlaybackSession? session;
+      try {
+        session = await EmbyService.instance
+            .createPlaybackSession(itemId: video.id);
+      } catch (e) {
+        debugPrint('文件夹播放预创建会话失败(将由播放器内部处理): $e');
+      }
+      if (!mounted) return;
+      final playable = PlayableItem(
+        videoPath: historyItem.filePath,
+        title: video.name,
+        historyItem: historyItem,
+        playbackSession: session,
+      );
+      final detailContext =
+          await PlaybackSourceService.resolve(context, playable);
+      if (!mounted) return;
+      await videoState.initializePlayer(
+        playable.videoPath,
+        historyItem: historyItem,
+        playbackSession: session,
+        playbackDetailContext: detailContext,
+      );
+      if (!mounted) return;
+      final initError = videoState.error;
+      if (initError != null && initError.trim().isNotEmpty) {
+        debugPrint('文件夹播放初始化失败: $initError');
+        return;
+      }
+      if (!videoState.hasVideo) {
+        debugPrint('文件夹播放未能建立视频画面');
+        return;
+      }
+      videoState.play();
+      if (!mounted) return;
+      // [QBSenHook] v7.5.4: 直接进入全屏播放器（按视频尺寸自动选横竖屏）
+      Navigator.of(context).push(
+        CupertinoPageRoute<void>(
+          builder: (_) =>
+              const EmbyFullscreenPlayerPage(preferredOrientation: 'auto'),
         ),
-      ),
-    );
+      );
+    } catch (e, s) {
+      debugPrint('文件夹播放失败: $e\n$s');
+    }
   }
 
   @override
@@ -409,7 +464,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
             service.getImageUrl(video.id, tag: video.imagePrimaryTag))
         : null;
     return _Card(
-      onTap: () => _openVideoSwipe(video),
+      onTap: () => _openVideoPlayer(video),
       child: Stack(
         fit: StackFit.expand,
         children: [

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nipaplay/pages/emby_track_menu.dart';
+import 'package:nipaplay/utils/screen_orientation_manager.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:provider/provider.dart';
 
@@ -59,6 +60,8 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     super.initState();
     _orientation = widget.preferredOrientation;
     _fitMode = widget.initialFitMode;
+    // [QBSenHook] v7.5.4: 全屏播放器允许按视频尺寸选择横竖方向
+    ScreenOrientationManager.instance.forcePortraitPlayback = false;
     _startControlsTimer();
   }
 

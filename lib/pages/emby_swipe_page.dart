@@ -11,6 +11,7 @@ import 'package:nipaplay/pages/emby_folder_browser_page.dart';
 import 'package:nipaplay/pages/emby_fullscreen_player_page.dart' show EmbyFitMode;
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
+import 'package:nipaplay/utils/screen_orientation_manager.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
 import 'package:provider/provider.dart';
@@ -120,6 +121,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
     ]);
+    // [QBSenHook] v7.5.4: 强制竖屏播放（播放回调不再切横屏）
+    ScreenOrientationManager.instance.forcePortraitPlayback = true;
     _videoState = Provider.of<VideoPlayerState>(context, listen: false);
     _libraryId = widget.initialLibraryId;
     _favoritesOnly = widget.favoritesOnly;
@@ -145,6 +148,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
     ]);
+    // [QBSenHook] v7.5.4: 释放强制竖屏标志（全屏播放器页按视频尺寸选方向）
+    ScreenOrientationManager.instance.forcePortraitPlayback = false;
     _pageController.dispose();
     _playingItemId = null;
     super.dispose();

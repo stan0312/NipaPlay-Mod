@@ -19,6 +19,10 @@ class ScreenOrientationManager {
   bool _initialWasLandscape = false; // 记录进入播放器时的初始屏幕方向
   bool _isTabletDevice = false; // 记录是否为平板设备（基于进入时的判断，固定不变）
 
+  // [QBSenHook] v7.5.4: 强制竖屏播放标志（抖音刷片页置 true，播放时绝不切横屏；
+  // 全屏播放器页置 false，允许按视频尺寸选择方向）
+  bool forcePortraitPlayback = false;
+
   // 获取当前是否处于横屏状态
   bool get isLandscape {
     final window = WidgetsBinding.instance.window;
@@ -61,6 +65,9 @@ class ScreenOrientationManager {
       if (_isTabletDevice) {
         // 平板设备：已经是横屏，无需改变
         return;
+      } else if (forcePortraitPlayback) {
+        // [QBSenHook] v7.5.4: 抖音刷片等强制竖屏场景，播放时保持竖屏
+        await _setPortraitOnly();
       } else {
         // 手机开始播放时默认进入横屏全屏。
         await _setLandscapeOnly();
