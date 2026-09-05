@@ -9,7 +9,9 @@ import 'package:nipaplay/constants/media_extensions.dart';
 import 'package:nipaplay/models/danmaku/danmaku_item.dart';
 import 'package:nipaplay/models/external_player_session/mpv_session.dart';
 import 'package:nipaplay/models/external_player_session/other_session.dart';
-import 'package:nipaplay/models/external_player_session/potplayer_session.dart';
+import 'package:nipaplay/models/external_player_session/potplayer_session.dart'
+    if (dart.library.html)
+      'package:nipaplay/models/external_player_session/potplayer_session_stub.dart';
 import 'package:nipaplay/models/external_player_session/session.dart';
 import 'package:nipaplay/models/external_player_session/vlc_session.dart';
 import 'package:nipaplay/models/playable_item.dart';
