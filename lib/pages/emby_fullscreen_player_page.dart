@@ -53,6 +53,15 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
   Timer? _controlsTimer;
   double? _dragValue; // 拖动进度条时的临时值（跟手）
 
+  // [QBSenHook] v7.7: 左右滑持续快进快退状态
+  bool _seekDragging = false;
+  bool _seekBarVisible = false;
+  Duration _seekDragStartPos = Duration.zero;
+  double _seekDragAccum = 0.0;
+  // [QBSenHook] v7.7: 左右边缘亮度/音量手势
+  String? _edgeDragMode; // 'brightness' / 'volume'
+  late VideoPlayerState _videoStateRef;
+
   static const List<double> _speedOptions = [1.0, 1.25, 1.5, 2.0];
 
   @override
@@ -62,6 +71,12 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     _fitMode = widget.initialFitMode;
     // [QBSenHook] v7.5.4: 全屏播放器允许按视频尺寸选择横竖方向
     ScreenOrientationManager.instance.forcePortraitPlayback = false;
+    // [QBSenHook] v7.7: 缓存 VideoPlayerState 引用供边缘手势使用
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _videoStateRef = Provider.of<VideoPlayerState>(context, listen: false);
+      }
+    });
     _startControlsTimer();
   }
 
@@ -158,16 +173,36 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     }
   }
 
-  /// [QBSenHook] v7.5: 左右滑快进/快退（左滑快进、右滑快退，各 10 秒）。
-  void _onHorizontalDragEnd(DragEndDetails details) {
-    final velocity = details.primaryVelocity ?? 0;
+  /// [QBSenHook] v7.7: 左右滑持续快进/快退（慢滑持续，与抖音页一致）。
+  void _onHorizontalDragStart(DragStartDetails details) {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!videoState.hasVideo) return;
-    if (velocity < -300) {
-      videoState.seekForwardByStep();
-    } else if (velocity > 300) {
-      videoState.seekBackwardByStep();
+    _seekDragging = true;
+    _seekDragStartPos = videoState.position;
+    _seekDragAccum = 0.0;
+    if (mounted) setState(() => _seekBarVisible = true);
+  }
+
+  void _onHorizontalDragUpdate(DragUpdateDetails details) {
+    final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    if (!_seekDragging || !videoState.hasVideo) return;
+    _seekDragAccum += details.delta.dx;
+    const double pxPerStep = 24.0;
+    const int secondsPerStep = 5;
+    if (_seekDragAccum.abs() >= pxPerStep) {
+      final steps = (_seekDragAccum / pxPerStep).round();
+      final target =
+          _seekDragStartPos + Duration(seconds: steps * secondsPerStep);
+      videoState.seekTo(target);
+      _seekDragStartPos = videoState.position;
+      _seekDragAccum = 0.0;
     }
+  }
+
+  void _onHorizontalDragEnd(DragEndDetails details) {
+    _seekDragging = false;
+    _seekDragAccum = 0.0;
+    if (mounted) setState(() => _seekBarVisible = false);
   }
 
   /// [QBSenHook] v7.5.1: 循环切换倍速（1.0 → 1.25 → 1.5 → 2.0 → 1.0）。
@@ -238,16 +273,109 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
           return Stack(
             fit: StackFit.expand,
             children: [
-              // 视频画面区（双击暂停/播放、单击调出控件、左右滑快进快退）
+              // 视频画面区（双击暂停/播放、单击调出控件、左右滑持续快进快退）
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: _showControls,
                   onDoubleTap: _togglePlayPause,
+                  onHorizontalDragStart: _onHorizontalDragStart,
+                  onHorizontalDragUpdate: _onHorizontalDragUpdate,
                   onHorizontalDragEnd: _onHorizontalDragEnd,
                   child: _buildVideo(videoState, ratio),
                 ),
               ),
+              // [QBSenHook] v7.7: 左边缘上下滑调亮度、右边缘上下滑调音量（尽量靠边）
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: MediaQuery.of(context).size.width * 0.18,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragStart: (_) {
+                    _edgeDragMode = 'brightness';
+                    _videoStateRef.startBrightnessDrag();
+                  },
+                  onVerticalDragUpdate: (d) {
+                    if (_edgeDragMode == 'brightness') {
+                      _videoStateRef.updateBrightnessOnDrag(d.delta.dy, context);
+                    }
+                  },
+                  onVerticalDragEnd: (_) {
+                    if (_edgeDragMode == 'brightness') {
+                      _videoStateRef.endBrightnessDrag();
+                    }
+                    _edgeDragMode = null;
+                  },
+                  onVerticalDragCancel: () {
+                    if (_edgeDragMode == 'brightness') {
+                      _videoStateRef.endBrightnessDrag();
+                    }
+                    _edgeDragMode = null;
+                  },
+                ),
+              ),
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                width: MediaQuery.of(context).size.width * 0.18,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragStart: (_) {
+                    _edgeDragMode = 'volume';
+                    _videoStateRef.startVolumeDrag();
+                  },
+                  onVerticalDragUpdate: (d) {
+                    if (_edgeDragMode == 'volume') {
+                      _videoStateRef.updateVolumeOnDrag(d.delta.dy, context);
+                    }
+                  },
+                  onVerticalDragEnd: (_) {
+                    if (_edgeDragMode == 'volume') {
+                      _videoStateRef.endVolumeDrag();
+                    }
+                    _edgeDragMode = null;
+                  },
+                  onVerticalDragCancel: () {
+                    if (_edgeDragMode == 'volume') {
+                      _videoStateRef.endVolumeDrag();
+                    }
+                    _edgeDragMode = null;
+                  },
+                ),
+              ),
+              // [QBSenHook] v7.7: 左右滑快进快退时底部极细进度条
+              if (_seekBarVisible)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: Consumer<VideoPlayerState>(
+                      builder: (context, vs, child) {
+                        final double pos =
+                            vs.hasVideo && vs.duration.inMilliseconds > 0
+                                ? (vs.position.inMilliseconds /
+                                        vs.duration.inMilliseconds)
+                                    .clamp(0.0, 1.0)
+                                : 0.0;
+                        return Container(
+                          height: 2.5,
+                          color: Colors.black.withValues(alpha: 0.35),
+                          alignment: Alignment.centerLeft,
+                          child: FractionallySizedBox(
+                            widthFactor: pos,
+                            child: Container(
+                              color: Colors.white.withValues(alpha: 0.9),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
               // 顶部：返回按钮 + 文件名（无背景，半透明）
               Positioned(
                 top: 0,

@@ -863,12 +863,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
           child: Row(
             children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded,
-                    color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-              ),
-              const SizedBox(width: 2),
+              // [QBSenHook] v7.7: 去掉返回按钮，统一左缘右滑返回（CupertinoPageRoute）
+              const SizedBox(width: 8),
               Expanded(
                 child: GestureDetector(
                   onTap: _openSourcePicker,

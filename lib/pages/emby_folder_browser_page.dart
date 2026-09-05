@@ -84,6 +84,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     });
     try {
       if (_currentId == null) {
+        // [QBSenHook] v7.7: 根目录先从服务器刷新媒体库列表，避免只显示缓存
+        try {
+          await EmbyService.instance.loadAvailableLibraries();
+        } catch (e) {
+          debugPrint('根目录刷新媒体库失败: $e');
+        }
         // 根：列出媒体库
         final libs = EmbyService.instance.availableLibraries;
         if (!mounted) return;
