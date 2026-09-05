@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:nipaplay/app/app_page_component.dart';
 import 'package:nipaplay/media_library/adaptive_media_library_page.dart';
+import 'package:nipaplay/pages/emby_folder_browser_page.dart';
 import 'package:nipaplay/settings/unified_settings_page.dart';
 import 'package:nipaplay/widgets/desktop_player_page_slot.dart';
 
@@ -43,7 +44,8 @@ class UnifiedAppControlRegistry {
       AppPageComponentType.homeFeed => const SizedBox.shrink(),
       AppPageComponentType.playback => const DesktopPlayerPageSlot(),
       AppPageComponentType.webdavBrowser => const SizedBox.shrink(),
-      AppPageComponentType.mediaLibrary => const AdaptiveMediaLibraryPage(),
+      // [QBSenHook] v7.6: 初始界面直接为文件夹方式浏览页（不再用媒体库方式浏览）
+      AppPageComponentType.mediaLibrary => const EmbyFolderBrowserPage(),
       AppPageComponentType.torrentTasks => const SizedBox.shrink(),
       // [QBSenHook] account 页直接显示设置（个人中心已替换为设置）
       AppPageComponentType.account => const UnifiedSettingsPage(),

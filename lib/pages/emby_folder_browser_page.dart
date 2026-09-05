@@ -8,6 +8,8 @@ import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
+import 'package:nipaplay/settings/unified_settings_page.dart';
+import 'package:nipaplay/utils/theme_notifier.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
 import 'package:provider/provider.dart';
@@ -138,15 +140,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
 
   void _goUp() {
     if (_path.isEmpty) {
-      // 已在根：返回上一页（若有 rootId，回到媒体库列表）
+      // [QBSenHook] v7.6: 作为初始界面时根目录不再 pop（避免退出/黑屏），仅刷新
       if (widget.rootId != null) {
         setState(() {
           _currentId = null;
           _currentName = null;
         });
         _load();
-      } else {
-        Navigator.pop(context);
       }
       return;
     }
@@ -365,6 +365,36 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
               onPressed: _openSwipeInCurrentFolder,
             ),
           ],
+          // [QBSenHook] v7.6: 夜间模式切换 + 设置（原顶部悬浮控件并入本页）
+          IconButton(
+            icon: Icon(
+              Theme.of(context).brightness == Brightness.dark
+                  ? Icons.light_mode_rounded
+                  : Icons.dark_mode_rounded,
+              color: Colors.white,
+              size: 22,
+            ),
+            tooltip: '切换夜间模式',
+            onPressed: () {
+              final notifier = context.read<ThemeNotifier>();
+              notifier.themeMode =
+                  Theme.of(context).brightness == Brightness.dark
+                      ? ThemeMode.light
+                      : ThemeMode.dark;
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_rounded,
+                color: Colors.white, size: 22),
+            tooltip: '设置',
+            onPressed: () {
+              Navigator.of(context).push(
+                CupertinoPageRoute<void>(
+                  builder: (_) => const UnifiedSettingsPage(),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded,
                 color: Colors.white, size: 22),

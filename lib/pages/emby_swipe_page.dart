@@ -102,6 +102,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   Timer? _controlsTimer;
   // 画面尺寸模式
   EmbyFitMode _fitMode = EmbyFitMode.original;
+  // [QBSenHook] v7.6: 屏幕方向适配开关（false=竖屏适配[默认]，true=横屏适配）
+  bool _landscapeView = false;
 
   // [QBSenHook] v7.5.3: 缓存播放器引用，dispose 时停止播放（退出后立即无声音）
   late final VideoPlayerState _videoState;
@@ -463,6 +465,24 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                   );
                 },
               );
+
+              // [QBSenHook] v7.6: 横屏适配开关——视频旋转到横向后 cover 铺满（等效横屏观看）
+              if (_landscapeView) {
+                return SizedBox.expand(
+                  child: FittedBox(
+                    fit: BoxFit.cover,
+                    clipBehavior: Clip.hardEdge,
+                    child: RotatedBox(
+                      quarterTurns: ratio > 1.0 ? 0 : 1,
+                      child: SizedBox(
+                        width: maxW,
+                        height: maxW / ratio,
+                        child: texture,
+                      ),
+                    ),
+                  ),
+                );
+              }
 
               // [QBSenHook] v7.5.4: 横屏视频（宽>高）自动旋转 90° 竖着铺满全屏，
               // 等比不拉伸（cover 裁切左右），与抖音横视频观看一致；竖视频走下方正常逻辑
@@ -1031,6 +1051,13 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                 color: Colors.white,
                 label: _fitMode.label,
                 onTap: _cycleFitMode,
+              ),
+              const SizedBox(height: 18),
+              _buildActionButton(
+                icon: Icons.screen_rotation_rounded,
+                color: Colors.white,
+                label: _landscapeView ? '横屏' : '竖屏',
+                onTap: () => setState(() => _landscapeView = !_landscapeView),
               ),
             ],
           ),

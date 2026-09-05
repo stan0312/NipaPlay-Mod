@@ -80,7 +80,8 @@ List<UnifiedAppPage> buildUnifiedAppPages(
           type: AppPageComponentType.mediaLibrary,
         ),
       ],
-      actionIds: commonActions,
+      // [QBSenHook] v7.6: 初始页自带 AppBar（返回/搜索/文件夹/抖音/夜间/设置），不再悬浮顶部控件
+      actionIds: const <String>[],
     ),
   ];
 }
