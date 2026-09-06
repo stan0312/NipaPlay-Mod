@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 
 // [QBSenHook] v7.5.4: 亮度/音量指示器 —— 白色半透明磨砂风格
+// [QBSenHook] v8.0: 改为"极细一条、无背景"——去掉卡片背景/边框/阴影，
+// 只保留一条极细竖线 + 小图标 + 百分比文字。
 class IndicatorWidget extends StatelessWidget {
   final bool Function(VideoPlayerState) isVisible;
   final double Function(VideoPlayerState) getValue;
@@ -24,69 +26,56 @@ class IndicatorWidget extends StatelessWidget {
           child: AnimatedOpacity(
             opacity: isVisible(videoState) ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 150),
-            child: Container(
-              width: 58,
-              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.28),
-                  width: 0.8,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  getIcon(videoState),
+                  color: Colors.white.withValues(alpha: 0.9),
+                  size: 16,
+                  shadows: const [
+                    Shadow(color: Colors.black54, blurRadius: 4),
+                  ],
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.3),
-                    blurRadius: 18,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                mainAxisAlignment: MainAxisAlignment.start,
-                children: [
-                  Icon(
-                    getIcon(videoState),
-                    color: Colors.white.withValues(alpha: 0.95),
-                    size: 20,
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: globals.isDesktopOrTablet
-                        ? MediaQuery.of(context).size.height * 0.28
-                        : MediaQuery.of(context).size.height * 0.5,
-                    child: RotatedBox(
-                      quarterTurns: 3,
-                      child: SizedBox(
-                        height: 6,
-                        child: LinearProgressIndicator(
-                          value: getValue(videoState),
-                          backgroundColor:
-                              Colors.white.withValues(alpha: 0.25),
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Colors.white.withValues(alpha: 0.95),
-                          ),
-                          borderRadius: BorderRadius.circular(3),
+                const SizedBox(height: 6),
+                SizedBox(
+                  height: globals.isDesktopOrTablet
+                      ? MediaQuery.of(context).size.height * 0.28
+                      : MediaQuery.of(context).size.height * 0.42,
+                  child: RotatedBox(
+                    quarterTurns: 3,
+                    child: SizedBox(
+                      width: 3,
+                      child: LinearProgressIndicator(
+                        value: getValue(videoState),
+                        backgroundColor:
+                            Colors.white.withValues(alpha: 0.22),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Colors.white.withValues(alpha: 0.95),
                         ),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Padding(
-                    padding: const EdgeInsets.all(5),
-                    child: Text(
-                      "${(getValue(videoState) * 100).toInt()}%",
-                      locale: const Locale("zh-Hans", "zh"),
-                      style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.92),
-                          fontSize: 10,
-                          fontWeight: FontWeight.w500,
-                          decoration: TextDecoration.none),
+                ),
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: Text(
+                    "${(getValue(videoState) * 100).toInt()}%",
+                    locale: const Locale("zh-Hans", "zh"),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.9),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w500,
+                      decoration: TextDecoration.none,
+                      shadows: const [
+                        Shadow(color: Colors.black54, blurRadius: 3),
+                      ],
                     ),
-                  )
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
         );

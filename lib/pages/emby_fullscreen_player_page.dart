@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nipaplay/pages/emby_track_menu.dart';
+import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/utils/screen_orientation_manager.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:provider/provider.dart';
@@ -83,11 +84,46 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
   @override
   void dispose() {
     _controlsTimer?.cancel();
+    // [QBSenHook] v8.0: 退出全屏立即停止播放并上报 Emby 播放进度（修复"退出后仍有声音"）
+    _reportProgressAndStop();
     // [QBSenHook] v7.5: 离开全屏页恢复竖屏（回到刷片页/详情页）
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
     ]);
     super.dispose();
+  }
+
+  /// [QBSenHook] v8.0: 上报停止进度并释放播放器（退出后立即无声）。
+  void _reportProgressAndStop() {
+    VideoPlayerState? vs;
+    try {
+      vs = _videoStateRef;
+    } catch (_) {}
+    if (vs == null) {
+      try {
+        vs = Provider.of<VideoPlayerState>(context, listen: false);
+      } catch (_) {}
+    }
+    if (vs == null || !vs.hasVideo) return;
+    final key = vs.currentMediaKey ?? '';
+    final String? itemId = key.startsWith('emby://')
+        ? key.substring('emby://'.length)
+        : null;
+    final session = vs.currentPlaybackSession;
+    if (itemId != null && itemId.isNotEmpty) {
+      unawaited(EmbyService.instance.reportPlaybackProgress(
+        itemId: itemId,
+        positionMs: vs.position.inMilliseconds,
+        playSessionId: session?.playSessionId,
+        mediaSourceId: session?.mediaSourceId,
+        isStopped: true,
+      ));
+    }
+    try {
+      unawaited(vs.stop());
+    } catch (e) {
+      debugPrint('退出全屏停止播放失败: $e');
+    }
   }
 
   /// 显示控件并重置 3 秒自动隐藏计时。
@@ -186,9 +222,15 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!_seekDragging || !videoState.hasVideo) return;
-    // [QBSenHook] v7.8: 线性化——每 px 对应 0.8 秒，基于总拖动距离，跟手实时 seek
+    // [QBSenHook] v8.0: 按视频时长比例分配——单步基准=时长×2%，保底 3 秒、封顶 30 秒；
+    // 拖满 80px 完成一个基准步长，跟手实时 seek。
     _seekDragAccum += details.delta.dx;
-    const double secondsPerPx = 0.8;
+    final durationSec = videoState.duration.inSeconds > 0
+        ? videoState.duration.inSeconds
+        : 1;
+    final baseStep = (durationSec * 0.02).clamp(3.0, 30.0);
+    const double pxPerStep = 80.0;
+    final secondsPerPx = baseStep / pxPerStep;
     final totalSeconds = (_seekDragAccum * secondsPerPx).round();
     final target = _seekDragStartPos + Duration(seconds: totalSeconds);
     final clamped = target < Duration.zero
@@ -243,9 +285,12 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Consumer<VideoPlayerState>(
+    return PopScope(
+      // [QBSenHook] v8.0: 全屏模式禁止左滑/系统边缘返回（顶部返回按钮不受影响）
+      canPop: false,
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: Consumer<VideoPlayerState>(
         builder: (context, videoState, _) {
           if (videoState.hasVideo) {
             _applyOrientation(videoState);
@@ -291,6 +336,10 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                 width: MediaQuery.of(context).size.width * 0.18,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
+                  // [QBSenHook] v8.0: 最边上左右滑同样快进快退（全屏任意位置可 seek）
+                  onHorizontalDragStart: _onHorizontalDragStart,
+                  onHorizontalDragUpdate: _onHorizontalDragUpdate,
+                  onHorizontalDragEnd: _onHorizontalDragEnd,
                   onVerticalDragStart: (_) {
                     _edgeDragMode = 'brightness';
                     _videoStateRef.startBrightnessDrag();
@@ -321,6 +370,10 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                 width: MediaQuery.of(context).size.width * 0.18,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
+                  // [QBSenHook] v8.0: 最边上左右滑同样快进快退
+                  onHorizontalDragStart: _onHorizontalDragStart,
+                  onHorizontalDragUpdate: _onHorizontalDragUpdate,
+                  onHorizontalDragEnd: _onHorizontalDragEnd,
                   onVerticalDragStart: (_) {
                     _edgeDragMode = 'volume';
                     _videoStateRef.startVolumeDrag();
@@ -442,6 +495,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
             ],
           );
         },
+      ),
       ),
     );
   }

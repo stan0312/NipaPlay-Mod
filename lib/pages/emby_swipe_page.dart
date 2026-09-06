@@ -285,7 +285,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         playlistId: _playlistId,
         sortBy: _sort.name,
         sortAscending: _sortAscending,
-        limit: 500,
+        limit: 0, // [QBSenHook] v8.0: 全量加载（分页拼接，不再截断 500 条）
       );
       if (!mounted) return;
       // [QBSenHook] v7.5.3: initialItemId 定位到该条目（详情页/文件夹点视频直进）
@@ -940,6 +940,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     // 双击暂停/播放、左右滑持续快进/快退（慢速持续滑动一直快进快退）。
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
+      // [QBSenHook] v8.0: 单击唤出底部细进度条+时间，双击暂停/播放
+      onTap: _showControlPanel,
+      onDoubleTap: _togglePlayPause,
       onHorizontalDragStart: _onHorizontalDragStart,
       onHorizontalDragUpdate: _onHorizontalDragUpdate,
       onHorizontalDragEnd: _onHorizontalDragEnd,
@@ -1123,6 +1126,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         ),
         // [QBSenHook] v7.5.4: 左右滑快进快退时底部极细播放进度条
         if (_seekBarVisible) _buildSeekBar(),
+        // [QBSenHook] v8.0: 单击唤出的底部细进度条+时间+按钮（3 秒自动隐藏）
+        if (_controlsVisible) _buildControlPanel(),
         ],
       ),
     );
@@ -1195,66 +1200,114 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     });
   }
 
-  /// [QBSenHook] v7.5.2: 播放控件面板（底部浮层，2 秒自动隐藏）。
+  /// [QBSenHook] v7.5.2: 播放控件面板（底部浮层，3 秒自动隐藏）。
+  /// [QBSenHook] v8.0: 改为"极细进度条 + 当前/总时长 + 播放暂停 + 尺寸"一行，无背景。
   Widget _buildControlPanel() {
-    // [QBSenHook] v7.5.4: 播放控件面板贴底一条、窄化、半透明圆角（仅顶部圆角）
     return Positioned(
-      left: 14,
-      right: 14,
+      left: 0,
+      right: 0,
       bottom: 0,
       child: SafeArea(
         top: false,
         child: Container(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.4),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: 0.15),
-              width: 0.6,
-            ),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // [QBSenHook] v7.5.4: 尺寸调整行（抖音页不进入全屏，仅页内调整画面尺寸）
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+          // [QBSenHook] v8.0: 无背景卡片，仅文字/按钮悬浮在画面上
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: Consumer<VideoPlayerState>(
+            builder: (context, videoState, child) {
+              final bool hasVideo = videoState.hasVideo;
+              final bool isPlaying = videoState.status == PlayerStatus.playing;
+              final double pos =
+                  hasVideo && videoState.duration.inMilliseconds > 0
+                      ? (videoState.position.inMilliseconds /
+                              videoState.duration.inMilliseconds)
+                          .clamp(0.0, 1.0)
+                      : 0.0;
+              final String cur = _fmtDuration(videoState.position);
+              final String total = _fmtDuration(videoState.duration);
+              return Row(
                 children: [
-                  _panelButton(
-                    '尺寸:${_fitMode.label}',
-                    false,
-                    () => _panelAction(_cycleFitMode),
+                  // 播放/暂停
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 34, minHeight: 34),
+                    icon: Icon(
+                      hasVideo
+                          ? (isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded)
+                          : Icons.play_arrow_rounded,
+                      color: Colors.white,
+                      size: 26,
+                      shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
+                    ),
+                    onPressed: () => _panelAction(_togglePlayPause),
+                  ),
+                  // 当前时间
+                  Text(
+                    cur,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      shadows: [Shadow(color: Colors.black87, blurRadius: 3)],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // 极细进度条（Expanded）
+                  Expanded(
+                    child: Container(
+                      height: 2.5,
+                      color: Colors.black.withValues(alpha: 0.35),
+                      alignment: Alignment.centerLeft,
+                      child: FractionallySizedBox(
+                        widthFactor: pos,
+                        child: Container(
+                          color: Colors.white.withValues(alpha: 0.9),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // 总时长
+                  Text(
+                    total,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      shadows: [Shadow(color: Colors.black87, blurRadius: 3)],
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  // 画面尺寸
+                  IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 34, minHeight: 34),
+                    icon: Icon(
+                      Icons.aspect_ratio_rounded,
+                      color: Colors.white,
+                      size: 24,
+                      shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
+                    ),
+                    onPressed: () => _panelAction(_cycleFitMode),
                   ),
                 ],
-              ),
-              const SizedBox(height: 4),
-              // 播放控制行
-              Consumer<VideoPlayerState>(
-                builder: (context, videoState, child) {
-                  final bool isPlaying =
-                      videoState.status == PlayerStatus.playing;
-                  return Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // [QBSenHook] v7.5.4: 去掉快进/快退按钮，左右滑手势已可快进快退
-                      IconButton(
-                        icon: Icon(
-                          isPlaying ? Icons.pause : Icons.play_arrow,
-                          color: Colors.white,
-                          size: 36,
-                        ),
-                        onPressed: () => _panelAction(_togglePlayPause),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ],
+              );
+            },
           ),
         ),
       ),
     );
+  }
+
+  // [QBSenHook] v8.0: 时长格式化 mm:ss / h:mm:ss
+  String _fmtDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    final sec = d.inSeconds % 60;
+    final ss = sec.toString().padLeft(2, '0');
+    if (h > 0) {
+      return '$h:${m.toString().padLeft(2, '0')}:$ss';
+    }
+    return '$m:$ss';
   }
 
   Widget _panelButton(
@@ -1292,9 +1345,15 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!_seekDragging || !videoState.hasVideo) return;
-    // [QBSenHook] v7.8: 线性化——每 px 对应 0.8 秒，基于总拖动距离计算目标位置，跟手实时 seek
+    // [QBSenHook] v8.0: 按视频时长比例分配快进快退灵敏度——
+    // 单步基准 = 时长×2%，保底 3 秒、封顶 30 秒；拖满 80px 完成一个基准步长。
     _seekDragAccum += details.delta.dx;
-    const double secondsPerPx = 0.8;
+    final durationSec = videoState.duration.inSeconds > 0
+        ? videoState.duration.inSeconds
+        : 1;
+    final baseStep = (durationSec * 0.02).clamp(3.0, 30.0);
+    const double pxPerStep = 80.0;
+    final secondsPerPx = baseStep / pxPerStep;
     final totalSeconds = (_seekDragAccum * secondsPerPx).round();
     final target = _seekDragStartPos + Duration(seconds: totalSeconds);
     final clamped = target < Duration.zero

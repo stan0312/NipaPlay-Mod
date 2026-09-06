@@ -7,6 +7,7 @@ import 'package:nipaplay/constants/settings_keys.dart';
 import 'package:nipaplay/l10n/l10n.dart';
 import 'package:nipaplay/services/danmaku_cache_manager.dart';
 import 'package:nipaplay/services/file_picker_service.dart';
+import 'package:nipaplay/services/image_disk_cache.dart';
 import 'package:nipaplay/settings/adaptive_settings_scope.dart';
 import 'package:nipaplay/settings/adaptive_settings_widgets.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_adaptive_platform_ui.dart';
@@ -28,6 +29,8 @@ class _StorageSettingsContentState extends State<StorageSettingsContent> {
   bool _isLoading = true;
   bool _isClearing = false;
   bool _isClearingImageCache = false;
+  // [QBSenHook] v8.0: 图片磁盘缓存占用（上限 2GB）
+  int _diskCacheBytes = 0;
 
   @override
   void initState() {
@@ -147,10 +150,13 @@ class _StorageSettingsContentState extends State<StorageSettingsContent> {
                 },
               ),
             AdaptiveSettingsTile<void>.card(
+              // [QBSenHook] v8.0: 显示磁盘图片缓存占用 + 一键清理（上限 2GB）
               title: l10n.clearImageCache,
               subtitle: _isClearingImageCache
                   ? l10n.clearingInProgress
-                  : l10n.clearImageCacheHint,
+                  : (_diskCacheBytes > 0
+                      ? '当前图片缓存占用：${_formatCacheBytes(_diskCacheBytes)}（上限 2GB）'
+                      : l10n.clearImageCacheHint),
               icon: Ionicons.trash_outline,
               phoneIcon: cupertino.CupertinoIcons.trash,
               enabled: !_isClearingImageCache,
@@ -168,11 +174,30 @@ class _StorageSettingsContentState extends State<StorageSettingsContent> {
       SettingsKeys.clearDanmakuCacheOnLaunch,
       defaultValue: false,
     );
+    // [QBSenHook] v8.0: 查询图片磁盘缓存占用
+    var diskBytes = 0;
+    try {
+      diskBytes = await ImageDiskCache.sizeBytes();
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _clearOnLaunch = value;
+      _diskCacheBytes = diskBytes;
       _isLoading = false;
     });
+  }
+
+  // [QBSenHook] v8.0: 字节 -> 可读大小
+  String _formatCacheBytes(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    const units = ['KB', 'MB', 'GB'];
+    var v = bytes.toDouble();
+    var u = -1;
+    while (v >= 1024 && u < units.length - 1) {
+      v /= 1024;
+      u++;
+    }
+    return u < 0 ? '$bytes B' : '${v.toStringAsFixed(1)} ${units[u]}';
   }
 
   Future<void> _updateClearOnLaunch(bool value) async {
@@ -261,6 +286,15 @@ class _StorageSettingsContentState extends State<StorageSettingsContent> {
     });
     try {
       await ImageCacheManager.instance.clearCache();
+      // [QBSenHook] v8.0: 一并清理图片磁盘缓存（2GB 上限目录）
+      await ImageDiskCache.clear();
+      var diskBytes = 0;
+      try {
+        diskBytes = await ImageDiskCache.sizeBytes();
+      } catch (_) {}
+      if (mounted) {
+        setState(() => _diskCacheBytes = diskBytes);
+      }
       if (!mounted) return;
       AdaptiveSnackBar.show(
         context,

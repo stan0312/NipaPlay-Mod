@@ -8,6 +8,7 @@ import 'package:nipaplay/models/server_profile_model.dart';
 import 'package:path_provider/path_provider.dart'
     if (dart.library.html) 'package:nipaplay/utils/mock_path_provider.dart';
 import 'package:nipaplay/services/web_remote_access_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io' if (dart.library.io) 'dart:io';
 import 'debug_log_service.dart';
 import 'package:nipaplay/models/jellyfin_transcode_settings.dart';
@@ -499,13 +500,73 @@ class EmbyService extends MediaServerServiceBase
             ));
           }
         }
-        _availableLibraries = tempLibraries;
+        if (tempLibraries.isNotEmpty) {
+          _availableLibraries = tempLibraries;
+          // [QBSenHook] v8.0: 缓存媒体库列表（成功时写入，下次启动失败/未连接时回填）
+          try {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString(
+                'qbsen_emby_libraries_cache', json.encode(_encodeLibraries(tempLibraries)));
+          } catch (e) {
+            DebugLogService().addLog('EmbyService: 缓存媒体库列表失败: $e');
+          }
+        } else {
+          DebugLogService().addLog('EmbyService: 所有媒体库获取路径均失败或返回空项');
+          // [QBSenHook] v8.0: 网络失败时回填上次缓存的媒体库列表（缓存兜底）
+          await _restoreLibrariesFromCache();
+        }
       } else {
         DebugLogService().addLog('EmbyService: 所有媒体库获取路径均失败或返回空项');
+        // [QBSenHook] v8.0: 网络失败时回填上次缓存的媒体库列表（缓存兜底）
+        await _restoreLibrariesFromCache();
       }
     } catch (e, stackTrace) {
       print('Error loading available libraries: $e');
       print('Stack trace: $stackTrace');
+    }
+  }
+
+  // [QBSenHook] v8.0: 媒体库列表编码为可缓存 JSON
+  List<Map<String, dynamic>> _encodeLibraries(List<EmbyLibrary> libs) {
+    return libs
+        .map((l) => {
+              'id': l.id,
+              'name': l.name,
+              'type': l.type,
+              'imageTagsPrimary': l.imageTagsPrimary,
+              'totalItems': l.totalItems,
+            })
+        .toList();
+  }
+
+  // [QBSenHook] v8.0: 从缓存恢复媒体库列表（离线/未连接时也能显示上次内容）
+  Future<void> _restoreLibrariesFromCache() async {
+    if (_availableLibraries.isNotEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('qbsen_emby_libraries_cache');
+      if (raw == null || raw.isEmpty) return;
+      final decoded = json.decode(raw);
+      if (decoded is! List) return;
+      final libs = <EmbyLibrary>[];
+      for (final e in decoded) {
+        if (e is! Map) continue;
+        libs.add(EmbyLibrary(
+          id: e['id']?.toString() ?? '',
+          name: e['name']?.toString() ?? '',
+          type: e['type']?.toString() ?? 'mixed',
+          imageTagsPrimary: e['imageTagsPrimary']?.toString(),
+          totalItems: e['totalItems'] is num
+              ? (e['totalItems'] as num).toInt()
+              : null,
+        ));
+      }
+      if (libs.isNotEmpty) {
+        _availableLibraries = libs;
+        DebugLogService().addLog('EmbyService: 已从缓存恢复 ${libs.length} 个媒体库');
+      }
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 恢复媒体库缓存失败: $e');
     }
   }
 
@@ -797,7 +858,7 @@ class EmbyService extends MediaServerServiceBase
       String path;
       if (playlistId != null) {
         path =
-            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
+            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
       } else {
         final filter = favoritesOnly ? '&Filters=IsFavorite' : '';
         final parent = libraryId != null && libraryId.isNotEmpty
@@ -806,26 +867,40 @@ class EmbyService extends MediaServerServiceBase
         // 直接查可播放项（不含 Series；Recursive=true 会把剧集展开成 Episode）
         const includeTypes = 'Movie,Episode,Video';
         path =
-            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Limit=$limit&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
+            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
       }
-      final response = await _makeAuthenticatedRequest(path);
-      if (response.statusCode != 200) {
-        DebugLogService().addLog(
-            'EmbyService: 获取刷片条目失败 HTTP ');
-        return [];
+      // [QBSenHook] v8.0: 全量加载——分页循环拉取直到 TotalRecordCount（limit<=0 表示全量）
+      final pageSize = limit > 0 ? limit : 500;
+      final all = <EmbyMediaItem>[];
+      var startIndex = 0;
+      while (true) {
+        final pagePath = '$path&StartIndex=$startIndex&Limit=$pageSize';
+        final response = await _makeAuthenticatedRequest(pagePath);
+        if (response.statusCode != 200) {
+          DebugLogService().addLog('EmbyService: 获取刷片条目失败 HTTP ');
+          break;
+        }
+        final data = json.decode(response.body);
+        final items = data['Items'];
+        if (items is! List || items.isEmpty) break;
+        all.addAll(items
+            .map((e) => EmbyMediaItem.fromJson(e))
+            .where((e) => !e.isFolder));
+        final total = data['TotalRecordCount'];
+        startIndex += items.length;
+        if (limit > 0) break;
+        if (total is num && startIndex >= total) break;
+        if (startIndex >= 5000) break; // 安全上限，防止异常服务端死循环
       }
-      final data = json.decode(response.body);
-      final items = data['Items'];
-      if (items is! List) return [];
-      final result = items
-          .map((e) => EmbyMediaItem.fromJson(e))
-          .where((e) => !e.isFolder)
-          .toList();
+      final result = all;
       if (sortBy == 'random') {
         result.shuffle();
       } else if (sortBy == 'size') {
-        result.sort(
-            (a, b) => (b.size ?? 0).compareTo(a.size ?? 0));
+        result.sort((a, b) {
+          final av = (a.size ?? 0);
+          final bv = (b.size ?? 0);
+          return sortAscending ? av.compareTo(bv) : bv.compareTo(av);
+        });
       }
       return result;
     } catch (e) {
@@ -857,15 +932,24 @@ class EmbyService extends MediaServerServiceBase
         default:
           sortQuery = '&SortBy=DateCreated&SortOrder=$order';
       }
-      final response = await _makeAuthenticatedRequest(
-          '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size&Limit=300');
-      if (response.statusCode != 200) {
-        return [];
+      // [QBSenHook] v8.0: 分页全量拉取（每页 300，直到 TotalRecordCount）
+      final result = <EmbyMediaItem>[];
+      var startIndex = 0;
+      while (true) {
+        final response = await _makeAuthenticatedRequest(
+            '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size&StartIndex=$startIndex&Limit=300');
+        if (response.statusCode != 200) {
+          return [];
+        }
+        final data = json.decode(response.body);
+        final items = data['Items'];
+        if (items is! List || items.isEmpty) break;
+        result.addAll(items.map((e) => EmbyMediaItem.fromJson(e)));
+        final total = data['TotalRecordCount'];
+        startIndex += items.length;
+        if (total is num && startIndex >= total) break;
+        if (startIndex >= 5000) break;
       }
-      final data = json.decode(response.body);
-      final items = data['Items'];
-      if (items is! List) return [];
-      final result = items.map((e) => EmbyMediaItem.fromJson(e)).toList();
       if (sortBy == 'random') {
         result.shuffle();
       } else if (sortBy == 'size') {
@@ -880,6 +964,52 @@ class EmbyService extends MediaServerServiceBase
     } catch (e) {
       DebugLogService().addLog('EmbyService: 获取文件夹子项异常: ');
       return [];
+    }
+  }
+
+  // [QBSenHook] v8.0: 文件夹递归摘要——子项总大小 + 第一个带图后代（缩略图继承）
+  Future<FolderSummary?> getFolderRecursiveSummary(String folderId) async {
+    if (!_isConnected || _userId == null || _accessToken == null) {
+      return null;
+    }
+    try {
+      var totalSize = 0;
+      String? thumbItemId;
+      String? thumbTag;
+      var startIndex = 0;
+      while (true) {
+        final response = await _makeAuthenticatedRequest(
+            '/emby/Users/$_userId/Items?ParentId=$folderId&Recursive=true&IncludeItemTypes=Movie,Episode,Video&Fields=Size,ImageTags&StartIndex=$startIndex&Limit=300');
+        if (response.statusCode != 200) return null;
+        final data = json.decode(response.body);
+        final items = data['Items'];
+        if (items is! List || items.isEmpty) break;
+        for (final e in items) {
+          if (e is! Map) continue;
+          final sz = e['Size'];
+          if (sz is num) totalSize += sz.toInt();
+          if (thumbItemId == null) {
+            final tags = e['ImageTags'];
+            final tag = tags is Map ? tags['Primary'] : null;
+            if (tag is String && tag.isNotEmpty) {
+              thumbItemId = e['Id']?.toString();
+              thumbTag = tag;
+            }
+          }
+        }
+        final total = data['TotalRecordCount'];
+        startIndex += items.length;
+        if (total is num && startIndex >= total) break;
+        if (startIndex >= 5000) break;
+      }
+      return FolderSummary(
+        totalSizeBytes: totalSize,
+        thumbnailItemId: thumbItemId,
+        thumbnailTag: thumbTag,
+      );
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 文件夹递归摘要异常: $e');
+      return null;
     }
   }
 
@@ -1373,6 +1503,39 @@ class EmbyService extends MediaServerServiceBase
       forcedPlaySessionId: resolvedPlaySessionId,
       requestedMediaSourceId: mediaSourceId,
     );
+  }
+
+  // [QBSenHook] v8.0: 上报播放进度/停止（Emby Sessions/Playing API），退出播放时调用
+  Future<void> reportPlaybackProgress({
+    required String itemId,
+    int positionMs = 0,
+    String? playSessionId,
+    String? mediaSourceId,
+    bool isPaused = false,
+    bool isStopped = false,
+  }) async {
+    if (!_isConnected || _accessToken == null || _userId == null) return;
+    try {
+      final body = <String, dynamic>{
+        'ItemId': itemId,
+        'PositionTicks': (positionMs * 10000).round(),
+        'IsPaused': isPaused,
+        'IsMuted': false,
+        'UserId': _userId,
+      };
+      if (playSessionId != null && playSessionId.isNotEmpty) {
+        body['PlaySessionId'] = playSessionId;
+      }
+      if (mediaSourceId != null && mediaSourceId.isNotEmpty) {
+        body['MediaSourceId'] = mediaSourceId;
+      }
+      final path = isStopped
+          ? '/emby/Sessions/Playing/Stopped'
+          : '/emby/Sessions/Playing/Progress';
+      await _makeAuthenticatedRequest(path, method: 'POST', body: body);
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 上报播放进度失败: $e');
+    }
   }
 
   @override
@@ -1877,7 +2040,7 @@ class EmbyService extends MediaServerServiceBase
         'Recursive': 'true',
         'Limit': limit.toString(),
         'Fields':
-            'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear',
+            'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear,UserData,Size',
       };
 
       // 如果指定了父级媒体库，则只在该媒体库中搜索

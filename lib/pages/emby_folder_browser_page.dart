@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:nipaplay/models/emby_model.dart';
@@ -41,7 +43,8 @@ class _FolderEntry {
   const _FolderEntry(this.id, this.name);
 }
 
-class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
+class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
+    with WidgetsBindingObserver {
   // 面包屑路径（不含根）；entries.last 为当前目录
   final List<_FolderEntry> _path = [];
   String? _currentId;
@@ -60,9 +63,19 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   bool _sortAscending = false; // [QBSenHook] v7.8: 排序方向（false=降序[默认新到旧]）
   String _query = '';
   final TextEditingController _searchController = TextEditingController();
+  // [QBSenHook] v8.0: 首页全局搜索（防抖 300ms，点结果直接全屏播放）
+  List<EmbyMediaItem> _searchResults = [];
+  bool _searchLoading = false;
+  Timer? _searchTimer;
+  // [QBSenHook] v8.0: 文件夹递归摘要缓存（大小 + 缩略图继承）
+  final Map<String, FolderSummary> _folderMeta = {};
+  final Set<String> _folderMetaLoading = {};
 
   // [QBSenHook] v7.9: 左缘右滑返回手势起点
   double? _edgeStartX;
+  // [QBSenHook] v8.0: 等待 Emby 连接就绪后自动刷新（修复"打开初始页无内容"）
+  Timer? _connectRetryTimer;
+  int _connectRetryAttempts = 0;
 
   @override
   void initState() {
@@ -71,12 +84,54 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     _currentName = widget.rootName;
     // [QBSenHook] v7.5.5: 指定分类进入时默认视频陈列
     _videoGridMode = widget.rootId != null;
+    // [QBSenHook] v8.0: 监听 App 生命周期（回前台时若首页仍空则自动刷新）
+    WidgetsBinding.instance.addObserver(this);
     // [QBSenHook] v7.9: 初始页进入自动刷新媒体库列表
     _load();
+    // [QBSenHook] v8.0: Emby 可能尚未连接（App 启动时序），就绪后自动补刷新
+    _scheduleConnectRetry();
+  }
+
+  // [QBSenHook] v8.0: 等待 Emby 连接就绪后自动刷新首页
+  void _scheduleConnectRetry() {
+    _connectRetryTimer?.cancel();
+    _connectRetryAttempts = 0;
+    _connectRetryTimer = Timer.periodic(const Duration(milliseconds: 800), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      _connectRetryAttempts++;
+      if (EmbyService.instance.isConnected) {
+        t.cancel();
+        if (_currentId == null && _rootLibraries.isEmpty && !_loading) {
+          _load();
+        }
+      } else if (_connectRetryAttempts >= 8) {
+        // 8 次仍未连接：按原逻辑走（错误/空态可手动刷新）
+        t.cancel();
+        if (_currentId == null && _rootLibraries.isEmpty && !_loading) {
+          _load();
+        }
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _currentId == null &&
+        _rootLibraries.isEmpty &&
+        !_loading) {
+      _load();
+    }
   }
 
   @override
   void dispose() {
+    _connectRetryTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _searchTimer?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -98,7 +153,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
           libraryId: _currentId,
           sortBy: _sort.name,
           sortAscending: _sortAscending,
-          limit: 500,
+          limit: 0, // [QBSenHook] v8.0: 全量加载（分页拼接）
         );
         if (!mounted) return;
         setState(() => _videos = items);
@@ -217,6 +272,64 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     _load();
   }
 
+  // [QBSenHook] v8.0: 首页搜索防抖 300ms，触发全局搜索
+  void _onSearchChanged(String v) {
+    setState(() => _query = v.trim());
+    _searchTimer?.cancel();
+    if (_query.isEmpty) {
+      if (_currentId == null) {
+        setState(() {
+          _searchResults = [];
+          _searchLoading = false;
+        });
+      }
+      return;
+    }
+    _searchTimer = Timer(const Duration(milliseconds: 300), () {
+      if (_currentId == null) {
+        _runGlobalSearch();
+      }
+    });
+  }
+
+  // [QBSenHook] v8.0: 首页全局搜索全部媒体库（Emby 服务端 Recursive 搜索）
+  Future<void> _runGlobalSearch() async {
+    final term = _query.trim();
+    if (term.isEmpty) return;
+    setState(() => _searchLoading = true);
+    try {
+      final results = await EmbyService.instance.searchMediaItems(
+        term,
+        includeItemTypes: const ['Movie', 'Episode', 'Video'],
+      );
+      if (!mounted || _query.trim() != term) return;
+      setState(() {
+        _searchResults = results.where((e) => !e.isFolder).toList();
+        _searchLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _searchResults = [];
+        _searchLoading = false;
+      });
+    }
+  }
+
+  // [QBSenHook] v8.0: 文件夹递归摘要（总大小 + 缩略图继承），每卡一次、缓存结果
+  void _ensureFolderMeta(EmbyMediaItem folder) {
+    final id = folder.id;
+    if (_folderMeta.containsKey(id) || _folderMetaLoading.contains(id)) return;
+    _folderMetaLoading.add(id);
+    EmbyService.instance.getFolderRecursiveSummary(id).then((summary) {
+      _folderMetaLoading.remove(id);
+      if (!mounted || summary == null) return;
+      setState(() => _folderMeta[id] = summary);
+    }).catchError((Object e) {
+      _folderMetaLoading.remove(id);
+    });
+  }
+
   /// [QBSenHook] v7.5.5: 循环切换排序（时间添加→文件名→随机→大小）。
   void _cycleSort() {
     setState(() {
@@ -239,7 +352,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
         libraryId: _currentId,
         sortBy: _sort.name,
         sortAscending: _sortAscending,
-        limit: 500,
+        limit: 0, // [QBSenHook] v8.0: 全量加载（分页拼接）
       );
       if (!mounted) return;
       setState(() {
@@ -273,7 +386,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   }
 
   Future<void> _openVideoPlayer(EmbyMediaItem video) async {
-    if (_currentId == null) return;
+    // [QBSenHook] v8.0: 搜索结果点击同样直接全屏播放（不要求位于某个分类内）
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     // [QBSenHook] v7.5.4: 内嵌播放必须绑定本页 context
     videoState.setContext(context);
@@ -409,7 +522,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
                       hintStyle:
                           TextStyle(color: searchHintColor, fontSize: 14),
                     ),
-                    onChanged: (v) => setState(() => _query = v.trim()),
+                    onChanged: _onSearchChanged,
                   ),
                 ),
                 if (_query.isNotEmpty)
@@ -427,9 +540,22 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
           actions: [
             if (_currentId != null) ...[
               // [QBSenHook] v7.9: 排序胶囊按钮（类型图标+名称+升降序箭头，更美观）
-              InkWell(
+              // [QBSenHook] v8.0: 多功能——单击循环切排序方式；右滑=新到旧、左滑=旧到新
+              GestureDetector(
                 onTap: _cycleSort,
-                borderRadius: BorderRadius.circular(16),
+                onHorizontalDragEnd: (d) {
+                  final v = d.primaryVelocity;
+                  if (v == null) return;
+                  if (v > 200) {
+                    if (!_sortAscending) return;
+                    _sortAscending = false;
+                    _load();
+                  } else if (v < -200) {
+                    if (_sortAscending) return;
+                    _sortAscending = true;
+                    _load();
+                  }
+                },
                 child: Container(
                   height: 32,
                   margin: const EdgeInsets.only(right: 4),
@@ -456,15 +582,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
                             fontSize: 12, color: iconColor),
                       ),
                       const SizedBox(width: 2),
-                      GestureDetector(
-                        onTap: _toggleSortOrder,
-                        child: Icon(
-                          _sortAscending
-                              ? Icons.arrow_upward_rounded
-                              : Icons.arrow_downward_rounded,
-                          size: 14,
-                          color: iconSubColor,
-                        ),
+                      Icon(
+                        _sortAscending
+                            ? Icons.arrow_upward_rounded
+                            : Icons.arrow_downward_rounded,
+                        size: 14,
+                        color: iconSubColor,
                       ),
                     ],
                   ),
@@ -588,6 +711,39 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     }
 
     if (_currentId == null) {
+      // [QBSenHook] v8.0: 首页搜索词非空 -> 全局搜索结果（点击直接全屏播放）
+      if (_query.isNotEmpty) {
+        if (_searchLoading) {
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white54),
+          );
+        }
+        if (_searchResults.isEmpty) {
+          return Center(
+            child: Text(
+              '没有找到相关内容',
+              style: TextStyle(color: emptyColor),
+            ),
+          );
+        }
+        return RefreshIndicator(
+          onRefresh: _runGlobalSearch,
+          color: isDark ? Colors.white : Colors.black54,
+          child: GridView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.all(10),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              crossAxisSpacing: 6,
+              mainAxisSpacing: 6,
+              childAspectRatio: 0.62,
+            ),
+            itemCount: _searchResults.length,
+            itemBuilder: (context, index) =>
+                _buildVideoCard(_searchResults[index]),
+          ),
+        );
+      }
       // 媒体库网格
       return RefreshIndicator(
         onRefresh: _refresh,
@@ -749,10 +905,23 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
 
   Widget _buildFolderCard(EmbyMediaItem folder) {
     final service = EmbyService.instance;
-    final imageUri = folder.imagePrimaryTag != null
-        ? Uri.tryParse(
-            service.getImageUrl(folder.id, tag: folder.imagePrimaryTag))
+    // [QBSenHook] v8.0: 无图文件夹递归继承第一个带图后代的缩略图
+    final summary = _folderMeta[folder.id];
+    String? imageItemId;
+    String? imageTag;
+    if (folder.imagePrimaryTag != null) {
+      imageItemId = folder.id;
+      imageTag = folder.imagePrimaryTag;
+    } else if (summary != null && summary.thumbnailItemId != null) {
+      imageItemId = summary.thumbnailItemId;
+      imageTag = summary.thumbnailTag;
+    }
+    final imageUri = imageItemId != null && imageTag != null
+        ? Uri.tryParse(service.getImageUrl(imageItemId, tag: imageTag))
         : null;
+    // [QBSenHook] v8.0: 异步计算文件夹大小（递归子项 Size 求和）
+    _ensureFolderMeta(folder);
+    final sizeLabel = _formatBytes(summary?.totalSizeBytes);
     return _Card(
       onTap: () => _openFolder(folder),
       child: Stack(
@@ -779,6 +948,24 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
               ),
             ),
           ),
+          // [QBSenHook] v8.0: 右上角文件夹大小标注
+          if (sizeLabel != null)
+            Positioned(
+              right: 6,
+              top: 6,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  sizeLabel,
+                  style: const TextStyle(color: Colors.white, fontSize: 10),
+                ),
+              ),
+            ),
           Positioned(
             left: 10,
             right: 10,
@@ -806,6 +993,20 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
         ],
       ),
     );
+  }
+
+  // [QBSenHook] v8.0: 字节数 -> 可读大小（B/KB/MB/GB/TB）
+  String? _formatBytes(int? bytes) {
+    if (bytes == null || bytes <= 0) return null;
+    if (bytes < 1024) return '$bytes B';
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    var v = bytes.toDouble();
+    var u = -1;
+    while (v >= 1024 && u < units.length - 1) {
+      v /= 1024;
+      u++;
+    }
+    return u < 0 ? '$bytes B' : '${v.toStringAsFixed(1)} ${units[u]}';
   }
 
   Widget _buildVideoCard(EmbyMediaItem video) {
@@ -855,6 +1056,25 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
               ),
             ),
           ),
+          // [QBSenHook] v8.0: 卡片底部 2px 已播放进度线（Emby UserData.PlayedPercentage）
+          if ((video.userData?.playedPercentage ?? 0) > 0)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                height: 2,
+                color: Colors.black.withValues(alpha: 0.4),
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: ((video.userData!.playedPercentage ?? 0) / 100)
+                      .clamp(0.0, 1.0),
+                  child: Container(
+                    color: Colors.white.withValues(alpha: 0.92),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

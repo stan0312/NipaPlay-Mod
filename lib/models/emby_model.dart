@@ -436,17 +436,32 @@ class EmbyMovieInfo {
   }
 }
 
+// [QBSenHook] v8.0: 文件夹递归摘要（总大小 + 缩略图继承）
+class FolderSummary {
+  final int totalSizeBytes;
+  final String? thumbnailItemId;
+  final String? thumbnailTag;
+
+  const FolderSummary({
+    this.totalSizeBytes = 0,
+    this.thumbnailItemId,
+    this.thumbnailTag,
+  });
+}
+
 class EmbyUserData {
   final bool? played;
   final double? playbackPositionTicks;
   final bool? isFavorite;
   final int? playCount;
+  final double? playedPercentage;
 
   EmbyUserData({
     this.played,
     this.playbackPositionTicks,
     this.isFavorite,
     this.playCount,
+    this.playedPercentage,
   });
 
   factory EmbyUserData.fromJson(Map<String, dynamic> json) {
@@ -455,6 +470,7 @@ class EmbyUserData {
       playbackPositionTicks: (json['PlaybackPositionTicks'] as num?)?.toDouble(),
       isFavorite: json['IsFavorite'],
       playCount: json['PlayCount'],
+      playedPercentage: (json['PlayedPercentage'] as num?)?.toDouble(),
     );
   }
 }

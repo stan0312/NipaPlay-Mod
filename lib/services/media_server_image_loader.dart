@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:nipaplay/services/image_disk_cache.dart';
 import 'package:nipaplay/services/media_server_transport.dart';
 import 'package:nipaplay/services/web_remote_access_service.dart';
 
@@ -70,6 +72,15 @@ Future<Uint8List> loadNetworkImageBytes(Uri originalUri) async {
 }
 
 Future<Uint8List> loadMediaServerImage(Uri uri) async {
+  // [QBSenHook] v8.0: 磁盘缓存优先（上限 2GB），命中直接返回，避免重复拉图
+  final url = uri.toString();
+  try {
+    final cached = await ImageDiskCache.getFile(url);
+    if (cached != null) {
+      final bytes = await cached.readAsBytes();
+      if (bytes.isNotEmpty) return bytes;
+    }
+  } catch (_) {}
   final transport = await MediaServerTransport.fromStoredSettings();
   try {
     final response = await transport.send(
@@ -82,6 +93,8 @@ Future<Uint8List> loadMediaServerImage(Uri uri) async {
         uri,
       );
     }
+    // 后台写缓存，不阻塞返回
+    unawaited(ImageDiskCache.put(url, response.bodyBytes));
     return response.bodyBytes;
   } finally {
     transport.close();

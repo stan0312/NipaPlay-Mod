@@ -170,8 +170,9 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
         .withValues(alpha: 0.12);
     return material.LayoutBuilder(
       builder: (context, constraints) {
+        // [QBSenHook] v8.0: 左侧菜单收窄（手机下不再占半屏，右侧面板完整显示）
         final navigationWidth =
-            (constraints.maxWidth * 0.25).clamp(230.0, 320.0);
+            (constraints.maxWidth * 0.3).clamp(110.0, 300.0);
         return material.Row(
           children: [
             material.SizedBox(
