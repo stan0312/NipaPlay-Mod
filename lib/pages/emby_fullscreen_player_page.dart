@@ -186,17 +186,15 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!_seekDragging || !videoState.hasVideo) return;
+    // [QBSenHook] v7.8: 线性化——每 px 对应 0.8 秒，基于总拖动距离，跟手实时 seek
     _seekDragAccum += details.delta.dx;
-    const double pxPerStep = 24.0;
-    const int secondsPerStep = 5;
-    if (_seekDragAccum.abs() >= pxPerStep) {
-      final steps = (_seekDragAccum / pxPerStep).round();
-      final target =
-          _seekDragStartPos + Duration(seconds: steps * secondsPerStep);
-      videoState.seekTo(target);
-      _seekDragStartPos = videoState.position;
-      _seekDragAccum = 0.0;
-    }
+    const double secondsPerPx = 0.8;
+    final totalSeconds = (_seekDragAccum * secondsPerPx).round();
+    final target = _seekDragStartPos + Duration(seconds: totalSeconds);
+    final clamped = target < Duration.zero
+        ? Duration.zero
+        : (target > videoState.duration ? videoState.duration : target);
+    videoState.seekTo(clamped);
   }
 
   void _onHorizontalDragEnd(DragEndDetails details) {
@@ -351,7 +349,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                 Positioned(
                   left: 0,
                   right: 0,
-                  bottom: 0,
+                  bottom: 12, // [QBSenHook] v7.8: 进度条稍微上移
                   child: IgnorePointer(
                     child: Consumer<VideoPlayerState>(
                       builder: (context, vs, child) {

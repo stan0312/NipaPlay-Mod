@@ -774,6 +774,7 @@ class EmbyService extends MediaServerServiceBase
     bool favoritesOnly = false,
     String? playlistId,
     String? sortBy, // dateCreated(默认) / name / random / size
+    bool sortAscending = false, // [QBSenHook] v7.8: 升序/降序
     int limit = 60,
   }) async {
     if (!_isConnected || _userId == null || _accessToken == null) {
@@ -782,12 +783,16 @@ class EmbyService extends MediaServerServiceBase
     try {
       // 排序：random/size 在客户端处理，服务端统一用 DateCreated 拉取
       String sortQuery;
+      final order = sortAscending ? 'Ascending' : 'Descending';
       switch (sortBy) {
         case 'name':
-          sortQuery = '&SortBy=SortName&SortOrder=Ascending';
+          sortQuery = '&SortBy=SortName&SortOrder=$order';
+          break;
+        case 'size':
+          sortQuery = '&SortBy=Size&SortOrder=$order';
           break;
         default:
-          sortQuery = '&SortBy=DateCreated&SortOrder=Descending';
+          sortQuery = '&SortBy=DateCreated&SortOrder=$order';
       }
       String path;
       if (playlistId != null) {

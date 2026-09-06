@@ -31,6 +31,8 @@ class EmbySwipePage extends StatefulWidget {
     this.initialParentId,
     this.parentName,
     this.initialItemId,
+    this.initialSort, // [QBSenHook] v7.8: 外部传入排序
+    this.initialSortAscending = false, // [QBSenHook] v7.8: 外部传入排序方向
   });
 
   final String title;
@@ -45,6 +47,10 @@ class EmbySwipePage extends StatefulWidget {
 
   /// [QBSenHook] v7.5.3: 初始定位条目：进入后直接跳到该条目并从它开始播放
   final String? initialItemId;
+
+  /// [QBSenHook] v7.8: 外部传入的排序方式（null 时从偏好恢复）
+  final SwipeSort? initialSort;
+  final bool initialSortAscending;
 
   @override
   State<EmbySwipePage> createState() => _EmbySwipePageState();
@@ -81,6 +87,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   // 排序
   SwipeSort _sort = SwipeSort.dateCreated;
+  bool _sortAscending = false; // [QBSenHook] v7.8: 排序方向
 
   List<EmbyLibrary> _libraries = [];
   List<EmbyLibrary> _playlists = [];
@@ -132,6 +139,11 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     _playlistName = widget.playlistName;
     _parentId = widget.initialParentId;
     _parentName = widget.parentName;
+    // [QBSenHook] v7.8: 外部传入排序优先；未传入时从偏好恢复
+    if (widget.initialSort != null) {
+      _sort = widget.initialSort!;
+      _sortAscending = widget.initialSortAscending;
+    }
     _restorePreferences();
     _load();
   }
@@ -269,6 +281,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         favoritesOnly: _favoritesOnly,
         playlistId: _playlistId,
         sortBy: _sort.name,
+        sortAscending: _sortAscending,
         limit: 500,
       );
       if (!mounted) return;
@@ -839,6 +852,11 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   }
 
   Widget _buildTopBar() {
+    // [QBSenHook] v7.8: 去掉顶部半透明条，排序在外部调好
+    return const SizedBox.shrink();
+  }
+
+  Widget _buildTopBarOld() {
     // [QBSenHook] v7.5.4: 顶部信息栏半透明圆角、左右留边、窄化，避开灵动岛
     return Positioned(
       top: 0,
@@ -1112,7 +1130,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     return Positioned(
       left: 0,
       right: 0,
-      bottom: 0,
+      bottom: 12, // [QBSenHook] v7.8: 进度条稍微上移
       child: IgnorePointer(
         child: Consumer<VideoPlayerState>(
           builder: (context, videoState, child) {
@@ -1271,17 +1289,15 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!_seekDragging || !videoState.hasVideo) return;
+    // [QBSenHook] v7.8: 线性化——每 px 对应 0.8 秒，基于总拖动距离计算目标位置，跟手实时 seek
     _seekDragAccum += details.delta.dx;
-    const double pxPerStep = 24.0;
-    const int secondsPerStep = 5;
-    if (_seekDragAccum.abs() >= pxPerStep) {
-      final steps = (_seekDragAccum / pxPerStep).round();
-      final target =
-          _seekDragStartPos + Duration(seconds: steps * secondsPerStep);
-      videoState.seekTo(target);
-      _seekDragStartPos = videoState.position;
-      _seekDragAccum = 0.0;
-    }
+    const double secondsPerPx = 0.8;
+    final totalSeconds = (_seekDragAccum * secondsPerPx).round();
+    final target = _seekDragStartPos + Duration(seconds: totalSeconds);
+    final clamped = target < Duration.zero
+        ? Duration.zero
+        : (target > videoState.duration ? videoState.duration : target);
+    videoState.seekTo(clamped);
   }
 
   void _onHorizontalDragEnd(DragEndDetails details) {

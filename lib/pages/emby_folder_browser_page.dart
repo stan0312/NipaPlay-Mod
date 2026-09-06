@@ -53,6 +53,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   // [QBSenHook] v7.5.5: 分类页默认视频陈列模式；排序；搜索词
   bool _videoGridMode = true;
   SwipeSort _sort = SwipeSort.dateCreated;
+  bool _sortAscending = false; // [QBSenHook] v7.8: 排序方向（false=降序[默认新到旧]）
   String _query = '';
   final TextEditingController _searchController = TextEditingController();
 
@@ -178,12 +179,19 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     _load();
   }
 
+  /// [QBSenHook] v7.8: 切换排序方向（升序↔降序）
+  void _toggleSortOrder() {
+    setState(() => _sortAscending = !_sortAscending);
+    _load();
+  }
+
   /// [QBSenHook] v7.5.5: 视频陈列模式加载（服务端排序）。
   Future<void> _loadVideoGrid() async {
     try {
       final items = await EmbyService.instance.getSwipeItems(
         libraryId: _currentId,
         sortBy: _sort.name,
+        sortAscending: _sortAscending,
         limit: 500,
       );
       if (!mounted) return;
@@ -203,12 +211,15 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   void _openSwipeInCurrentFolder() {
     if (_currentId == null) return;
     // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
+    // [QBSenHook] v7.8: 传入当前排序设置，抖音模式与外部排序一致
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => EmbySwipePage(
           title: '$_currentName 刷片',
           initialParentId: _currentId,
           parentName: _currentName,
+          initialSort: _sort,
+          initialSortAscending: _sortAscending,
         ),
       ),
     );
@@ -284,11 +295,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = context.watch<ThemeNotifier>().themeMode != ThemeMode.light;
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: isDark ? Colors.black : const Color(0xFFF5F5F5),
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
+        backgroundColor: isDark ? Colors.black : Colors.white,
+        foregroundColor: isDark ? Colors.white : Colors.black87,
         // [QBSenHook] v7.5.5: 返回 + 搜索框同一排靠左；按钮排（排序/文件夹/抖音/刷新）
         titleSpacing: 0,
         leading: IconButton(
@@ -340,13 +352,25 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
             TextButton(
               onPressed: _cycleSort,
               style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
+                foregroundColor: isDark ? Colors.white : Colors.black87,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
               ),
               child: Text(
                 _sort.label,
                 style: const TextStyle(fontSize: 12),
               ),
+            ),
+            // [QBSenHook] v7.8: 升序/降序切换
+            IconButton(
+              icon: Icon(
+                _sortAscending ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                size: 16,
+              ),
+              color: isDark ? Colors.white70 : Colors.black54,
+              tooltip: _sortAscending ? '升序' : '降序',
+              onPressed: _toggleSortOrder,
+              padding: const EdgeInsets.all(4),
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             ),
             // 文件夹模式切换（视频陈列 <-> 文件夹）
             IconButton(
