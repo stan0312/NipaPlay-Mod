@@ -21,11 +21,15 @@ class EmbyFolderBrowserPage extends StatefulWidget {
     super.key,
     this.rootId,
     this.rootName,
+    this.isRootHome = false,
   });
 
   /// 根目录 id；为空则显示所有媒体库
   final String? rootId;
   final String? rootName;
+
+  /// [QBSenHook] v7.9: 作为应用初始首页（Tab 内嵌）时置 true，左滑/返回仅刷新不退出
+  final bool isRootHome;
 
   @override
   State<EmbyFolderBrowserPage> createState() => _EmbyFolderBrowserPageState();
@@ -57,6 +61,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   String _query = '';
   final TextEditingController _searchController = TextEditingController();
 
+  // [QBSenHook] v7.9: 左缘右滑返回手势起点
+  double? _edgeStartX;
+
   @override
   void initState() {
     super.initState();
@@ -64,6 +71,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     _currentName = widget.rootName;
     // [QBSenHook] v7.5.5: 指定分类进入时默认视频陈列
     _videoGridMode = widget.rootId != null;
+    // [QBSenHook] v7.9: 初始页进入自动刷新媒体库列表
     _load();
   }
 
@@ -76,6 +84,36 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   String get _title {
     if (_path.isEmpty) return _currentName ?? '文件夹浏览';
     return _path.last.name;
+  }
+
+  /// [QBSenHook] v7.9: 下拉刷新（静默，不切 loading 全屏）
+  Future<void> _refresh() async {
+    try {
+      if (_currentId == null) {
+        await EmbyService.instance.loadAvailableLibraries();
+        if (!mounted) return;
+        setState(() => _rootLibraries = EmbyService.instance.availableLibraries);
+      } else if (_videoGridMode) {
+        final items = await EmbyService.instance.getSwipeItems(
+          libraryId: _currentId,
+          sortBy: _sort.name,
+          sortAscending: _sortAscending,
+          limit: 500,
+        );
+        if (!mounted) return;
+        setState(() => _videos = items);
+      } else {
+        final items = await EmbyService.instance.getFolderChildren(
+          _currentId!,
+          sortBy: _sort.name,
+          sortAscending: _sortAscending,
+        );
+        if (!mounted) return;
+        setState(() => _items = items);
+      }
+    } catch (e) {
+      debugPrint('下拉刷新失败: $e');
+    }
   }
 
   Future<void> _load() async {
@@ -104,8 +142,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
         // [QBSenHook] v7.5.5: 分类视频陈列（3 个一排）
         await _loadVideoGrid();
       } else {
-        final items =
-            await EmbyService.instance.getFolderChildren(_currentId!);
+        // [QBSenHook] v7.9: 文件夹模式应用排序（时间/文件名/随机/大小 + 升降序）
+        final items = await EmbyService.instance.getFolderChildren(
+          _currentId!,
+          sortBy: _sort.name,
+          sortAscending: _sortAscending,
+        );
         if (!mounted) return;
         setState(() {
           _rootLibraries = [];
@@ -154,6 +196,11 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
           _currentName = null;
         });
         _load();
+        return;
+      }
+      // [QBSenHook] v7.9: 初始首页仅刷新；从其他页面 push 进来的根目录页则 pop 返回
+      if (!widget.isRootHome && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
       }
       return;
     }
@@ -296,150 +343,214 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
   @override
   Widget build(BuildContext context) {
     final isDark = context.watch<ThemeNotifier>().themeMode != ThemeMode.light;
-    return Scaffold(
-      backgroundColor: isDark ? Colors.black : const Color(0xFFF5F5F5),
-      appBar: AppBar(
-        backgroundColor: isDark ? Colors.black : Colors.white,
-        foregroundColor: isDark ? Colors.white : Colors.black87,
-        // [QBSenHook] v7.5.5: 返回 + 搜索框同一排靠左；按钮排（排序/文件夹/抖音/刷新）
-        titleSpacing: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded),
-          onPressed: _goUp,
-        ),
-        title: Container(
-          height: 36,
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.search_rounded,
-                  color: Colors.white60, size: 18),
-              const SizedBox(width: 6),
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: const InputDecoration(
-                    isCollapsed: true,
-                    border: InputBorder.none,
-                    hintText: '搜索',
-                    hintStyle:
-                        TextStyle(color: Colors.white38, fontSize: 14),
+    // [QBSenHook] v7.9: 初始页（第一页）无返回键
+    final isRootHome = widget.isRootHome || (widget.rootId == null && _path.isEmpty);
+    // 次级文字/图标色（随主题反色，白天模式可读）
+    final iconColor = isDark ? Colors.white : Colors.black87;
+    final iconSubColor = isDark ? Colors.white70 : Colors.black54;
+    final searchBg = isDark
+        ? Colors.white.withValues(alpha: 0.12)
+        : Colors.black.withValues(alpha: 0.06);
+    final searchTextColor = isDark ? Colors.white : Colors.black87;
+    final searchHintColor = isDark ? Colors.white38 : Colors.black38;
+    final searchIconColor = isDark ? Colors.white60 : Colors.black45;
+    final emptyColor = isDark ? Colors.white54 : Colors.black45;
+
+    return GestureDetector(
+      // [QBSenHook] v7.9: 除全屏外全部页面支持左缘右滑返回（含文件夹二级/内容二级）
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragStart: (d) => _edgeStartX = d.localPosition.dx,
+      onHorizontalDragEnd: (d) {
+        final startX = _edgeStartX;
+        _edgeStartX = null;
+        if (startX != null &&
+            startX < 60 &&
+            d.primaryVelocity != null &&
+            d.primaryVelocity! > 250) {
+          _goUp();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: isDark ? Colors.black : const Color(0xFFF5F5F5),
+        appBar: AppBar(
+          backgroundColor: isDark ? Colors.black : Colors.white,
+          foregroundColor: iconColor,
+          automaticallyImplyLeading: false,
+          // [QBSenHook] v7.5.5: 返回 + 搜索框同一排靠左；按钮排（排序/文件夹/抖音/刷新）
+          titleSpacing: 0,
+          leading: isRootHome
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                  color: iconColor,
+                  onPressed: _goUp,
+                ),
+          title: Container(
+            height: 36,
+            margin: EdgeInsets.only(
+                left: isRootHome ? 10 : 0, top: 4, bottom: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: searchBg,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.search_rounded, color: searchIconColor, size: 18),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    style: TextStyle(color: searchTextColor, fontSize: 14),
+                    decoration: InputDecoration(
+                      isCollapsed: true,
+                      border: InputBorder.none,
+                      hintText: '搜索',
+                      hintStyle:
+                          TextStyle(color: searchHintColor, fontSize: 14),
+                    ),
+                    onChanged: (v) => setState(() => _query = v.trim()),
                   ),
-                  onChanged: (v) => setState(() => _query = v.trim()),
                 ),
-              ),
-              if (_query.isNotEmpty)
-                GestureDetector(
-                  onTap: () {
-                    _searchController.clear();
-                    setState(() => _query = '');
-                  },
-                  child: const Icon(Icons.close_rounded,
-                      color: Colors.white54, size: 16),
-                ),
-            ],
+                if (_query.isNotEmpty)
+                  GestureDetector(
+                    onTap: () {
+                      _searchController.clear();
+                      setState(() => _query = '');
+                    },
+                    child: Icon(Icons.close_rounded,
+                        color: searchIconColor, size: 16),
+                  ),
+              ],
+            ),
           ),
-        ),
-        actions: [
-          if (_currentId != null) ...[
-            // 排序切换
-            TextButton(
-              onPressed: _cycleSort,
-              style: TextButton.styleFrom(
-                foregroundColor: isDark ? Colors.white : Colors.black87,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
+          actions: [
+            if (_currentId != null) ...[
+              // [QBSenHook] v7.9: 排序胶囊按钮（类型图标+名称+升降序箭头，更美观）
+              InkWell(
+                onTap: _cycleSort,
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  height: 32,
+                  margin: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.12)
+                        : Colors.black.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.15)
+                          : Colors.black.withValues(alpha: 0.10),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(_sortIcon(_sort), size: 14, color: iconSubColor),
+                      const SizedBox(width: 4),
+                      Text(
+                        _sort.label,
+                        style: TextStyle(
+                            fontSize: 12, color: iconColor),
+                      ),
+                      const SizedBox(width: 2),
+                      GestureDetector(
+                        onTap: _toggleSortOrder,
+                        child: Icon(
+                          _sortAscending
+                              ? Icons.arrow_upward_rounded
+                              : Icons.arrow_downward_rounded,
+                          size: 14,
+                          color: iconSubColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              child: Text(
-                _sort.label,
-                style: const TextStyle(fontSize: 12),
+              // 文件夹模式切换（视频陈列 <-> 文件夹）
+              IconButton(
+                icon: Icon(
+                  _videoGridMode
+                      ? Icons.folder_open_rounded
+                      : Icons.grid_view_rounded,
+                  color: iconColor,
+                  size: 22,
+                ),
+                tooltip: _videoGridMode ? '切换到文件夹模式' : '切换到视频陈列',
+                onPressed: () {
+                  setState(() => _videoGridMode = !_videoGridMode);
+                  _load();
+                },
               ),
-            ),
-            // [QBSenHook] v7.8: 升序/降序切换
+              // 抖音刷片
+              IconButton(
+                icon: Icon(Icons.smart_display_rounded,
+                    color: iconColor, size: 22),
+                tooltip: '在此分类/文件夹内上下滑播放',
+                onPressed: _openSwipeInCurrentFolder,
+              ),
+            ],
+            // [QBSenHook] v7.6: 夜间模式切换 + 设置（原顶部悬浮控件并入本页）
             IconButton(
               icon: Icon(
-                _sortAscending ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
-                size: 16,
-              ),
-              color: isDark ? Colors.white70 : Colors.black54,
-              tooltip: _sortAscending ? '升序' : '降序',
-              onPressed: _toggleSortOrder,
-              padding: const EdgeInsets.all(4),
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            ),
-            // 文件夹模式切换（视频陈列 <-> 文件夹）
-            IconButton(
-              icon: Icon(
-                _videoGridMode
-                    ? Icons.folder_open_rounded
-                    : Icons.grid_view_rounded,
-                color: Colors.white,
+                Theme.of(context).brightness == Brightness.dark
+                    ? Icons.light_mode_rounded
+                    : Icons.dark_mode_rounded,
+                color: iconColor,
                 size: 22,
               ),
-              tooltip: _videoGridMode ? '切换到文件夹模式' : '切换到视频陈列',
+              tooltip: '切换夜间模式',
               onPressed: () {
-                setState(() => _videoGridMode = !_videoGridMode);
-                _load();
+                final notifier = context.read<ThemeNotifier>();
+                notifier.themeMode =
+                    Theme.of(context).brightness == Brightness.dark
+                        ? ThemeMode.light
+                        : ThemeMode.dark;
               },
             ),
-            // 抖音刷片
             IconButton(
-              icon: const Icon(Icons.smart_display_rounded,
-                  color: Colors.white, size: 22),
-              tooltip: '在此分类/文件夹内上下滑播放',
-              onPressed: _openSwipeInCurrentFolder,
+              icon: Icon(Icons.settings_rounded, color: iconColor, size: 22),
+              tooltip: '设置',
+              onPressed: () {
+                Navigator.of(context).push(
+                  CupertinoPageRoute<void>(
+                    builder: (_) => const UnifiedSettingsPage(),
+                  ),
+                );
+              },
+            ),
+            IconButton(
+              icon: Icon(Icons.refresh_rounded, color: iconColor, size: 22),
+              onPressed: _load,
             ),
           ],
-          // [QBSenHook] v7.6: 夜间模式切换 + 设置（原顶部悬浮控件并入本页）
-          IconButton(
-            icon: Icon(
-              Theme.of(context).brightness == Brightness.dark
-                  ? Icons.light_mode_rounded
-                  : Icons.dark_mode_rounded,
-              color: Colors.white,
-              size: 22,
-            ),
-            tooltip: '切换夜间模式',
-            onPressed: () {
-              final notifier = context.read<ThemeNotifier>();
-              notifier.themeMode =
-                  Theme.of(context).brightness == Brightness.dark
-                      ? ThemeMode.light
-                      : ThemeMode.dark;
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_rounded,
-                color: Colors.white, size: 22),
-            tooltip: '设置',
-            onPressed: () {
-              Navigator.of(context).push(
-                CupertinoPageRoute<void>(
-                  builder: (_) => const UnifiedSettingsPage(),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded,
-                color: Colors.white, size: 22),
-            onPressed: _load,
-          ),
-        ],
+        ),
+        body: _buildBody(emptyColor, isDark),
       ),
-      body: _buildBody(),
     );
   }
 
-  Widget _buildBody() {
+  IconData _sortIcon(SwipeSort sort) {
+    switch (sort) {
+      case SwipeSort.name:
+        return Icons.sort_by_alpha_rounded;
+      case SwipeSort.random:
+        return Icons.shuffle_rounded;
+      case SwipeSort.size:
+        return Icons.data_usage_rounded;
+      case SwipeSort.dateCreated:
+        return Icons.schedule_rounded;
+    }
+  }
+
+  Widget _buildBody(Color emptyColor, bool isDark) {
     if (_loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
+      return Center(
+        child: CircularProgressIndicator(
+            color: isDark ? Colors.white : Colors.black54),
       );
     }
     if (_error != null) {
@@ -447,15 +558,17 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.error_outline_rounded,
-                color: Colors.white54, size: 48),
+            Icon(Icons.error_outline_rounded,
+                color: isDark ? Colors.white54 : Colors.black45, size: 48),
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Text(
                 '加载失败：$_error',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70, fontSize: 14),
+                style: TextStyle(
+                    color: isDark ? Colors.white70 : Colors.black54,
+                    fontSize: 14),
               ),
             ),
             const SizedBox(height: 16),
@@ -466,29 +579,34 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
     }
 
     if (_currentId == null && _rootLibraries.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           '没有可浏览的媒体库',
-          style: TextStyle(color: Colors.white54),
+          style: TextStyle(color: emptyColor),
         ),
       );
     }
 
     if (_currentId == null) {
       // 媒体库网格
-      return GridView.builder(
-        padding: const EdgeInsets.all(12),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 1.1,
+      return RefreshIndicator(
+        onRefresh: _refresh,
+        color: isDark ? Colors.white : Colors.black54,
+        child: GridView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(12),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+            childAspectRatio: 1.1,
+          ),
+          itemCount: _rootLibraries.length,
+          itemBuilder: (context, index) {
+            final lib = _rootLibraries[index];
+            return _buildLibraryCard(lib);
+          },
         ),
-        itemCount: _rootLibraries.length,
-        itemBuilder: (context, index) {
-          final lib = _rootLibraries[index];
-          return _buildLibraryCard(lib);
-        },
       );
     }
 
@@ -500,44 +618,67 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage> {
               .where((e) => e.name.toLowerCase().contains(_query.toLowerCase()))
               .toList();
       if (visible.isEmpty) {
-        return const Center(
+        return Center(
           child: Text(
             '没有匹配的视频',
-            style: TextStyle(color: Colors.white54),
+            style: TextStyle(color: emptyColor),
           ),
         );
       }
-      return GridView.builder(
-        padding: const EdgeInsets.all(10),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 6,
-          mainAxisSpacing: 6,
-          childAspectRatio: 0.62,
+      return RefreshIndicator(
+        onRefresh: _refresh,
+        color: isDark ? Colors.white : Colors.black54,
+        child: GridView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(10),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 6,
+            mainAxisSpacing: 6,
+            childAspectRatio: 0.62,
+          ),
+          itemCount: visible.length,
+          itemBuilder: (context, index) => _buildVideoCard(visible[index]),
         ),
-        itemCount: visible.length,
-        itemBuilder: (context, index) => _buildVideoCard(visible[index]),
       );
     }
 
     // 目录内容：文件夹 + 视频
-    final folders = _items.where((e) => e.isFolder).toList();
-    final videos = _items.where((e) => !e.isFolder).toList();
-    return GridView.builder(
-      padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-        childAspectRatio: 1.1,
+    // [QBSenHook] v7.9: 文件夹模式也支持本地搜索过滤
+    final allItems = _items.where((e) {
+      if (_query.isEmpty) return true;
+      return e.name.toLowerCase().contains(_query.toLowerCase());
+    }).toList();
+    final folders = allItems.where((e) => e.isFolder).toList();
+    final videos = allItems.where((e) => !e.isFolder).toList();
+    if (allItems.isEmpty) {
+      return Center(
+        child: Text(
+          _query.isEmpty ? '此文件夹为空' : '没有匹配的内容',
+          style: TextStyle(color: emptyColor),
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      color: isDark ? Colors.white : Colors.black54,
+      child: GridView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(12),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: 1.1,
+        ),
+        itemCount: folders.length + videos.length,
+        itemBuilder: (context, index) {
+          if (index < folders.length) {
+            return _buildFolderCard(folders[index]);
+          }
+          return _buildVideoCard(videos[index - folders.length]);
+        },
       ),
-      itemCount: folders.length + videos.length,
-      itemBuilder: (context, index) {
-        if (index < folders.length) {
-          return _buildFolderCard(folders[index]);
-        }
-        return _buildVideoCard(videos[index - folders.length]);
-      },
     );
   }
 

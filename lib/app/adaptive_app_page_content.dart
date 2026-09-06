@@ -45,7 +45,8 @@ class UnifiedAppControlRegistry {
       AppPageComponentType.playback => const DesktopPlayerPageSlot(),
       AppPageComponentType.webdavBrowser => const SizedBox.shrink(),
       // [QBSenHook] v7.6: 初始界面直接为文件夹方式浏览页（不再用媒体库方式浏览）
-      AppPageComponentType.mediaLibrary => const EmbyFolderBrowserPage(),
+      AppPageComponentType.mediaLibrary =>
+        const EmbyFolderBrowserPage(isRootHome: true),
       AppPageComponentType.torrentTasks => const SizedBox.shrink(),
       // [QBSenHook] account 页直接显示设置（个人中心已替换为设置）
       AppPageComponentType.account => const UnifiedSettingsPage(),

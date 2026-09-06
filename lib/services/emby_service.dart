@@ -835,20 +835,48 @@ class EmbyService extends MediaServerServiceBase
   }
 
   // 列出父文件夹下的直接子项（文件夹 + 可播放项），用于文件夹方式浏览
-  Future<List<EmbyMediaItem>> getFolderChildren(String parentId) async {
+  // [QBSenHook] v7.9: 支持排序（时间/文件名/随机/大小）+ 升降序，与视频陈列/刷片统一
+  Future<List<EmbyMediaItem>> getFolderChildren(
+    String parentId, {
+    String? sortBy, // dateCreated(默认) / name / random / size
+    bool sortAscending = false,
+  }) async {
     if (!_isConnected || _userId == null || _accessToken == null) {
       return [];
     }
     try {
+      final order = sortAscending ? 'Ascending' : 'Descending';
+      String sortQuery;
+      switch (sortBy) {
+        case 'name':
+          sortQuery = '&SortBy=SortName&SortOrder=$order';
+          break;
+        case 'size':
+          sortQuery = '&SortBy=Size&SortOrder=$order';
+          break;
+        default:
+          sortQuery = '&SortBy=DateCreated&SortOrder=$order';
+      }
       final response = await _makeAuthenticatedRequest(
-          '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false&SortBy=SortName&SortOrder=Ascending&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size&Limit=300');
+          '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size&Limit=300');
       if (response.statusCode != 200) {
         return [];
       }
       final data = json.decode(response.body);
       final items = data['Items'];
       if (items is! List) return [];
-      return items.map((e) => EmbyMediaItem.fromJson(e)).toList();
+      final result = items.map((e) => EmbyMediaItem.fromJson(e)).toList();
+      if (sortBy == 'random') {
+        result.shuffle();
+      } else if (sortBy == 'size') {
+        // 服务端 Size 排序可能不可靠，客户端补排一次
+        result.sort((a, b) {
+          final av = (a.size ?? 0);
+          final bv = (b.size ?? 0);
+          return sortAscending ? av.compareTo(bv) : bv.compareTo(av);
+        });
+      }
+      return result;
     } catch (e) {
       DebugLogService().addLog('EmbyService: 获取文件夹子项异常: ');
       return [];

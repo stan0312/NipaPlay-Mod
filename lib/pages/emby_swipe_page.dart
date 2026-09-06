@@ -201,12 +201,15 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
           }
         });
       }
-      final sortName = prefs.getString('qbsen_swipe_sort');
-      if (sortName != null) {
-        for (final s in SwipeSort.values) {
-          if (s.name == sortName) {
-            setState(() => _sort = s);
-            break;
+      // [QBSenHook] v7.9: 仅未显式传入排序时才从偏好恢复，避免覆盖外部设置的排序
+      if (widget.initialSort == null) {
+        final sortName = prefs.getString('qbsen_swipe_sort');
+        if (sortName != null) {
+          for (final s in SwipeSort.values) {
+            if (s.name == sortName) {
+              setState(() => _sort = s);
+              break;
+            }
           }
         }
       }
