@@ -1275,20 +1275,6 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                       shadows: [Shadow(color: Colors.black87, blurRadius: 3)],
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  // 画面尺寸
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 34, minHeight: 34),
-                    icon: Icon(
-                      Icons.aspect_ratio_rounded,
-                      color: Colors.white,
-                      size: 24,
-                      shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
-                    ),
-                    onPressed: () => _panelAction(_cycleFitMode),
-                  ),
                 ],
               );
             },

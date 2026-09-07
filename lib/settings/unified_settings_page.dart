@@ -49,10 +49,14 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
   }
 
   material.Widget _buildPhone(material.BuildContext context) {
+    // [QBSenHook] v8.1: 设置页只保留"添加媒体库（网络媒体库）"一项
     final entries = buildUnifiedSettingEntries(
       context,
       surface: UnifiedSettingsSurface.phone,
-    );
+    )
+        .where((entry) =>
+            entry.id == UnifiedSettingEntryIds.remoteMediaLibrary)
+        .toList(growable: false);
     _openPhoneInitialEntry(entries);
 
     final background = cupertino.CupertinoDynamicColor.resolve(
@@ -117,10 +121,14 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
   }
 
   material.Widget _buildDesktopTablet(material.BuildContext context) {
+    // [QBSenHook] v8.1: 设置页只保留"添加媒体库（网络媒体库）"一项
     final entries = buildUnifiedSettingEntries(
       context,
       surface: UnifiedSettingsSurface.desktopTablet,
-    );
+    )
+        .where((entry) =>
+            entry.id == UnifiedSettingEntryIds.remoteMediaLibrary)
+        .toList(growable: false);
     if (entries.isEmpty) {
       return const material.SizedBox.shrink();
     }
