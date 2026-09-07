@@ -8,7 +8,6 @@ import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/jellyfin_model.dart';
 import 'package:nipaplay/models/shared_remote_library.dart';
 import 'package:nipaplay/providers/appearance_settings_provider.dart';
-import 'package:nipaplay/providers/dandanplay_remote_provider.dart';
 import 'package:nipaplay/providers/emby_provider.dart';
 import 'package:nipaplay/providers/jellyfin_provider.dart';
 import 'package:nipaplay/providers/shared_remote_library_provider.dart';
@@ -19,7 +18,6 @@ import 'package:nipaplay/settings/adaptive_settings_navigation.dart';
 import 'package:nipaplay/settings/adaptive_settings_widgets.dart';
 import 'package:nipaplay/settings/widgets/media_server_connection_user_agent_setting.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_adaptive_platform_ui.dart';
-import 'package:nipaplay/themes/cupertino/widgets/cupertino_dandanplay_connection_dialog.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_network_server_connection_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_login_dialog.dart';
@@ -34,7 +32,6 @@ import 'package:nipaplay/utils/tab_change_notifier.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
-import 'package:nipaplay/models/dandanplay_remote_model.dart';
 
 class RemoteMediaLibrarySettingsContent extends StatefulWidget {
   const RemoteMediaLibrarySettingsContent({super.key});
@@ -57,17 +54,15 @@ class _RemoteMediaLibrarySettingsContentState
   @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
-    return Consumer3<JellyfinProvider, EmbyProvider, DandanplayRemoteProvider>(
+    return Consumer2<JellyfinProvider, EmbyProvider>(
       builder: (
         context,
         jellyfinProvider,
         embyProvider,
-        dandanProvider,
         child,
       ) {
         final isInitializing = !jellyfinProvider.isInitialized &&
-            !embyProvider.isInitialized &&
-            !dandanProvider.isInitialized;
+            !embyProvider.isInitialized;
 
         if (isInitializing) {
           return AdaptiveSettingsPage(
@@ -152,8 +147,6 @@ class _RemoteMediaLibrarySettingsContentState
               disconnectedDescription: l10n.embyDisconnectedDescription,
               icon: Ionicons.play_circle_outline,
             ),
-            const SizedBox(height: 16),
-            _buildDandanplaySection(context, dandanProvider),
             const SizedBox(height: 16),
             _buildSharedRemoteSection(context),
             const SizedBox(height: 16),
@@ -261,75 +254,6 @@ class _RemoteMediaLibrarySettingsContentState
               icon: Ionicons.log_out_outline,
               destructive: true,
               onPressed: () => _disconnectNetworkServer(type),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDandanplaySection(
-    BuildContext context,
-    DandanplayRemoteProvider provider,
-  ) {
-    final l10n = context.l10n;
-    final isLoading = !provider.isInitialized || provider.isLoading;
-    final isConnected = provider.isConnected;
-    final hasError = provider.errorMessage?.isNotEmpty == true && !isLoading;
-    final status = isLoading
-        ? l10n.loading
-        : isConnected
-            ? l10n.dandanRemoteStatusSynced
-            : (provider.serverUrl?.isNotEmpty == true
-                ? l10n.dandanRemoteStatusConnectFailed
-                : l10n.dandanRemoteStatusNotConfigured);
-    final summary = isConnected
-        ? '${l10n.dandanRemoteServerAddressLabel}: ${provider.serverUrl ?? l10n.mediaServerUnknown}\n'
-            '${l10n.dandanRemoteAnimeEntries}: ${provider.animeGroups.length} · '
-            '${l10n.dandanRemoteVideoFiles}: ${provider.episodes.length}\n'
-            '${l10n.dandanRemoteLastSyncedLabel}: ${_formatDandanTimestamp(context, provider.lastSyncedAt)}'
-        : l10n.dandanRemoteDisconnectedHintLong;
-
-    return AdaptiveSettingsCanvas(
-      child: _buildServerPanel(
-        context,
-        title: l10n.dandanRemoteCardTitle,
-        status: status,
-        summary: summary,
-        icon: Ionicons.chatbubbles_outline,
-        active: isConnected,
-        loading: isLoading,
-        hasError: hasError,
-        errorMessage: provider.errorMessage,
-        actions: [
-          _buildServerPanelButton(
-            context,
-            label: isConnected
-                ? l10n.dandanRemoteManageConnection
-                : l10n.dandanRemoteConnectAccessTitle,
-            icon: isConnected
-                ? Ionicons.settings_outline
-                : Ionicons.log_in_outline,
-            primary: true,
-            onPressed: isLoading
-                ? null
-                : () => _showDandanplayConnectionDialog(provider),
-          ),
-          if (isConnected)
-            _buildServerPanelButton(
-              context,
-              label: l10n.dandanRemoteRefreshLibrary,
-              icon: Ionicons.refresh_outline,
-              onPressed:
-                  isLoading ? null : () => _refreshDandanLibrary(provider),
-            ),
-          if (isConnected)
-            _buildServerPanelButton(
-              context,
-              label: l10n.disconnect,
-              icon: Ionicons.log_out_outline,
-              destructive: true,
-              onPressed:
-                  isLoading ? null : () => _disconnectDandanplay(provider),
             ),
         ],
       ),
@@ -895,143 +819,6 @@ class _RemoteMediaLibrarySettingsContentState
       AdaptiveSnackBar.show(
         context,
         message: l10n.disconnectServerFailed(label, '$e'),
-        type: AdaptiveSnackBarType.error,
-      );
-    }
-  }
-
-  Future<void> _showDandanplayConnectionDialog(
-    DandanplayRemoteProvider provider,
-  ) async {
-    final l10n = context.l10n;
-    final hasExisting = provider.serverUrl?.isNotEmpty == true;
-    if (AdaptiveSettingsScope.isPhoneLayout(context)) {
-      final config = await showCupertinoDandanplayConnectionDialog(
-        context: context,
-        provider: provider,
-      );
-      if (config == null) return;
-
-      try {
-        await provider.connect(config.baseUrl, token: config.apiToken);
-        if (!mounted) return;
-        AdaptiveSnackBar.show(
-          context,
-          message: hasExisting
-              ? l10n.dandanRemoteConfigUpdated
-              : l10n.dandanRemoteConnected,
-          type: AdaptiveSnackBarType.success,
-        );
-      } catch (e) {
-        if (!mounted) return;
-        AdaptiveSnackBar.show(
-          context,
-          message: l10n.connectFailedWithError('$e'),
-          type: AdaptiveSnackBarType.error,
-        );
-      }
-      return;
-    }
-
-    final connectLabel = _text(context, '连接', '連接', 'Connect');
-    final result = await BlurLoginDialog.show(
-      context,
-      title: hasExisting
-          ? l10n.dandanRemoteManageAccessTitle
-          : l10n.dandanRemoteConnectAccessTitle,
-      loginButtonText: hasExisting ? l10n.save : connectLabel,
-      fields: [
-        LoginField(
-          key: 'baseUrl',
-          label: l10n.dandanRemoteServerAddressLabel,
-          hint: l10n.dandanRemoteAddressPlaceholder,
-          initialValue: provider.serverUrl ?? '',
-        ),
-        LoginField(
-          key: 'token',
-          label: l10n.dandanRemoteApiTokenOptionalTitle,
-          hint: l10n.dandanRemoteApiTokenPrompt(
-            hasExisting ? l10n.save : connectLabel,
-          ),
-          isPassword: true,
-          required: false,
-        ),
-      ],
-      onLogin: (values) async {
-        final baseUrl = values['baseUrl'] ?? '';
-        final token = values['token'];
-        if (baseUrl.isEmpty) {
-          return LoginResult(success: false, message: l10n.enterServerAddress);
-        }
-        try {
-          await provider.connect(baseUrl, token: token);
-          return LoginResult(
-              success: true, message: l10n.dandanRemoteConnected);
-        } catch (e) {
-          return LoginResult(success: false, message: e.toString());
-        }
-      },
-    );
-
-    if (result == true && mounted) {
-      AdaptiveSnackBar.show(
-        context,
-        message: l10n.dandanRemoteConfigUpdated,
-        type: AdaptiveSnackBarType.success,
-      );
-    }
-  }
-
-  Future<void> _refreshDandanLibrary(DandanplayRemoteProvider provider) async {
-    final l10n = context.l10n;
-    try {
-      await provider.refresh();
-      if (!mounted) return;
-      AdaptiveSnackBar.show(
-        context,
-        message: l10n.remoteLibraryRefreshed,
-        type: AdaptiveSnackBarType.success,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      AdaptiveSnackBar.show(
-        context,
-        message: l10n.refreshFailedWithError('$e'),
-        type: AdaptiveSnackBarType.error,
-      );
-    }
-  }
-
-  Future<void> _disconnectDandanplay(
-    DandanplayRemoteProvider provider,
-  ) async {
-    final l10n = context.l10n;
-    final confirmed = AdaptiveSettingsScope.isPhoneLayout(context)
-        ? await _confirmCupertino(
-            title: l10n.disconnectDandanRemoteTitle,
-            content: l10n.disconnectDandanRemoteContent,
-            destructiveText: l10n.disconnect,
-          )
-        : await _confirmMaterial(
-            title: l10n.disconnectDandanRemoteTitle,
-            content: l10n.disconnectDandanRemoteContent,
-            destructiveText: l10n.disconnect,
-          );
-    if (confirmed != true) return;
-
-    try {
-      await provider.disconnect();
-      if (!mounted) return;
-      AdaptiveSnackBar.show(
-        context,
-        message: l10n.dandanRemoteDisconnected,
-        type: AdaptiveSnackBarType.success,
-      );
-    } catch (e) {
-      if (!mounted) return;
-      AdaptiveSnackBar.show(
-        context,
-        message: l10n.disconnectFailedWithError('$e'),
         type: AdaptiveSnackBarType.error,
       );
     }
@@ -1659,32 +1446,6 @@ class _RemoteMediaLibrarySettingsContentState
 
   String _serverLabel(MediaServerType type) {
     return type == MediaServerType.jellyfin ? 'Jellyfin' : 'Emby';
-  }
-
-  String _formatDandanTimestamp(BuildContext context, DateTime? timestamp) {
-    if (timestamp == null) {
-      return _text(context, '暂无记录', '暫無記錄', 'No records');
-    }
-    final now = DateTime.now();
-    final diff = now.difference(timestamp);
-    if (diff.inMinutes < 1) {
-      return _text(context, '刚刚', '剛剛', 'Just now');
-    }
-    if (diff.inHours < 1) {
-      return _text(context, '${diff.inMinutes} 分钟前', '${diff.inMinutes} 分鐘前',
-          '${diff.inMinutes} minutes ago');
-    }
-    if (diff.inDays < 1) {
-      return _text(context, '${diff.inHours} 小时前', '${diff.inHours} 小時前',
-          '${diff.inHours} hours ago');
-    }
-    if (diff.inDays < 7) {
-      return _text(context, '${diff.inDays} 天前', '${diff.inDays} 天前',
-          '${diff.inDays} days ago');
-    }
-    String twoDigits(int value) => value.toString().padLeft(2, '0');
-    return '${timestamp.year}-${twoDigits(timestamp.month)}-${twoDigits(timestamp.day)} '
-        '${twoDigits(timestamp.hour)}:${twoDigits(timestamp.minute)}';
   }
 
   String _text(

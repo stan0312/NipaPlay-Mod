@@ -10,7 +10,8 @@ import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
-import 'package:nipaplay/settings/unified_settings_page.dart';
+import 'package:nipaplay/settings/adaptive_settings_scope.dart';
+import 'package:nipaplay/settings/pages/remote_media_library_settings_content.dart';
 import 'package:nipaplay/utils/theme_notifier.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
@@ -638,9 +639,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               icon: Icon(Icons.settings_rounded, color: iconColor, size: 22),
               tooltip: '设置',
               onPressed: () {
+                // [QBSenHook] v8.2: 设置入口直接打开"添加媒体库（网络媒体库）"
                 Navigator.of(context).push(
                   CupertinoPageRoute<void>(
-                    builder: (_) => const UnifiedSettingsPage(),
+                    builder: (_) => const AdaptiveSettingsScope(
+                      style: AdaptiveSettingsStyle.phone,
+                      child: RemoteMediaLibrarySettingsContent(),
+                    ),
                   ),
                 );
               },
