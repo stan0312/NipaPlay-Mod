@@ -858,7 +858,7 @@ class EmbyService extends MediaServerServiceBase
       String path;
       if (playlistId != null) {
         path =
-            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
+            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId$sortQuery';
       } else {
         final filter = favoritesOnly ? '&Filters=IsFavorite' : '';
         final parent = libraryId != null && libraryId.isNotEmpty
@@ -867,7 +867,7 @@ class EmbyService extends MediaServerServiceBase
         // 直接查可播放项（不含 Series；Recursive=true 会把剧集展开成 Episode）
         const includeTypes = 'Movie,Episode,Video';
         path =
-            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size$sortQuery';
+            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId$sortQuery';
       }
       // [QBSenHook] v8.0: 全量加载——分页循环拉取直到 TotalRecordCount（limit<=0 表示全量）
       final pageSize = limit > 0 ? limit : 500;
@@ -937,7 +937,7 @@ class EmbyService extends MediaServerServiceBase
       var startIndex = 0;
       while (true) {
         final response = await _makeAuthenticatedRequest(
-            '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size&StartIndex=$startIndex&Limit=300');
+            '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId&StartIndex=$startIndex&Limit=300');
         if (response.statusCode != 200) {
           return [];
         }
@@ -1043,6 +1043,54 @@ class EmbyService extends MediaServerServiceBase
     } catch (e) {
       DebugLogService().addLog('EmbyService: 切换收藏异常: ');
       return false;
+    }
+  }
+
+  // [QBSenHook] v8.6: 删除条目（Emby 服务端；普通用户可能无权限，需管理员）
+  Future<bool> deleteItem(String itemId) async {
+    if (!_isConnected || itemId.isEmpty) return false;
+    try {
+      final response = await _makeAuthenticatedRequest(
+        '/emby/Items/$itemId',
+        method: 'DELETE',
+      );
+      return response.statusCode == 200 || response.statusCode == 204;
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 删除条目异常: ');
+      return false;
+    }
+  }
+
+  // [QBSenHook] v8.6: 标记已播放/未播放（Emby 原生 PlayedItems）
+  Future<bool> setPlayed(String itemId, {required bool played}) async {
+    if (!_isConnected || _userId == null || itemId.isEmpty) return false;
+    try {
+      final method = played ? 'POST' : 'DELETE';
+      final response = await _makeAuthenticatedRequest(
+        '/emby/Users/$_userId/PlayedItems/$itemId',
+        method: method,
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 设置播放状态异常: ');
+      return false;
+    }
+  }
+
+  // [QBSenHook] v8.6: 获取条目详细信息（路径/格式/码率/分辨率/大小）
+  Future<Map<String, dynamic>?> getItemDetailExtended(String itemId) async {
+    if (!_isConnected || _userId == null || itemId.isEmpty) return null;
+    try {
+      final response = await _makeAuthenticatedRequest(
+        '/emby/Users/$_userId/Items/$itemId'
+        '?Fields=MediaSources,Path,Size,Overview,DateCreated,MediaStreams,Width,Height',
+      );
+      if (response.statusCode != 200) return null;
+      final data = json.decode(response.body);
+      return data is Map<String, dynamic> ? data : null;
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 获取条目详情异常: ');
+      return null;
     }
   }
 
@@ -2040,7 +2088,7 @@ class EmbyService extends MediaServerServiceBase
         'Recursive': 'true',
         'Limit': limit.toString(),
         'Fields':
-            'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear,UserData,Size',
+            'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear,UserData,Size,ParentId',
       };
 
       // 如果指定了父级媒体库，则只在该媒体库中搜索

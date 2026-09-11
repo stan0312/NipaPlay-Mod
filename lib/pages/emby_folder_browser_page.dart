@@ -76,6 +76,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   // [QBSenHook] v8.5: 播放记录恢复后滚动定位到目标视频
   final ScrollController _gridScroll = ScrollController();
   String? _pendingLocateItemId;
+  // [QBSenHook] v8.6: 选择模式（批量 删除/收藏/已播放/信息/定位）
+  bool _selectionMode = false;
+  final Set<String> _selectedIds = {};
 
   // [QBSenHook] v7.9: 左缘右滑返回手势起点
   double? _edgeStartX;
@@ -152,6 +155,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
 
   /// [QBSenHook] v7.9: 下拉刷新（静默，不切 loading 全屏）
   Future<void> _refresh() async {
+    // [QBSenHook] v8.6: 下拉刷新时退出选择模式
+    if (_selectionMode) {
+      setState(() {
+        _selectionMode = false;
+        _selectedIds.clear();
+      });
+    }
     try {
       if (_currentId == null) {
         await EmbyService.instance.loadAvailableLibraries();
@@ -181,6 +191,11 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 
   Future<void> _load() async {
+    // [QBSenHook] v8.6: 切换目录/刷新时退出选择模式
+    if (_selectionMode) {
+      _selectionMode = false;
+      _selectedIds.clear();
+    }
     setState(() {
       _loading = true;
       _error = null;
@@ -568,6 +583,318 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     _gridScroll.jumpTo(offset > maxExtent ? maxExtent : offset);
   }
 
+  // ============ [QBSenHook] v8.6 选择模式 批量操作 ============
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _selectionMode = !_selectionMode;
+      _selectedIds.clear();
+    });
+  }
+
+  void _toggleSelect(EmbyMediaItem item) {
+    setState(() {
+      if (_selectedIds.contains(item.id)) {
+        _selectedIds.remove(item.id);
+      } else {
+        _selectedIds.add(item.id);
+      }
+    });
+  }
+
+  Widget _buildSelectionBadge(EmbyMediaItem item) {
+    final selected = _selectedIds.contains(item.id);
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.45),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(
+        selected
+            ? Icons.check_circle_rounded
+            : Icons.radio_button_unchecked_rounded,
+        color: selected ? Colors.blueAccent : Colors.white70,
+        size: 26,
+      ),
+    );
+  }
+
+  Widget _buildSelectionActionBar() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final iconColor = isDark ? Colors.white : Colors.black87;
+    final selectedItems = _allVisibleItems()
+        .where((e) => _selectedIds.contains(e.id))
+        .toList();
+    final hasVideo = selectedItems.any((e) => !e.isFolder);
+    final hasFolder = selectedItems.any((e) => e.isFolder);
+    final onlyVideo = hasVideo && !hasFolder;
+    final onlyOne = selectedItems.length == 1;
+    final allFav = selectedItems.isNotEmpty &&
+        selectedItems.every((e) => e.userData?.isFavorite ?? false);
+
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(46),
+      child: Container(
+        height: 46,
+        color: isDark ? const Color(0xFF171717) : Colors.white,
+        child: Row(
+          children: [
+            const SizedBox(width: 12),
+            Text(
+              '已选 ${selectedItems.length} 项',
+              style: TextStyle(fontSize: 13, color: iconColor),
+            ),
+            const Spacer(),
+            _actionBtn(Icons.delete_outline_rounded, '删除',
+                () => _deleteSelected(selectedItems), iconColor),
+            _actionBtn(
+                allFav
+                    ? Icons.favorite_rounded
+                    : Icons.favorite_border_rounded,
+                '收藏',
+                () => _toggleFavoriteSelected(selectedItems), iconColor),
+            if (onlyVideo)
+              _actionBtn(Icons.done_all_rounded, '已播放',
+                  () => _togglePlayedSelected(selectedItems), iconColor),
+            if (onlyOne)
+              _actionBtn(Icons.info_outline_rounded, '信息',
+                  () => _showItemInfo(selectedItems.first), iconColor),
+            if (onlyOne && onlyVideo &&
+                (selectedItems.first.parentId?.isNotEmpty ?? false))
+              _actionBtn(Icons.my_location_rounded, '定位到所在文件夹',
+                  () => _locateVideo(selectedItems.first), iconColor),
+            const SizedBox(width: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _actionBtn(
+      IconData icon, String tip, VoidCallback onTap, Color color) {
+    return Tooltip(
+      message: tip,
+      child: IconButton(
+        icon: Icon(icon, color: color, size: 22),
+        onPressed: onTap,
+      ),
+    );
+  }
+
+  List<EmbyMediaItem> _allVisibleItems() {
+    if (_currentId != null && !_videoGridMode) {
+      return _items.where((e) {
+        if (_query.isEmpty) return true;
+        return e.name.toLowerCase().contains(_query.toLowerCase());
+      }).toList();
+    }
+    if (_query.isEmpty) return _videos;
+    return _videos
+        .where((e) => e.name.toLowerCase().contains(_query.toLowerCase()))
+        .toList();
+  }
+
+  Future<void> _deleteSelected(List<EmbyMediaItem> items) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除'),
+        content: const Text('确定删除选中的项？\n（需要管理员权限，删除后不可恢复）'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('删除')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    var failed = 0;
+    for (final item in items) {
+      final success = await EmbyService.instance.deleteItem(item.id);
+      if (!success) failed++;
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    _load();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(failed == 0 ? '删除完成' : '$failed 项删除失败（可能无权限）'),
+      duration: const Duration(seconds: 2),
+    ));
+  }
+
+  Future<void> _toggleFavoriteSelected(List<EmbyMediaItem> items) async {
+    for (final item in items) {
+      await EmbyService.instance
+          .toggleFavorite(item.id, isFavorite: item.userData?.isFavorite ?? false);
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    _load();
+  }
+
+  Future<void> _togglePlayedSelected(List<EmbyMediaItem> items) async {
+    for (final item in items) {
+      await EmbyService.instance
+          .setPlayed(item.id, played: !(item.userData?.played ?? false));
+    }
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+    });
+    _load();
+  }
+
+  Future<void> _showItemInfo(EmbyMediaItem item) async {
+    final detail = await EmbyService.instance.getItemDetailExtended(item.id);
+    if (!mounted) return;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final int? sizeVal = detail?['Size'] is num
+        ? (detail!['Size'] as num).toInt()
+        : item.size;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              _infoRow('类型', item.isFolder ? '文件夹' : (item.type ?? '视频')),
+              _infoRow('大小', _formatBytes(sizeVal) ?? '未知'),
+              _infoRow('路径', detail?['Path']?.toString() ?? '未知'),
+              ..._mediaSourceRows(detail),
+              _infoRow(
+                  '添加时间',
+                  '${item.dateAdded.year}-'
+                  '${item.dateAdded.month.toString().padLeft(2, '0')}-'
+                  '${item.dateAdded.day.toString().padLeft(2, '0')}'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _mediaSourceRows(Map<String, dynamic>? detail) {
+    final rows = <Widget>[];
+    if (detail == null) return rows;
+    final sources = detail['MediaSources'];
+    if (sources is! List || sources.isEmpty) return rows;
+    final src = sources.first;
+    if (src is! Map) return rows;
+    final container = src['Container']?.toString();
+    if (container != null && container.isNotEmpty) {
+      rows.add(_infoRow('格式', container.toUpperCase()));
+    }
+    final bitRate = src['BitRate'];
+    if (bitRate is num && bitRate > 0) {
+      rows.add(_infoRow('码率', '${(bitRate / 1000000).toStringAsFixed(2)} Mbps'));
+    }
+    final w = src['Width'] ?? detail['Width'];
+    final h = src['Height'] ?? detail['Height'];
+    if (w is num && h is num) {
+      rows.add(_infoRow('分辨率', '${w.toInt()} × ${h.toInt()}'));
+    }
+    final streams = src['MediaStreams'];
+    if (streams is List) {
+      final v = streams.whereType<Map>().firstWhere(
+          (e) => e['Type'] == 'Video',
+          orElse: () => const {});
+      final vc = v['Codec']?.toString();
+      if (vc != null && vc.isNotEmpty) rows.add(_infoRow('视频编码', vc.toUpperCase()));
+      final a = streams.whereType<Map>().firstWhere(
+          (e) => e['Type'] == 'Audio',
+          orElse: () => const {});
+      final ac = a['Codec']?.toString();
+      if (ac != null && ac.isNotEmpty) rows.add(_infoRow('音频编码', ac.toUpperCase()));
+    }
+    return rows;
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 68,
+            child: Text(label,
+                style: const TextStyle(fontSize: 13, color: Colors.grey)),
+          ),
+          Expanded(
+            child: Text(value, style: const TextStyle(fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _locateVideo(EmbyMediaItem video) async {
+    final parentId = video.parentId;
+    if (parentId == null || parentId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('无法获取所在文件夹'), duration: Duration(seconds: 2)),
+      );
+      return;
+    }
+    setState(() {
+      _selectionMode = false;
+      _selectedIds.clear();
+      _videoGridMode = false;
+      _path.clear();
+      _path.add(_FolderEntry(parentId, ''));
+      _currentId = parentId;
+      _currentName = '';
+    });
+    _pendingLocateItemId = video.id;
+    await _load();
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollToItem(_pendingLocateItemId);
+      _pendingLocateItemId = null;
+    });
+  }
+
+  // [QBSenHook] v8.6: 初始页"我的收藏"入口
+  void _openFavorites() {
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(
+        builder: (_) => EmbySwipePage(
+          title: '我的收藏',
+          favoritesOnly: true,
+          initialSort: _sort,
+          initialSortAscending: _sortAscending,
+        ),
+      ),
+    );
+  }
+
   Future<void> _openVideoPlayer(EmbyMediaItem video) async {
     // [QBSenHook] v8.0: 搜索结果点击同样直接全屏播放（不要求位于某个分类内）
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
@@ -726,6 +1053,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
             ),
           ),
           actions: [
+            // [QBSenHook] v8.6: 初始页右上角"我的收藏"入口（Emby 原生收藏）
+            if (_currentId == null)
+              IconButton(
+                icon: Icon(Icons.favorite_rounded, color: iconColor, size: 22),
+                tooltip: '我的收藏',
+                onPressed: _openFavorites,
+              ),
             if (_currentId != null) ...[
               // [QBSenHook] v7.9: 排序胶囊按钮（类型图标+名称+升降序箭头，更美观）
               // [QBSenHook] v8.0: 多功能——单击循环切排序方式；右滑=新到旧、左滑=旧到新
@@ -839,12 +1173,25 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
                 );
               },
             ),
-            IconButton(
-              icon: Icon(Icons.refresh_rounded, color: iconColor, size: 22),
-              onPressed: _load,
-            ),
+            // [QBSenHook] v8.6: 右上角刷新按钮 -> 选择按钮（批量操作；下拉仍可刷新）
+            if (_currentId != null)
+              IconButton(
+                icon: Icon(
+                  _selectionMode
+                      ? Icons.close_rounded
+                      : Icons.checklist_rounded,
+                  color: iconColor,
+                  size: 22,
+                ),
+                tooltip: _selectionMode ? '退出选择' : '选择（批量操作）',
+                onPressed: _toggleSelectionMode,
+              ),
           ],
         ),
+        // [QBSenHook] v8.6: 选择模式操作排（删除/收藏/已播放/信息/定位）
+        bottom: _selectionMode && _selectedIds.isNotEmpty
+            ? _buildSelectionActionBar()
+            : null,
         body: _buildBody(emptyColor, isDark),
       ),
     );
@@ -1119,7 +1466,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     _ensureFolderMeta(folder);
     final sizeLabel = _formatBytes(summary?.totalSizeBytes);
     return _Card(
-      onTap: () => _openFolder(folder),
+      onTap: _selectionMode
+          ? () => _toggleSelect(folder)
+          : () => _openFolder(folder),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -1144,6 +1493,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               ),
             ),
           ),
+          // [QBSenHook] v8.6: 选择模式勾选角标
+          if (_selectionMode)
+            Positioned(
+              left: 6,
+              top: 6,
+              child: _buildSelectionBadge(folder),
+            ),
           // [QBSenHook] v8.0: 右上角文件夹大小标注
           if (sizeLabel != null)
             Positioned(
@@ -1214,10 +1570,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     return _Card(
       // [QBSenHook] v8.4: 分类/文件夹内单击进入刷片模式（从该视频开始），长按 1s 进入全屏；
       // 搜索结果保持单击直接全屏（v8.0 既定行为）
-      onTap: fromSearch
-          ? () => _openVideoPlayer(video)
-          : () => _openSwipeInCurrentFolder(initialItemId: video.id),
-      onLongPress: () => _openVideoPlayer(video),
+      // [QBSenHook] v8.6: 选择模式下单击=勾选、长按禁用
+      onTap: _selectionMode
+          ? () => _toggleSelect(video)
+          : (fromSearch
+              ? () => _openVideoPlayer(video)
+              : () => _openSwipeInCurrentFolder(initialItemId: video.id)),
+      onLongPress: _selectionMode ? null : () => _openVideoPlayer(video),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -1229,6 +1588,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               alignment: Alignment.center,
               child: const Icon(Icons.movie_rounded,
                   color: Colors.white24, size: 48),
+            ),
+          // [QBSenHook] v8.6: 选择模式勾选角标
+          if (_selectionMode)
+            Positioned(
+              left: 6,
+              top: 6,
+              child: _buildSelectionBadge(video),
             ),
           // [QBSenHook] v8.5: 视频右上角显示文件大小
           if (video.size != null && video.size! > 0)

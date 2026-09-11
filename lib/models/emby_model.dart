@@ -45,6 +45,7 @@ class EmbyMediaItem {
   final int? size; // 文件大小（字节），Emby Items 返回 Size 字段，用于按大小排序
   final int? width; // 视频像素宽度（Fields=Width）
   final int? height; // 视频像素高度（Fields=Height）
+  final String? parentId; // [QBSenHook] v8.6: 父级目录 id（定位到所在文件夹）
   
   EmbyMediaItem({
     required this.id,
@@ -63,6 +64,7 @@ class EmbyMediaItem {
     this.size,
     this.width,
     this.height,
+    this.parentId,
   });
   
   factory EmbyMediaItem.fromJson(Map<String, dynamic> json) {
@@ -88,6 +90,7 @@ class EmbyMediaItem {
       size: json['Size'] is num ? (json['Size'] as num).toInt() : null,
       width: json['Width'] is num ? (json['Width'] as num).toInt() : null,
       height: json['Height'] is num ? (json['Height'] as num).toInt() : null,
+      parentId: json['ParentId']?.toString(),
     );
   }
 
