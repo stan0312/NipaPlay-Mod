@@ -484,11 +484,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
 
   String _fmtRecordTime(DateTime t) {
     final now = DateTime.now();
-    final diff = now.difference(t);
-    if (diff.inMinutes < 1) return '刚刚';
-    if (diff.inHours < 1) return '${diff.inMinutes} 分钟前';
-    if (diff.inDays < 1) return '${diff.inHours} 小时前';
-    return '${t.month}月${t.day}日';
+    String two(int v) => v.toString().padLeft(2, '0');
+    final hm = '${two(t.hour)}:${two(t.minute)}';
+    if (t.year == now.year && t.month == now.month && t.day == now.day) {
+      return '今天 $hm';
+    }
+    return '${t.month}月${t.day}日 $hm';
   }
 
   /// [QBSenHook] v8.5: 恢复到记录对应的分类/文件夹，并从上次视频继续刷片
