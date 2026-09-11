@@ -331,6 +331,12 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   // ============ 内嵌播放 ============
 
   Future<void> _autoPlay(EmbyMediaItem item) async {
+    // [QBSenHook] v8.4: 防重入——jumpToPage 触发的 onPageChanged 与 _load 显式调用
+    // 会连续触发同一视频的 _autoPlay，并发初始化会竞争播放器单例，导致播放器
+    // 在播但 _playingItemId 未挂上、画面一直停留在缩略图。同一视频只初始化一次。
+    if (_pendingPlayId == item.id || _playingItemId == item.id) {
+      return;
+    }
     final gen = ++_playbackGeneration;
     // 立即反馈：正在加载播放，避免用户以为点击没反应
     if (mounted) {
@@ -380,6 +386,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         historyItem: historyItem,
         playbackSession: session,
         playbackDetailContext: detailContext,
+        // [QBSenHook] v8.4: 刷片模式不续播——强制从头播放
+        startFromBeginning: true,
       );
       if (!mounted || gen != _playbackGeneration) return;
       // [QBSenHook] v7.3: initializePlayer 内部失败会置 error 而非抛异常，

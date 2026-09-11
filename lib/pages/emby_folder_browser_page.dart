@@ -1024,7 +1024,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
             service.getImageUrl(video.id, tag: video.imagePrimaryTag))
         : null;
     return _Card(
-      // [QBSenHook] v8.3: 分类/文件夹内单击进入刷片模式（从该视频开始），长按 1.5s 进入全屏；
+      // [QBSenHook] v8.4: 分类/文件夹内单击进入刷片模式（从该视频开始），长按 1s 进入全屏；
       // 搜索结果保持单击直接全屏（v8.0 既定行为）
       onTap: fromSearch
           ? () => _openVideoPlayer(video)
@@ -1094,7 +1094,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 }
 
-class _Card extends StatelessWidget {
+class _Card extends StatefulWidget {
   final Widget child;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
@@ -1102,38 +1102,109 @@ class _Card extends StatelessWidget {
   const _Card({required this.child, required this.onTap, this.onLongPress});
 
   @override
+  State<_Card> createState() => _CardState();
+}
+
+/// [QBSenHook] v8.4: 长按 1 秒进全屏 + 按下瞬间显示圆环缓冲动画提示。
+/// 自实现（Timer + AnimationController）而非 LongPressGestureRecognizer，
+/// 便于按下即启动动画、提前松手/滑动时精确取消。
+class _CardState extends State<_Card> with SingleTickerProviderStateMixin {
+  static const Duration longPressDuration = Duration(milliseconds: 1000);
+
+  late final AnimationController _pressCtrl;
+  Timer? _longPressTimer;
+  bool _longPressFired = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pressCtrl = AnimationController(
+      vsync: this,
+      duration: longPressDuration,
+    );
+  }
+
+  @override
+  void dispose() {
+    _longPressTimer?.cancel();
+    _pressCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onTapDown(TapDownDetails _) {
+    if (widget.onLongPress == null) return;
+    _longPressFired = false;
+    _pressCtrl.forward(from: 0);
+    _longPressTimer?.cancel();
+    _longPressTimer = Timer(longPressDuration, () {
+      if (!mounted) return;
+      _longPressFired = true;
+      widget.onLongPress!();
+    });
+  }
+
+  void _cancelPress() {
+    _longPressTimer?.cancel();
+    _longPressTimer = null;
+    if (_pressCtrl.isAnimating || _pressCtrl.value > 0) {
+      _pressCtrl.stop();
+      _pressCtrl.value = 0;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final VoidCallback? longPress = onLongPress;
     final Widget content = ClipRRect(
       borderRadius: BorderRadius.circular(12),
-      child: SizedBox.expand(child: child),
+      child: SizedBox.expand(child: widget.child),
     );
-    if (longPress != null) {
-      // [QBSenHook] v8.3: 长按 1.5s 才触发（LongPressGestureRecognizer 自定义 deadline）
-      return RawGestureDetector(
-        gestures: <Type, GestureRecognizerFactory>{
-          LongPressGestureRecognizer:
-              GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
-            () => LongPressGestureRecognizer(
-              duration: const Duration(milliseconds: 1500),
-            ),
-            (LongPressGestureRecognizer instance) {
-              instance.onLongPress = longPress;
-            },
-          ),
-          TapGestureRecognizer:
-              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
-            () => TapGestureRecognizer(),
-            (TapGestureRecognizer instance) {
-              instance.onTap = onTap;
-            },
-          ),
+    if (widget.onLongPress != null) {
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: _onTapDown,
+        onTapUp: (_) => _cancelPress(),
+        onTapCancel: _cancelPress,
+        onTap: () {
+          // 长按已触发进全屏时，松手不再触发单击进刷片
+          if (_longPressFired) {
+            _longPressFired = false;
+            return;
+          }
+          widget.onTap();
         },
-        child: content,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            content,
+            // [QBSenHook] v8.4: 长按缓冲动画——按住即显示圆环进度（1 秒转满），
+            // 松手/滑动取消立即消失；半透明遮罩不遮挡卡片主体
+            AnimatedBuilder(
+              animation: _pressCtrl,
+              builder: (context, _) {
+                final double t = _pressCtrl.value;
+                if (t <= 0) return const SizedBox.shrink();
+                return Container(
+                  color: Colors.black.withValues(alpha: 0.25 * t),
+                  alignment: Alignment.center,
+                  child: SizedBox(
+                    width: 54,
+                    height: 54,
+                    child: CircularProgressIndicator(
+                      value: t,
+                      strokeWidth: 3,
+                      color: Colors.white,
+                      backgroundColor: Colors.white24,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
       );
     }
     return InkWell(
-      onTap: onTap,
+      onTap: widget.onTap,
       borderRadius: BorderRadius.circular(12),
       child: content,
     );

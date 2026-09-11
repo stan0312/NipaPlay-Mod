@@ -27,6 +27,8 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     String? mediaKey,
     bool resetManualDanmakuOffset = true,
     bool preserveEmbyAccountKey = false,
+    // [QBSenHook] v8.4: 强制从头播放——刷片模式使用，跳过持久化位置恢复
+    bool startFromBeginning = false,
   }) async {
     _playbackErrorDialogRequested = false;
     final isRequestedEmbyStream = videoPath.startsWith('emby://');
@@ -743,8 +745,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         await _initializeWatchHistory(videoPath);
       }
 
-      // 获取上次播放位置
-      final lastPosition = await _getVideoPosition(videoPath);
+      // 获取上次播放位置（刷片模式强制从头播放，跳过恢复）
+      final int lastPosition = startFromBeginning
+          ? 0
+          : await _getVideoPosition(videoPath);
       debugPrint(
         'VideoPlayerState: lastPosition for $videoPath = $lastPosition (raw value from _getVideoPosition)',
       );
