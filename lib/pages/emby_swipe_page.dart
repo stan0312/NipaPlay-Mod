@@ -13,6 +13,7 @@ import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/utils/screen_orientation_manager.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
+import 'package:nipaplay/widgets/edge_swipe_back.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -340,17 +341,13 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
       });
     }
     try {
-      // [QBSenHook] v7.5.3: 续播——从 Emby 服务端的观看进度(PlaybackPositionTicks)恢复
-      // ticks 转毫秒 = ticks / 10000
-      final resumeMs =
-          (item.userData?.playbackPositionTicks ?? 0.0) / 10000.0;
-      final resumePositionMs = resumeMs > 0 ? resumeMs.round() : 0;
+      // [QBSenHook] v8.3: 刷片模式不续播——每次进入/切换都从头开始播放
       final historyItem = WatchHistoryItem(
         filePath: 'emby://${item.id}',
         animeName: item.name,
         episodeTitle: null,
         watchProgress: 0.0,
-        lastPosition: resumePositionMs,
+        lastPosition: 0,
         duration: 0,
         lastWatchTime: DateTime.now(),
         animeId: null,
@@ -830,6 +827,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
               ),
             // 顶部栏
             _buildTopBar(),
+            // [QBSenHook] v8.3: 左缘右滑返回（好滑版：90px 触发区 + 位移/速度双判据），
+            // 叠在最上层，不与卡片左右滑快进快退手势竞争
+            const EdgeSwipeBackOverlay(),
             // 页码指示
             if (_items.isNotEmpty)
               Positioned(

@@ -74,6 +74,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
 
   // [QBSenHook] v7.9: 左缘右滑返回手势起点
   double? _edgeStartX;
+  // [QBSenHook] v8.3: 横向拖动累计位移（慢滑位移兜底触发返回）
+  double _edgeDragDx = 0;
   // [QBSenHook] v8.0: 等待 Emby 连接就绪后自动刷新（修复"打开初始页无内容"）
   Timer? _connectRetryTimer;
   int _connectRetryAttempts = 0;
@@ -474,15 +476,20 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
 
     return GestureDetector(
       // [QBSenHook] v7.9: 除全屏外全部页面支持左缘右滑返回（含文件夹二级/内容二级）
+      // [QBSenHook] v8.3: 好滑版——触发区放宽到 90px，速度阈值降到 120，
+      // 并增加累计位移 40px 兜底（慢速拖动也能返回）
       behavior: HitTestBehavior.translucent,
-      onHorizontalDragStart: (d) => _edgeStartX = d.localPosition.dx,
+      onHorizontalDragStart: (d) {
+        _edgeStartX = d.localPosition.dx;
+        _edgeDragDx = 0;
+      },
+      onHorizontalDragUpdate: (d) => _edgeDragDx += d.delta.dx,
       onHorizontalDragEnd: (d) {
         final startX = _edgeStartX;
         _edgeStartX = null;
         if (startX != null &&
-            startX < 60 &&
-            d.primaryVelocity != null &&
-            d.primaryVelocity! > 250) {
+            startX < 90 &&
+            ((d.primaryVelocity ?? 0) > 120 || _edgeDragDx > 40)) {
           _goUp();
         }
       },

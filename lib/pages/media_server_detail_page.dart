@@ -30,6 +30,7 @@ import 'package:nipaplay/providers/appearance_settings_provider.dart';
 import 'package:nipaplay/services/jellyfin_dandanplay_matcher.dart';
 import 'package:nipaplay/services/emby_dandanplay_matcher.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
+import 'package:nipaplay/widgets/edge_swipe_back.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/network_media_server_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/anime_detail_shell.dart';
@@ -1376,13 +1377,16 @@ class _MediaServerDetailPageState extends State<MediaServerDetailPage>
     final posterUrl = _getPosterUrl(width: 600);
     final hasBackdrop = backdropUrl.isNotEmpty;
 
-    return NipaplayWindowScaffold(
-      embedded: widget.embedded,
-      backgroundImageUrl:
-          hasBackdrop ? backdropUrl : (posterUrl.isNotEmpty ? posterUrl : null),
-      blurBackground: !hasBackdrop, // 如果没有横向图而使用竖向图，开启高斯模糊
-      onClose: () => Navigator.of(context).pop(),
-      child: pageContent,
+    // [QBSenHook] v8.3: 左缘右滑返回（好滑版）
+    return EdgeSwipeBack(
+      child: NipaplayWindowScaffold(
+        embedded: widget.embedded,
+        backgroundImageUrl:
+            hasBackdrop ? backdropUrl : (posterUrl.isNotEmpty ? posterUrl : null),
+        blurBackground: !hasBackdrop, // 如果没有横向图而使用竖向图，开启高斯模糊
+        onClose: () => Navigator.of(context).pop(),
+        child: pageContent,
+      ),
     );
   }
 
