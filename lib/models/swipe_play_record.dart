@@ -73,7 +73,7 @@ class SwipePlayRecord {
     }
   }
 
-  /// 记录一条；同一来源（sourceId + folderMode + sortName）去重更新（新的在前）。
+  /// 记录一条；[QBSenHook] v8.5: 同一视频（lastItemId）去重——只保留最后一次播放该视频的记录，新的在前。
   static Future<void> saveRecord({
     required String sourceId,
     required String sourceName,
@@ -85,10 +85,7 @@ class SwipePlayRecord {
   }) async {
     if (sourceId.isEmpty || lastItemId.isEmpty) return;
     final records = await loadRecords();
-    records.removeWhere((r) =>
-        r.sourceId == sourceId &&
-        r.folderMode == folderMode &&
-        r.sortName == sortName);
+    records.removeWhere((r) => r.lastItemId == lastItemId);
     records.insert(
       0,
       SwipePlayRecord(
