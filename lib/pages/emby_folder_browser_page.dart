@@ -1115,7 +1115,7 @@ class _Card extends StatelessWidget {
           LongPressGestureRecognizer:
               GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
             () => LongPressGestureRecognizer(
-              deadline: const Duration(milliseconds: 1500),
+              duration: const Duration(milliseconds: 1500),
             ),
             (LongPressGestureRecognizer instance) {
               instance.onLongPress = longPress;
