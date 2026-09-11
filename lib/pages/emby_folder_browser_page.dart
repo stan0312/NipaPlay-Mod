@@ -1392,8 +1392,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
           ),
         );
       }
-      // 媒体库网格
-      return RefreshIndicator(
+      if (_currentId == null && !_favoritesOnly) {
+        // 媒体库网格
+        return RefreshIndicator(
         onRefresh: _refresh,
         color: isDark ? Colors.white : Colors.black54,
         child: GridView.builder(
@@ -1413,9 +1414,6 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
         ),
       );
     }
-
-    // [QBSenHook] v8.9: 分类/文件夹页搜索时——显示全局搜索结果（回到收藏/分类网格需清空搜索词）
-    if (_query.isNotEmpty) {
 
     // [QBSenHook] v7.5.5: 分类视频陈列模式：3 个一排，本地搜索过滤
     if (_videoGridMode) {
