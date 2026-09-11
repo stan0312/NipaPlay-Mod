@@ -7,6 +7,7 @@ import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/models/swipe_play_record.dart';
 import 'package:nipaplay/pages/emby_folder_browser_page.dart';
 import 'package:nipaplay/pages/emby_fullscreen_player_page.dart' show EmbyFitMode;
 import 'package:nipaplay/services/emby_service.dart';
@@ -34,6 +35,7 @@ class EmbySwipePage extends StatefulWidget {
     this.initialItemId,
     this.initialSort, // [QBSenHook] v7.8: 外部传入排序
     this.initialSortAscending = false, // [QBSenHook] v7.8: 外部传入排序方向
+    this.initialFolderMode = false, // [QBSenHook] v8.5: 来源是否为文件夹模式
   });
 
   final String title;
@@ -53,6 +55,9 @@ class EmbySwipePage extends StatefulWidget {
   final SwipeSort? initialSort;
   final bool initialSortAscending;
 
+  /// [QBSenHook] v8.5: 来源是否为文件夹模式（用于播放记录恢复）
+  final bool initialFolderMode;
+
   @override
   State<EmbySwipePage> createState() => _EmbySwipePageState();
 }
@@ -71,7 +76,8 @@ enum SwipeSort {
 /// [QBSenHook] v7.5.3: 视频区左右边缘手势：左侧调亮度、右侧调音量（尽量靠边）
 enum EdgeGestureSide { left, right }
 
-class _EmbySwipePageState extends State<EmbySwipePage> {
+class _EmbySwipePageState extends State<EmbySwipePage>
+    with WidgetsBindingObserver {
   final PageController _pageController = PageController();
   List<EmbyMediaItem> _items = [];
   bool _loading = true;
@@ -117,16 +123,19 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   late final VideoPlayerState _videoState;
   // 持续 seek 拖拽状态：起始位置与累计偏移
   bool _seekDragging = false;
-  // [QBSenHook] v7.5.4: 左右滑快进快退时，底部显示极细播放进度条
-  bool _seekBarVisible = false;
+
   Duration _seekDragStartPos = Duration.zero;
   double _seekDragAccum = 0.0;
+  // [QBSenHook] v8.5: 控制面板进度条拖动——按下时的比例起点
+  double _panelBarStartRatio = 0.0;
   // 左右边缘手势起始模式：brightness / volume
   String? _edgeDragMode;
 
   @override
   void initState() {
     super.initState();
+    // [QBSenHook] v8.5: 退后台时保存播放记录（覆盖"完全退出软件"场景）
+    WidgetsBinding.instance.addObserver(this);
     // [QBSenHook] v7.5.1: 抖音式刷片页锁定竖屏，防止播放横屏视频时自动旋转
     SystemChrome.setPreferredOrientations(const [
       DeviceOrientation.portraitUp,
@@ -151,6 +160,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
 
   @override
   void dispose() {
+    // [QBSenHook] v8.5: 返回上一层时保存播放记录
+    _savePlayRecord();
+    WidgetsBinding.instance.removeObserver(this);
     _controlsTimer?.cancel();
     // [QBSenHook] v7.5.3: 退出刷片页立即停止播放，避免"退出后仍有声音"
     _playbackGeneration++;
@@ -168,6 +180,38 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     _pageController.dispose();
     _playingItemId = null;
     super.dispose();
+  }
+
+  // [QBSenHook] v8.5: 退后台时也保存（杀进程前 paused 触发）
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _savePlayRecord();
+    }
+  }
+
+  /// [QBSenHook] v8.5: 把当前刷片列表与最后播放视频记为一条播放记录
+  void _savePlayRecord() {
+    if (!mounted) return;
+    final sourceId = widget.initialParentId ?? widget.initialLibraryId;
+    if (sourceId == null || sourceId.isEmpty) return;
+    if (_items.isEmpty ||
+        _currentIndex < 0 ||
+        _currentIndex >= _items.length) {
+      return;
+    }
+    final item = _items[_currentIndex];
+    final String sourceName =
+        widget.parentName ?? widget.title.replaceAll(' 刷片', '');
+    SwipePlayRecord.saveRecord(
+      sourceId: sourceId,
+      sourceName: sourceName,
+      folderMode: widget.initialFolderMode,
+      sortName: _sort.name,
+      sortAscending: _sortAscending,
+      lastItemId: item.id,
+      lastItemName: item.name,
+    );
   }
 
   Future<void> _restorePreferences() async {
@@ -1138,43 +1182,9 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
             ],
           ),
         ),
-        // [QBSenHook] v7.5.4: 左右滑快进快退时底部极细播放进度条
-        if (_seekBarVisible) _buildSeekBar(),
-        // [QBSenHook] v8.0: 单击唤出的底部细进度条+时间+按钮（3 秒自动隐藏）
+        // [QBSenHook] v8.5: 进度条合并——快进快退/单击均只显示下方控制面板进度条（可拖动）
         if (_controlsVisible) _buildControlPanel(),
         ],
-      ),
-    );
-  }
-
-  /// [QBSenHook] v7.5.4: 底部极细一条播放进度条（左右滑快进快退时显示）
-  Widget _buildSeekBar() {
-    return Positioned(
-      left: 0,
-      right: 0,
-      bottom: 12, // [QBSenHook] v7.8: 进度条稍微上移
-      child: IgnorePointer(
-        child: Consumer<VideoPlayerState>(
-          builder: (context, videoState, child) {
-            final double pos =
-                videoState.hasVideo && videoState.duration.inMilliseconds > 0
-                    ? (videoState.position.inMilliseconds /
-                            videoState.duration.inMilliseconds)
-                        .clamp(0.0, 1.0)
-                    : 0.0;
-            return Container(
-              height: 2.5,
-              color: Colors.black.withValues(alpha: 0.35),
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
-                widthFactor: pos,
-                child: Container(
-                  color: Colors.white.withValues(alpha: 0.9),
-                ),
-              ),
-            );
-          },
-        ),
       ),
     );
   }
@@ -1265,18 +1275,47 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // 极细进度条（Expanded）
+                  // [QBSenHook] v8.5: 进度条合并后唯一一条——可拖动 seek
                   Expanded(
-                    child: Container(
-                      height: 2.5,
-                      color: Colors.black.withValues(alpha: 0.35),
-                      alignment: Alignment.centerLeft,
-                      child: FractionallySizedBox(
-                        widthFactor: pos,
-                        child: Container(
-                          color: Colors.white.withValues(alpha: 0.9),
-                        ),
-                      ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final double barWidth = constraints.maxWidth;
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onHorizontalDragStart: (d) {
+                            _panelBarStartRatio =
+                                (d.localPosition.dx / barWidth)
+                                    .clamp(0.0, 1.0);
+                          },
+                          onHorizontalDragUpdate: (d) {
+                            final v = Provider.of<VideoPlayerState>(context,
+                                listen: false);
+                            if (!v.hasVideo ||
+                                v.duration.inMilliseconds <= 0) {
+                              return;
+                            }
+                            final ratio = (_panelBarStartRatio +
+                                    d.delta.dx / barWidth)
+                                .clamp(0.0, 1.0);
+                            v.seekTo(v.duration * ratio);
+                          },
+                          child: Container(
+                            height: double.infinity,
+                            alignment: Alignment.center,
+                            child: Container(
+                              height: 2.5,
+                              color: Colors.black.withValues(alpha: 0.35),
+                              alignment: Alignment.centerLeft,
+                              child: FractionallySizedBox(
+                                widthFactor: pos,
+                                child: Container(
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1339,7 +1378,8 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
     _seekDragging = true;
     _seekDragStartPos = videoState.position;
     _seekDragAccum = 0.0;
-    if (mounted) setState(() => _seekBarVisible = true);
+    // [QBSenHook] v8.5: 快进快退时显示控制面板（含可拖动进度条），3 秒自动隐藏
+    _showControlPanel();
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
@@ -1365,7 +1405,7 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
   void _onHorizontalDragEnd(DragEndDetails details) {
     _seekDragging = false;
     _seekDragAccum = 0.0;
-    if (mounted) setState(() => _seekBarVisible = false);
+    // [QBSenHook] v8.5: 不手动隐藏，由控制面板 3 秒自动隐藏计时器接管
   }
 
   // [QBSenHook] v7.5.3: 视频区左右边缘手势条——左边缘上下滑调亮度、

@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart'; // [QBSenHook] v8.3: LongPressGestureRec
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/playable_item.dart';
+import 'package:nipaplay/models/swipe_play_record.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/pages/emby_swipe_page.dart';
@@ -72,6 +73,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   // [QBSenHook] v8.0: 文件夹递归摘要缓存（大小 + 缩略图继承）
   final Map<String, FolderSummary> _folderMeta = {};
   final Set<String> _folderMetaLoading = {};
+  // [QBSenHook] v8.5: 播放记录恢复后滚动定位到目标视频
+  final ScrollController _gridScroll = ScrollController();
+  String? _pendingLocateItemId;
 
   // [QBSenHook] v7.9: 左缘右滑返回手势起点
   double? _edgeStartX;
@@ -137,6 +141,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     WidgetsBinding.instance.removeObserver(this);
     _searchTimer?.cancel();
     _searchController.dispose();
+    _gridScroll.dispose();
     super.dispose();
   }
 
@@ -386,9 +391,180 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
           initialSort: _sort,
           initialSortAscending: _sortAscending,
           initialItemId: initialItemId,
+          // [QBSenHook] v8.5: 记录来源模式，供播放记录保存/恢复
+          initialFolderMode: _videoGridMode == false,
         ),
       ),
     );
+  }
+
+  /// [QBSenHook] v8.5: 长按抖音按钮列出播放记录
+  Future<void> _showPlayRecords() async {
+    final records = await SwipePlayRecord.loadRecords();
+    if (!mounted) return;
+    if (records.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('暂无播放记录'), duration: Duration(seconds: 1)),
+      );
+      return;
+    }
+    final bool dark = Theme.of(context).brightness == Brightness.dark;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: dark ? const Color(0xFF1E1E1E) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              child: Text(
+                '播放记录（点击恢复上次刷片）',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Theme.of(ctx).brightness == Brightness.dark
+                      ? Colors.white
+                      : Colors.black87,
+                ),
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: records.length,
+                itemBuilder: (context, i) {
+                  final r = records[i];
+                  return ListTile(
+                    leading: const Icon(Icons.history_rounded),
+                    title: Text(
+                      r.sourceName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    subtitle: Text(
+                      '${r.folderMode ? '文件夹' : '媒体库'} · '
+                      '${_sortLabel(r.sortName)}'
+                      '${r.sortAscending ? '（升序）' : '（降序）'} · '
+                      '上次：${r.lastItemName}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                    trailing: Text(
+                      _fmtRecordTime(r.time),
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _resumeRecord(r);
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _sortLabel(String name) {
+    for (final e in SwipeSort.values) {
+      if (e.name == name) return e.label;
+    }
+    return '按时间添加';
+  }
+
+  String _fmtRecordTime(DateTime t) {
+    final now = DateTime.now();
+    final diff = now.difference(t);
+    if (diff.inMinutes < 1) return '刚刚';
+    if (diff.inHours < 1) return '${diff.inMinutes} 分钟前';
+    if (diff.inDays < 1) return '${diff.inHours} 小时前';
+    return '${t.month}月${t.day}日';
+  }
+
+  /// [QBSenHook] v8.5: 恢复到记录对应的分类/文件夹，并从上次视频继续刷片
+  Future<void> _resumeRecord(SwipePlayRecord r) async {
+    if (r.sourceId.isEmpty) return;
+    SwipeSort sort = SwipeSort.dateCreated;
+    for (final e in SwipeSort.values) {
+      if (e.name == r.sortName) {
+        sort = e;
+        break;
+      }
+    }
+    setState(() {
+      _path.clear();
+      _path.add(_FolderEntry(r.sourceId, r.sourceName));
+      _currentId = r.sourceId;
+      _currentName = r.sourceName;
+      _videoGridMode = !r.folderMode;
+      _sort = sort;
+      _sortAscending = r.sortAscending;
+      _query = '';
+      _searchController.clear();
+    });
+    _pendingLocateItemId = r.lastItemId;
+    await _load();
+    if (!mounted) return;
+    // 列表渲染后滚动定位到目标视频（从刷片返回后停留在此位置）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollToItem(_pendingLocateItemId);
+      _pendingLocateItemId = null;
+    });
+    _openSwipeInCurrentFolder(initialItemId: r.lastItemId);
+  }
+
+  /// [QBSenHook] v8.5: 滚动定位到指定视频（视频陈列 3 列 / 文件夹 2 列）
+  void _scrollToItem(String? itemId) {
+    if (itemId == null || itemId.isEmpty) return;
+    if (!_gridScroll.hasClients) return;
+    final double w = MediaQuery.of(context).size.width;
+    int crossCount;
+    double cellH;
+    double spacing;
+    int targetIndex;
+    if (_videoGridMode) {
+      final visible = _query.isEmpty
+          ? _videos
+          : _videos
+              .where((e) => e.name.toLowerCase().contains(_query.toLowerCase()))
+              .toList();
+      final idx = visible.indexWhere((e) => e.id == itemId);
+      if (idx < 0) return;
+      crossCount = 3;
+      spacing = 6;
+      final cellW = (w - 20 - 12) / 3;
+      cellH = cellW / 0.62;
+      targetIndex = idx;
+    } else {
+      final allItems = _items.where((e) {
+        if (_query.isEmpty) return true;
+        return e.name.toLowerCase().contains(_query.toLowerCase());
+      }).toList();
+      final folders = allItems.where((e) => e.isFolder).toList();
+      final videos = allItems.where((e) => !e.isFolder).toList();
+      final idx = videos.indexWhere((e) => e.id == itemId);
+      if (idx < 0) return;
+      crossCount = 2;
+      spacing = 10;
+      final cellW = (w - 24 - 20) / 2;
+      cellH = cellW / 1.1;
+      targetIndex = folders.length + idx;
+    }
+    final row = targetIndex ~/ crossCount;
+    final offset = row * (cellH + spacing);
+    final maxExtent = _gridScroll.position.maxScrollExtent;
+    _gridScroll.jumpTo(offset > maxExtent ? maxExtent : offset);
   }
 
   Future<void> _openVideoPlayer(EmbyMediaItem video) async {
@@ -621,11 +797,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               ),
             ],
             // [QBSenHook] v8.4: 恢复抖音刷片按钮——一键进入当前分类/文件夹的刷片模式
+            // [QBSenHook] v8.5: 长按列出播放记录，选择后恢复到上次列表并续刷
             IconButton(
               icon: Icon(Icons.smart_display_rounded,
                   color: iconColor, size: 22),
-              tooltip: '在此分类/文件夹内上下滑播放',
+              tooltip: '点击：本目录刷片；长按：播放记录',
               onPressed: () => _openSwipeInCurrentFolder(),
+              onLongPress: _showPlayRecords,
             ),
             // [QBSenHook] v7.6: 夜间模式切换 + 设置（原顶部悬浮控件并入本页）
             IconButton(
@@ -800,6 +978,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
         onRefresh: _refresh,
         color: isDark ? Colors.white : Colors.black54,
         child: GridView.builder(
+          controller: _gridScroll,
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(10),
           gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -834,6 +1013,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       onRefresh: _refresh,
       color: isDark ? Colors.white : Colors.black54,
       child: GridView.builder(
+        controller: _gridScroll,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(12),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -1048,6 +1228,24 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               alignment: Alignment.center,
               child: const Icon(Icons.movie_rounded,
                   color: Colors.white24, size: 48),
+            ),
+          // [QBSenHook] v8.5: 视频右上角显示文件大小
+          if (video.size != null && video.size! > 0)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  _formatSize(video.size!),
+                  style: const TextStyle(color: Colors.white, fontSize: 10),
+                ),
+              ),
             ),
           Container(
             decoration: BoxDecoration(

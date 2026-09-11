@@ -582,15 +582,20 @@ void main(List<String> args) async {
           ChangeNotifierProvider(create: (_) => SettingsProvider()),
           ChangeNotifierProvider(create: (_) => VideoPlayerState()),
           ChangeNotifierProvider(
-            create: (context) => ThemeNotifier(
-              initialThemeMode: initialThemeMode,
-              initialBackgroundImageMode: globals.backgroundImageMode,
-              initialCustomBackgroundPath: globals.customBackgroundPath,
-              initialAnimeDetailDisplayMode: savedDetailMode,
-              initialBackgroundImageRenderMode: savedBackgroundRenderMode,
-              initialBackgroundImageOverlayOpacity:
-                  savedBackgroundOverlayOpacity,
-            ),
+            // [QBSenHook] v8.5: 创建后启动按时间自动日夜切换定时器
+            create: (context) {
+              final tn = ThemeNotifier(
+                initialThemeMode: initialThemeMode,
+                initialBackgroundImageMode: globals.backgroundImageMode,
+                initialCustomBackgroundPath: globals.customBackgroundPath,
+                initialAnimeDetailDisplayMode: savedDetailMode,
+                initialBackgroundImageRenderMode: savedBackgroundRenderMode,
+                initialBackgroundImageOverlayOpacity:
+                    savedBackgroundOverlayOpacity,
+              );
+              tn.startAutoTheme();
+              return tn;
+            },
           ),
           ChangeNotifierProvider(create: (_) => TabChangeNotifier()),
           // 统一使用 ServiceProvider 中的全局实例，避免重复初始化与事件风暴
