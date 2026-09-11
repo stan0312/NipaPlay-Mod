@@ -1172,18 +1172,20 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                           shape: BoxShape.circle,
                         ),
                         child: buffering
+                            // [QBSenHook] v8.8b: 缓冲=转圈缓冲图标（无文字）
                             ? const SizedBox(
-                                width: 20,
-                                height: 20,
+                                width: 22,
+                                height: 22,
                                 child: CircularProgressIndicator(
-                                  strokeWidth: 2.4,
+                                  strokeWidth: 2.6,
                                   color: Colors.white70,
                                 ),
                               )
+                            // [QBSenHook] v8.8b: 图标反映当前状态：播放=播放图标，暂停=暂停图标
                             : Icon(
                                 playing
-                                    ? Icons.pause_rounded
-                                    : Icons.play_arrow_rounded,
+                                    ? Icons.play_arrow_rounded
+                                    : Icons.pause_rounded,
                                 color: Colors.white.withValues(alpha: 0.85),
                                 size: 26,
                               ),
