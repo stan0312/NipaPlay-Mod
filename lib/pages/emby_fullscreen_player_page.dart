@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:nipaplay/pages/emby_track_menu.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+import 'package:nipaplay/themes/cupertino/widgets/player_menu/cupertino_audio_tracks_pane.dart';
+import 'package:nipaplay/themes/cupertino/widgets/player_menu/cupertino_subtitle_tracks_pane.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/utils/screen_orientation_manager.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
@@ -590,6 +592,35 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
     }
   }
 
+  /// [QBSenHook] v8.3: 音轨菜单接通 Emby 服务端接口
+  /// （转码时列出 Emby PlaybackInfo MediaStreams 的服务端音轨，
+  ///  切换走 reloadCurrentEmbyStream 并持久化偏好；直连时回退本地轨）。
+  Future<void> _showEmbyAudioTracks(
+    BuildContext context,
+    VideoPlayerState videoState,
+  ) {
+    return CupertinoBottomSheet.show<void>(
+      context: context,
+      title: '音轨',
+      heightRatio: 0.6,
+      child: CupertinoAudioTracksPane(videoState: videoState),
+    );
+  }
+
+  /// [QBSenHook] v8.3: 字幕菜单接通 Emby 服务端接口
+  /// （内嵌字幕 + Emby 外挂字幕下载/切换/样式）。
+  Future<void> _showEmbySubtitleTracks(
+    BuildContext context,
+    VideoPlayerState videoState,
+  ) {
+    return CupertinoBottomSheet.show<void>(
+      context: context,
+      title: '字幕',
+      heightRatio: 0.7,
+      child: CupertinoSubtitleTracksPane(videoState: videoState),
+    );
+  }
+
   Widget _buildCloseButton() {
     return IconButton(
       icon: const Icon(Icons.arrow_back, color: Colors.white, size: 26),
@@ -710,10 +741,10 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
         _miniChip(_orientationLabel(), _cycleOrientation),
         const SizedBox(width: 6),
         _miniIcon(Icons.audiotrack_rounded,
-            () => EmbyTrackMenu.showAudioTracks(context, videoState)),
+            () => _showEmbyAudioTracks(context, videoState)),
         const SizedBox(width: 4),
         _miniIcon(Icons.subtitles_rounded,
-            () => EmbyTrackMenu.showSubtitleTracks(context, videoState)),
+            () => _showEmbySubtitleTracks(context, videoState)),
       ],
     );
   }

@@ -369,10 +369,11 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     }
   }
 
-  void _openSwipeInCurrentFolder() {
+  void _openSwipeInCurrentFolder({String? initialItemId}) {
     if (_currentId == null) return;
     // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
-    // [QBSenHook] v7.8: 传入当前排序设置，抖音模式与外部排序一致
+    // [QBSenHook] v7.8: 传入当前排序设置，刷片模式与外部排序一致
+    // [QBSenHook] v8.3: 单击视频默认进入刷片模式，initialItemId 定位到点击的视频
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => EmbySwipePage(
@@ -381,6 +382,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
           parentName: _currentName,
           initialSort: _sort,
           initialSortAscending: _sortAscending,
+          initialItemId: initialItemId,
         ),
       ),
     );
@@ -609,13 +611,6 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
                   _load();
                 },
               ),
-              // 抖音刷片
-              IconButton(
-                icon: Icon(Icons.smart_display_rounded,
-                    color: iconColor, size: 22),
-                tooltip: '在此分类/文件夹内上下滑播放',
-                onPressed: _openSwipeInCurrentFolder,
-              ),
             ],
             // [QBSenHook] v7.6: 夜间模式切换 + 设置（原顶部悬浮控件并入本页）
             IconButton(
@@ -745,7 +740,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
             ),
             itemCount: _searchResults.length,
             itemBuilder: (context, index) =>
-                _buildVideoCard(_searchResults[index]),
+                _buildVideoCard(_searchResults[index], fromSearch: true),
           ),
         );
       }
@@ -1014,14 +1009,19 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     return u < 0 ? '$bytes B' : '${v.toStringAsFixed(1)} ${units[u]}';
   }
 
-  Widget _buildVideoCard(EmbyMediaItem video) {
+  Widget _buildVideoCard(EmbyMediaItem video, {bool fromSearch = false}) {
     final service = EmbyService.instance;
     final imageUri = video.imagePrimaryTag != null
         ? Uri.tryParse(
             service.getImageUrl(video.id, tag: video.imagePrimaryTag))
         : null;
     return _Card(
-      onTap: () => _openVideoPlayer(video),
+      // [QBSenHook] v8.3: 分类/文件夹内单击进入刷片模式（从该视频开始），长按 1.5s 进入全屏；
+      // 搜索结果保持单击直接全屏（v8.0 既定行为）
+      onTap: fromSearch
+          ? () => _openVideoPlayer(video)
+          : () => _openSwipeInCurrentFolder(initialItemId: video.id),
+      onLongPress: () => _openVideoPlayer(video),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -1089,18 +1089,45 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
 class _Card extends StatelessWidget {
   final Widget child;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
-  const _Card({required this.child, required this.onTap});
+  const _Card({required this.child, required this.onTap, this.onLongPress});
 
   @override
   Widget build(BuildContext context) {
+    final VoidCallback? longPress = onLongPress;
+    final Widget content = ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox.expand(child: child),
+    );
+    if (longPress != null) {
+      // [QBSenHook] v8.3: 长按 1.5s 才触发（LongPressGestureRecognizer 自定义 deadline）
+      return RawGestureDetector(
+        gestures: <Type, GestureRecognizerFactory>{
+          LongPressGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+            () => LongPressGestureRecognizer(
+              deadline: const Duration(milliseconds: 1500),
+            ),
+            (LongPressGestureRecognizer instance) {
+              instance.onLongPress = longPress;
+            },
+          ),
+          TapGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+            () => TapGestureRecognizer(),
+            (TapGestureRecognizer instance) {
+              instance.onTap = onTap;
+            },
+          ),
+        },
+        child: content,
+      );
+    }
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: SizedBox.expand(child: child),
-      ),
+      child: content,
     );
   }
 }
