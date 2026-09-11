@@ -656,13 +656,14 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
             if (onlyVideo)
               _actionBtn(Icons.done_all_rounded, '已播放',
                   () => _togglePlayedSelected(selectedItems), iconColor),
-            if (onlyOne)
-              _actionBtn(Icons.info_outline_rounded, '信息',
-                  () => _showItemInfo(selectedItems.first), iconColor),
             if (onlyOne && onlyVideo &&
                 (selectedItems.first.parentId?.isNotEmpty ?? false))
               _actionBtn(Icons.my_location_rounded, '定位到所在文件夹',
                   () => _locateVideo(selectedItems.first), iconColor),
+            // [QBSenHook] v8.6b: 信息按钮放在最后面
+            if (onlyOne)
+              _actionBtn(Icons.info_outline_rounded, '信息',
+                  () => _showItemInfo(selectedItems.first), iconColor),
             const SizedBox(width: 8),
           ],
         ),
@@ -729,9 +730,23 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 
   Future<void> _toggleFavoriteSelected(List<EmbyMediaItem> items) async {
+    // [QBSenHook] v8.6b: 收藏视频=收藏该视频；收藏文件夹=收藏文件夹内的所有视频（递归拉取）
     for (final item in items) {
-      await EmbyService.instance
-          .toggleFavorite(item.id, isFavorite: item.userData?.isFavorite ?? false);
+      if (item.isFolder) {
+        final videos = await EmbyService.instance.getSwipeItems(
+          libraryId: item.id,
+          sortBy: _sort.name,
+          sortAscending: _sortAscending,
+          limit: 0,
+        );
+        for (final v in videos) {
+          await EmbyService.instance
+              .toggleFavorite(v.id, isFavorite: v.userData?.isFavorite ?? false);
+        }
+      } else {
+        await EmbyService.instance
+            .toggleFavorite(item.id, isFavorite: item.userData?.isFavorite ?? false);
+      }
     }
     if (!mounted) return;
     setState(() {
