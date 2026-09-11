@@ -625,7 +625,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     );
   }
 
-  Widget _buildSelectionActionBar() {
+  PreferredSizeWidget _buildSelectionActionBar() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final iconColor = isDark ? Colors.white : Colors.black87;
     final selectedItems = _allVisibleItems()
