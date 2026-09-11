@@ -1202,11 +1202,11 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
                 onPressed: _toggleSelectionMode,
               ),
           ],
+          // [QBSenHook] v8.6: 选择模式操作排（删除/收藏/已播放/信息/定位）
+          bottom: _selectionMode && _selectedIds.isNotEmpty
+              ? _buildSelectionActionBar()
+              : null,
         ),
-        // [QBSenHook] v8.6: 选择模式操作排（删除/收藏/已播放/信息/定位）
-        bottom: _selectionMode && _selectedIds.isNotEmpty
-            ? _buildSelectionActionBar()
-            : null,
         body: _buildBody(emptyColor, isDark),
       ),
     );
