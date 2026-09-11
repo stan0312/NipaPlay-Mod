@@ -1260,7 +1260,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       // [QBSenHook] v8.8: 从暂停恢复播放后重新计时，3 秒后自动隐藏控件
       if (_controlsVisible) {
         _controlsTimer?.cancel();
-        _controlsTimer = Timer(const Duration(seconds: 3), () {
+        _controlsTimer = Timer(const Duration(seconds: 2), () {
           if (mounted) setState(() => _controlsVisible = false);
         });
       }
@@ -1276,7 +1276,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     final v = Provider.of<VideoPlayerState>(context, listen: false);
     final playing = v.hasVideo && v.status == PlayerStatus.playing;
     if (!playing) return;
-    _controlsTimer = Timer(const Duration(seconds: 3), () {
+    _controlsTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _controlsVisible = false);
     });
   }

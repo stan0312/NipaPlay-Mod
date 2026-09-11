@@ -27,6 +27,7 @@ class EmbyFolderBrowserPage extends StatefulWidget {
     this.rootId,
     this.rootName,
     this.isRootHome = false,
+    this.favoritesOnly = false,
   });
 
   /// 根目录 id；为空则显示所有媒体库
@@ -35,6 +36,9 @@ class EmbyFolderBrowserPage extends StatefulWidget {
 
   /// [QBSenHook] v7.9: 作为应用初始首页（Tab 内嵌）时置 true，左滑/返回仅刷新不退出
   final bool isRootHome;
+
+  /// [QBSenHook] v8.9: 收藏页模式——像媒体库一样网格陈列收藏的视频（Emby 原生 IsFavorite）
+  final bool favoritesOnly;
 
   @override
   State<EmbyFolderBrowserPage> createState() => _EmbyFolderBrowserPageState();
@@ -80,6 +84,10 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   bool _selectionMode = false;
   final Set<String> _selectedIds = {};
 
+  // [QBSenHook] v8.9: 收藏页模式（媒体库样式陈列收藏视频）
+  late bool _favoritesOnly;
+  // [QBSenHook] v8.9: 文件夹逐级进入时的滚动位置栈（返回时恢复到打开的位置）
+  final List<double> _scrollStack = [];
   // [QBSenHook] v7.9: 左缘右滑返回手势起点
   double? _edgeStartX;
   // [QBSenHook] v8.3: 横向拖动累计位移（慢滑位移兜底触发返回）
@@ -93,8 +101,10 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     super.initState();
     _currentId = widget.rootId;
     _currentName = widget.rootName;
-    // [QBSenHook] v7.5.5: 指定分类进入时默认视频陈列
-    _videoGridMode = widget.rootId != null;
+    // [QBSenHook] v8.9: 收藏页模式
+    _favoritesOnly = widget.favoritesOnly;
+    // [QBSenHook] v7.5.5: 指定分类进入时默认视频陈列；收藏页固定视频陈列
+    _videoGridMode = widget.rootId != null || _favoritesOnly;
     // [QBSenHook] v8.0: 监听 App 生命周期（回前台时若首页仍空则自动刷新）
     WidgetsBinding.instance.addObserver(this);
     // [QBSenHook] v7.9: 初始页进入自动刷新媒体库列表
@@ -217,6 +227,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
           _videos = [];
           _loading = false;
         });
+      } else if (_favoritesOnly) {
+        // [QBSenHook] v8.9: 收藏页——全局收藏视频（Emby 原生 IsFavorite，像媒体库一样陈列）
+        await _loadFavorites();
       } else if (_videoGridMode) {
         // [QBSenHook] v7.5.5: 分类视频陈列（3 个一排）
         await _loadVideoGrid();
@@ -251,6 +264,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       _query = '';
       _searchResults = [];
     }
+    // [QBSenHook] v8.9: 进入子文件夹前保存当前列表滚动位置
+    if (_gridScroll.hasClients) _scrollStack.add(_gridScroll.offset);
     setState(() {
       _path.add(_FolderEntry(folder.id, folder.name));
       _currentId = folder.id;
@@ -260,6 +275,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 
   void _enterLibrary(EmbyLibrary lib) {
+    // [QBSenHook] v8.9: 进入分类前保存当前列表滚动位置
+    if (_gridScroll.hasClients) _scrollStack.add(_gridScroll.offset);
     setState(() {
       _path.clear();
       _path.add(_FolderEntry(lib.id, lib.name));
@@ -273,6 +290,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
 
   void _goUp() {
     if (_path.isEmpty) {
+      // [QBSenHook] v8.9: 收藏页返回上一页
+      if (_favoritesOnly) {
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+        return;
+      }
       // [QBSenHook] v7.6: 作为初始界面时根目录不再 pop（避免退出/黑屏），仅刷新
       if (widget.rootId != null) {
         setState(() {
@@ -288,6 +312,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       }
       return;
     }
+    // [QBSenHook] v8.9: 取出进入本层前保存的滚动位置，返回后恢复
+    final restore = _scrollStack.isNotEmpty ? _scrollStack.removeLast() : 0.0;
     setState(() {
       _path.removeLast();
       if (_path.isEmpty) {
@@ -298,26 +324,33 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
         _currentName = _path.last.name;
       }
     });
-    _load();
+    _load().then((_) => _restoreScroll(restore));
+  }
+
+  /// [QBSenHook] v8.9: 数据加载完成后恢复滚动位置（clamp 到有效范围）。
+  void _restoreScroll(double offset) {
+    if (!mounted || offset <= 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_gridScroll.hasClients) return;
+      final max = _gridScroll.position.maxScrollExtent;
+      _gridScroll.jumpTo(offset > max ? max : offset);
+    });
   }
 
   // [QBSenHook] v8.0: 首页搜索防抖 300ms，触发全局搜索
+  // [QBSenHook] v8.9: 任何页面搜索都全局递归搜索（所有媒体库的文件+文件夹）
   void _onSearchChanged(String v) {
     setState(() => _query = v.trim());
     _searchTimer?.cancel();
     if (_query.isEmpty) {
-      if (_currentId == null) {
-        setState(() {
-          _searchResults = [];
-          _searchLoading = false;
-        });
-      }
+      setState(() {
+        _searchResults = [];
+        _searchLoading = false;
+      });
       return;
     }
     _searchTimer = Timer(const Duration(milliseconds: 300), () {
-      if (_currentId == null) {
-        _runGlobalSearch();
-      }
+      _runGlobalSearch();
     });
   }
 
@@ -398,11 +431,51 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     }
   }
 
+  /// [QBSenHook] v8.9: 收藏页加载（服务端排序，全量）。
+  Future<void> _loadFavorites() async {
+    try {
+      final items = await EmbyService.instance.getSwipeItems(
+        favoritesOnly: true,
+        sortBy: _sort.name,
+        sortAscending: _sortAscending,
+        limit: 0, // 全量
+      );
+      if (!mounted) return;
+      setState(() {
+        _videos = items;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = '$e';
+        _loading = false;
+      });
+    }
+  }
+
   void _openSwipeInCurrentFolder({String? initialItemId}) {
     if (_currentId == null) return;
     // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
     // [QBSenHook] v7.8: 传入当前排序设置，刷片模式与外部排序一致
     // [QBSenHook] v8.3: 单击视频默认进入刷片模式，initialItemId 定位到点击的视频
+    if (_favoritesOnly) {
+      // [QBSenHook] v8.9: 收藏页刷片——播放的是收藏列表，排序一致
+      Navigator.of(context).push(
+        CupertinoPageRoute<void>(
+          builder: (_) => EmbySwipePage(
+            title: '我的收藏 刷片',
+            favoritesOnly: true,
+            parentName: '我的收藏',
+            initialSort: _sort,
+            initialSortAscending: _sortAscending,
+            initialItemId: initialItemId,
+            initialFolderMode: false,
+          ),
+        ),
+      );
+      return;
+    }
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => EmbySwipePage(
@@ -905,14 +978,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 
   // [QBSenHook] v8.6: 初始页"我的收藏"入口
+  // [QBSenHook] v8.9: 改为像媒体库一样陈列收藏（网格），点击视频才进入刷片
   void _openFavorites() {
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
-        builder: (_) => EmbySwipePage(
-          title: '我的收藏',
+        builder: (_) => EmbyFolderBrowserPage(
           favoritesOnly: true,
-          initialSort: _sort,
-          initialSortAscending: _sortAscending,
         ),
       ),
     );
@@ -993,7 +1064,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   Widget build(BuildContext context) {
     final isDark = context.watch<ThemeNotifier>().themeMode != ThemeMode.light;
     // [QBSenHook] v7.9: 初始页（第一页）无返回键
-    final isRootHome = widget.isRootHome || (widget.rootId == null && _path.isEmpty);
+    // [QBSenHook] v8.9: 收藏页不算首页，保留返回键
+    final isRootHome = !_favoritesOnly &&
+        (widget.isRootHome || (widget.rootId == null && _path.isEmpty));
     // 次级文字/图标色（随主题反色，白天模式可读）
     final iconColor = isDark ? Colors.white : Colors.black87;
     final iconSubColor = isDark ? Colors.white70 : Colors.black54;
@@ -1080,13 +1153,14 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
           ),
           actions: [
             // [QBSenHook] v8.6: 初始页右上角"我的收藏"入口（Emby 原生收藏）
-            if (_currentId == null)
+            // [QBSenHook] v8.9: 收藏页自身不显示收藏入口
+            if (_currentId == null && !_favoritesOnly)
               IconButton(
                 icon: Icon(Icons.favorite_rounded, color: iconColor, size: 22),
                 tooltip: '我的收藏',
                 onPressed: _openFavorites,
               ),
-            if (_currentId != null) ...[
+            if (_currentId != null || _favoritesOnly) ...[
               // [QBSenHook] v7.9: 排序胶囊按钮（类型图标+名称+升降序箭头，更美观）
               // [QBSenHook] v8.0: 多功能——单击循环切排序方式；右滑=新到旧、左滑=旧到新
               GestureDetector(
@@ -1142,20 +1216,22 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
                 ),
               ),
               // 文件夹模式切换（视频陈列 <-> 文件夹）
-              IconButton(
-                icon: Icon(
-                  _videoGridMode
-                      ? Icons.folder_open_rounded
-                      : Icons.grid_view_rounded,
-                  color: iconColor,
-                  size: 22,
+              // [QBSenHook] v8.9: 收藏页为扁平收藏列表，不显示文件夹切换
+              if (!_favoritesOnly)
+                IconButton(
+                  icon: Icon(
+                    _videoGridMode
+                        ? Icons.folder_open_rounded
+                        : Icons.grid_view_rounded,
+                    color: iconColor,
+                    size: 22,
+                  ),
+                  tooltip: _videoGridMode ? '切换到文件夹模式' : '切换到视频陈列',
+                  onPressed: () {
+                    setState(() => _videoGridMode = !_videoGridMode);
+                    _load();
+                  },
                 ),
-                tooltip: _videoGridMode ? '切换到文件夹模式' : '切换到视频陈列',
-                onPressed: () {
-                  setState(() => _videoGridMode = !_videoGridMode);
-                  _load();
-                },
-              ),
             ],
             // [QBSenHook] v8.4: 恢复抖音刷片按钮——一键进入当前分类/文件夹的刷片模式
             // [QBSenHook] v8.5: 长按列出播放记录，选择后恢复到上次列表并续刷
@@ -1268,7 +1344,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       );
     }
 
-    if (_currentId == null && _rootLibraries.isEmpty) {
+    if (_currentId == null && !_favoritesOnly && _rootLibraries.isEmpty) {
       return Center(
         child: Text(
           '没有可浏览的媒体库',
@@ -1277,9 +1353,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       );
     }
 
-    if (_currentId == null) {
-      // [QBSenHook] v8.0: 首页搜索词非空 -> 全局搜索结果（点击直接全屏播放）
-      if (_query.isNotEmpty) {
+    // [QBSenHook] v8.9: 任何页面搜索词非空 -> 全局搜索结果优先展示（含文件夹卡可点进）
+    if (_query.isNotEmpty) {
         if (_searchLoading) {
           return const Center(
             child: CircularProgressIndicator(color: Colors.white54),
@@ -1338,6 +1413,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
         ),
       );
     }
+
+    // [QBSenHook] v8.9: 分类/文件夹页搜索时——显示全局搜索结果（回到收藏/分类网格需清空搜索词）
+    if (_query.isNotEmpty) {
 
     // [QBSenHook] v7.5.5: 分类视频陈列模式：3 个一排，本地搜索过滤
     if (_videoGridMode) {
@@ -1501,6 +1579,17 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       onTap: _selectionMode
           ? () => _toggleSelect(folder)
           : () => _openFolder(folder),
+      // [QBSenHook] v8.9: 长按文件夹 1 秒（同视频长按动画）——
+      // 非选择模式：进入选择模式并选中该文件夹；
+      // 选择模式：再次长按退出选择模式
+      onLongPress: _selectionMode
+          ? _toggleSelectionMode
+          : () {
+              setState(() {
+                _selectionMode = true;
+                _selectedIds.add(folder.id);
+              });
+            },
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -1531,6 +1620,24 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               left: 6,
               top: 6,
               child: _buildSelectionBadge(folder),
+            ),
+          // [QBSenHook] v8.9: 左上角文件夹视频数量（>=2 才显示，1 个不显示）
+          if (!_selectionMode && summary != null && summary.videoCount >= 2)
+            Positioned(
+              left: 6,
+              top: 6,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${summary.videoCount}',
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                ),
+              ),
             ),
           // [QBSenHook] v8.0: 右上角文件夹大小标注
           if (sizeLabel != null)

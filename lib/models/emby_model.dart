@@ -457,11 +457,14 @@ class FolderSummary {
   final int totalSizeBytes;
   final String? thumbnailItemId;
   final String? thumbnailTag;
+  // [QBSenHook] v8.9: 文件夹递归视频数量（左上角角标，>=2 才显示）
+  final int videoCount;
 
   const FolderSummary({
     this.totalSizeBytes = 0,
     this.thumbnailItemId,
     this.thumbnailTag,
+    this.videoCount = 0,
   });
 }
 

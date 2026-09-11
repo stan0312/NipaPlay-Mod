@@ -974,6 +974,7 @@ class EmbyService extends MediaServerServiceBase
     }
     try {
       var totalSize = 0;
+      var videoCount = 0; // [QBSenHook] v8.9: 递归视频数量
       String? thumbItemId;
       String? thumbTag;
       var startIndex = 0;
@@ -984,6 +985,7 @@ class EmbyService extends MediaServerServiceBase
         final data = json.decode(response.body);
         final items = data['Items'];
         if (items is! List || items.isEmpty) break;
+        videoCount += items.length;
         for (final e in items) {
           if (e is! Map) continue;
           final sz = e['Size'];
@@ -1006,6 +1008,7 @@ class EmbyService extends MediaServerServiceBase
         totalSizeBytes: totalSize,
         thumbnailItemId: thumbItemId,
         thumbnailTag: thumbTag,
+        videoCount: videoCount,
       );
     } catch (e) {
       DebugLogService().addLog('EmbyService: 文件夹递归摘要异常: $e');
