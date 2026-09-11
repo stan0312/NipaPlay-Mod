@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart'; // [QBSenHook] v8.3: LongPressGestureRecognizer/TapGestureRecognizer
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
 import 'package:nipaplay/models/playable_item.dart';
