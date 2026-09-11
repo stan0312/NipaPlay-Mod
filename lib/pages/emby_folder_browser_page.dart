@@ -1243,7 +1243,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  _formatSize(video.size!),
+                  _formatBytes(video.size!) ?? '',
                   style: const TextStyle(color: Colors.white, fontSize: 10),
                 ),
               ),
