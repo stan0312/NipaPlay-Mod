@@ -246,6 +246,11 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   void _openFolder(EmbyMediaItem folder) {
     // [QBSenHook] v7.5.3: 文件夹模式真实层级浏览——
     // 点文件夹继续进入子文件夹（一层层下钻），点视频才进抖音式刷片播放。
+    // [QBSenHook] v8.7: 从搜索结果点文件夹进入时，退出搜索态
+    if (_query.isNotEmpty || _searchResults.isNotEmpty) {
+      _query = '';
+      _searchResults = [];
+    }
     setState(() {
       _path.add(_FolderEntry(folder.id, folder.name));
       _currentId = folder.id;
@@ -324,11 +329,12 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     try {
       final results = await EmbyService.instance.searchMediaItems(
         term,
-        includeItemTypes: const ['Movie', 'Episode', 'Video'],
+        // [QBSenHook] v8.7: 搜索包含文件夹（可点进文件夹浏览）
+        includeItemTypes: const ['Movie', 'Episode', 'Video', 'Folder'],
       );
       if (!mounted || _query.trim() != term) return;
       setState(() {
-        _searchResults = results.where((e) => !e.isFolder).toList();
+        _searchResults = results;
         _searchLoading = false;
       });
     } catch (e) {
@@ -941,7 +947,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       if (!mounted) return;
       final playable = PlayableItem(
         videoPath: historyItem.filePath,
-        title: video.name,
+        // [QBSenHook] v8.7: 标题/全屏页文件名用真实文件名
+        title: video.displayName,
         historyItem: historyItem,
         playbackSession: session,
       );
@@ -953,6 +960,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
         historyItem: historyItem,
         playbackSession: session,
         playbackDetailContext: detailContext,
+        // [QBSenHook] v8.7: currentMediaKey=真实文件名（全屏页顶部显示）
+        mediaKey: video.displayName,
       );
       if (!mounted) return;
       final initError = videoState.error;
@@ -1295,8 +1304,14 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               childAspectRatio: 0.62,
             ),
             itemCount: _searchResults.length,
-            itemBuilder: (context, index) =>
-                _buildVideoCard(_searchResults[index], fromSearch: true),
+            itemBuilder: (context, index) {
+              // [QBSenHook] v8.7: 搜索结果中的文件夹以文件夹卡展示，点击进入浏览
+              final item = _searchResults[index];
+              if (item.isFolder) {
+                return _buildFolderCard(item);
+              }
+              return _buildVideoCard(item, fromSearch: true);
+            },
           ),
         );
       }

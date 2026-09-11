@@ -46,6 +46,17 @@ class EmbyMediaItem {
   final int? width; // 视频像素宽度（Fields=Width）
   final int? height; // 视频像素高度（Fields=Height）
   final String? parentId; // [QBSenHook] v8.6: 父级目录 id（定位到所在文件夹）
+  final String? path; // [QBSenHook] v8.7: 文件真实路径（Fields=Path，用于显示真实文件名）
+
+  /// [QBSenHook] v8.7: 真实文件名 = 路径最后一段（含扩展名）；无路径时回退元数据名
+  String get displayName {
+    final p = path;
+    if (p != null && p.isNotEmpty) {
+      final base = p.replaceAll('\\', '/').split('/').last;
+      if (base.isNotEmpty) return base;
+    }
+    return name;
+  }
   
   EmbyMediaItem({
     required this.id,
@@ -65,6 +76,7 @@ class EmbyMediaItem {
     this.width,
     this.height,
     this.parentId,
+    this.path,
   });
   
   factory EmbyMediaItem.fromJson(Map<String, dynamic> json) {
@@ -91,6 +103,7 @@ class EmbyMediaItem {
       width: json['Width'] is num ? (json['Width'] as num).toInt() : null,
       height: json['Height'] is num ? (json['Height'] as num).toInt() : null,
       parentId: json['ParentId']?.toString(),
+      path: json['Path']?.toString(),
     );
   }
 

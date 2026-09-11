@@ -438,6 +438,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         playbackDetailContext: detailContext,
         // [QBSenHook] v8.4: 刷片模式不续播——强制从头播放
         startFromBeginning: true,
+        // [QBSenHook] v8.7: currentMediaKey=真实文件名（全屏页顶部显示）
+        mediaKey: item.displayName,
       );
       if (!mounted || gen != _playbackGeneration) return;
       // [QBSenHook] v7.3: initializePlayer 内部失败会置 error 而非抛异常，
@@ -1149,7 +1151,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                item.name,
+                // [QBSenHook] v8.7: 顶部显示真实文件名（路径最后一段），无路径回退元数据名
+                item.displayName,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(

@@ -858,7 +858,7 @@ class EmbyService extends MediaServerServiceBase
       String path;
       if (playlistId != null) {
         path =
-            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId$sortQuery';
+            '/emby/Playlists/$playlistId/Items?UserId=$_userId&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path$sortQuery';
       } else {
         final filter = favoritesOnly ? '&Filters=IsFavorite' : '';
         final parent = libraryId != null && libraryId.isNotEmpty
@@ -867,7 +867,7 @@ class EmbyService extends MediaServerServiceBase
         // 直接查可播放项（不含 Series；Recursive=true 会把剧集展开成 Episode）
         const includeTypes = 'Movie,Episode,Video';
         path =
-            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId$sortQuery';
+            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path$sortQuery';
       }
       // [QBSenHook] v8.0: 全量加载——分页循环拉取直到 TotalRecordCount（limit<=0 表示全量）
       final pageSize = limit > 0 ? limit : 500;
@@ -937,7 +937,7 @@ class EmbyService extends MediaServerServiceBase
       var startIndex = 0;
       while (true) {
         final response = await _makeAuthenticatedRequest(
-            '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId&StartIndex=$startIndex&Limit=300');
+            '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path&StartIndex=$startIndex&Limit=300');
         if (response.statusCode != 200) {
           return [];
         }
@@ -2088,7 +2088,7 @@ class EmbyService extends MediaServerServiceBase
         'Recursive': 'true',
         'Limit': limit.toString(),
         'Fields':
-            'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear,UserData,Size,ParentId',
+            'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear,UserData,Size,ParentId,Path',
       };
 
       // 如果指定了父级媒体库，则只在该媒体库中搜索
