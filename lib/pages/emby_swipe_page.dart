@@ -300,9 +300,15 @@ class _EmbySwipePageState extends State<EmbySwipePage> {
         _loading = false;
         _currentIndex = startIndex;
       });
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(startIndex);
-      }
+      // [QBSenHook] v8.4b: PageView 首次 build 后才跳转——setState 后立即
+      // 检查 hasClients 仍为 false（PageView 尚未挂载），jumpToPage 会静默
+      // 失败，导致画面停在第一个视频而声音在播点击的视频。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(startIndex);
+        }
+      });
       _loadSourceOptions();
       _savePreferences();
       if (items.isNotEmpty && startIndex < items.length) {

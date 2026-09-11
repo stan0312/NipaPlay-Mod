@@ -620,6 +620,13 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
                 },
               ),
             ],
+            // [QBSenHook] v8.4: 恢复抖音刷片按钮——一键进入当前分类/文件夹的刷片模式
+            IconButton(
+              icon: Icon(Icons.smart_display_rounded,
+                  color: iconColor, size: 22),
+              tooltip: '在此分类/文件夹内上下滑播放',
+              onPressed: () => _openSwipeInCurrentFolder(),
+            ),
             // [QBSenHook] v7.6: 夜间模式切换 + 设置（原顶部悬浮控件并入本页）
             IconButton(
               icon: Icon(
