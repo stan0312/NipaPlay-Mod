@@ -433,6 +433,8 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
     final bool dark = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet<void>(
       context: context,
+      // [QBSenHook] v8.8: 播放记录弹窗支持下滑关闭
+      enableDrag: true,
       backgroundColor: dark ? const Color(0xFF1E1E1E) : Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -445,7 +447,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
               child: Text(
-                '播放记录（点击恢复上次刷片）',
+                '播放记录（点击恢复刷片）',
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.bold,
@@ -473,7 +475,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
                       '${r.folderMode ? '文件夹' : '媒体库'} · '
                       '${_sortLabel(r.sortName)}'
                       '${r.sortAscending ? '（升序）' : '（降序）'} · '
-                      '上次：${r.lastItemName}',
+                      '${r.lastItemName}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12),

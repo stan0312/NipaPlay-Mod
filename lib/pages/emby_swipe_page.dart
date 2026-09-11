@@ -166,17 +166,24 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     _controlsTimer?.cancel();
     // [QBSenHook] v7.5.3: 退出刷片页立即停止播放，避免"退出后仍有声音"
     _playbackGeneration++;
+    // [QBSenHook] v8.8: 修复"返回后偶发横屏"——若切换视频的 initializePlayer 仍在进行，
+    // 其完成时的 setVideoPlayingOrientation 会按 forcePortraitPlayback 决定方向；
+    // 因此在 stop 完全结束前保持强制竖屏，stop 完成后释放标志并确保竖屏。
+    ScreenOrientationManager.instance.forcePortraitPlayback = true;
     try {
-      unawaited(_videoState.stop());
+      unawaited(_videoState.stop().whenComplete(() {
+        ScreenOrientationManager.instance.forcePortraitPlayback = false;
+        SystemChrome.setPreferredOrientations(const [
+          DeviceOrientation.portraitUp,
+        ]);
+      }));
     } catch (e) {
       debugPrint('退出刷片页停止播放失败: $e');
+      ScreenOrientationManager.instance.forcePortraitPlayback = false;
+      SystemChrome.setPreferredOrientations(const [
+        DeviceOrientation.portraitUp,
+      ]);
     }
-    // [QBSenHook] v7.5.1: 离开刷片页恢复竖屏（全局默认竖屏）
-    SystemChrome.setPreferredOrientations(const [
-      DeviceOrientation.portraitUp,
-    ]);
-    // [QBSenHook] v7.5.4: 释放强制竖屏标志（全屏播放器页按视频尺寸选方向）
-    ScreenOrientationManager.instance.forcePortraitPlayback = false;
     _pageController.dispose();
     _playingItemId = null;
     super.dispose();
@@ -1001,7 +1008,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       // [QBSenHook] v8.0: 单击唤出底部细进度条+时间，双击暂停/播放
-      onTap: _showControlPanel,
+      // [QBSenHook] v8.8: 单击在 显示/隐藏 间切换
+      onTap: _toggleControlPanel,
       onDoubleTap: _togglePlayPause,
       onHorizontalDragStart: _onHorizontalDragStart,
       onHorizontalDragUpdate: _onHorizontalDragUpdate,
@@ -1103,29 +1111,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 label: _isFavorite(item) ? '已收藏' : '收藏',
                 onTap: () => _toggleFavorite(item),
               ),
-              const SizedBox(height: 18),
-              _buildActionButton(
-                icon: isPending
-                    ? Icons.hourglass_top_rounded
-                    : (isActuallyPlaying
-                        ? Icons.pause_circle_filled_rounded
-                        : Icons.play_circle_fill_rounded),
-                color: Colors.white,
-                label: isPending
-                    ? '加载中'
-                    : (isActuallyPlaying ? '暂停' : '播放'),
-                onTap: () {
-                  if (isPending) return;
-                  if (isActuallyPlaying) {
-                    _togglePlayPause();
-                  } else if (isPlayingNow) {
-                    _togglePlayPause();
-                  } else {
-                    _autoPlay(item);
-                  }
-                },
-              ),
-              const SizedBox(height: 18),
+              // [QBSenHook] v8.8: 右下角播放/暂停按钮移除（由右上角圆形按钮承担）
               _buildActionButton(
                 icon: Icons.aspect_ratio_rounded,
                 color: Colors.white,
@@ -1142,8 +1128,77 @@ class _EmbySwipePageState extends State<EmbySwipePage>
             ],
           ),
         ),
-        // [QBSenHook] v7.5.5: 文件名移到上侧（顶部信息栏下方）
+        // [QBSenHook] v8.8: 右上角圆形 播放/暂停 图标（半透明）+ 周围一圈播放进度环（360°=播放完成）
         Positioned(
+          top: MediaQuery.of(context).padding.top + 8,
+          right: 14,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _togglePlayPause,
+            child: Consumer<VideoPlayerState>(
+              builder: (context, v, _) {
+                // [QBSenHook] v8.8b: 三态——缓冲(转圈)/播放(暂停图标)/暂停(播放图标)
+                final bool buffering = v.status == PlayerStatus.loading ||
+                    (!v.hasVideo && _pendingPlayId != null);
+                final bool playing =
+                    v.hasVideo && v.status == PlayerStatus.playing;
+                final double progress =
+                    v.hasVideo && v.duration.inMilliseconds > 0
+                        ? (v.position.inMilliseconds /
+                                v.duration.inMilliseconds)
+                            .clamp(0.0, 1.0)
+                        : 0.0;
+                return SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: CircularProgressIndicator(
+                          value: buffering ? null : progress,
+                          strokeWidth: 3,
+                          backgroundColor: Colors.white.withValues(alpha: 0.22),
+                          color: Colors.white,
+                        ),
+                      ),
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.35),
+                          shape: BoxShape.circle,
+                        ),
+                        child: buffering
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                  color: Colors.white70,
+                                ),
+                              )
+                            : Icon(
+                                playing
+                                    ? Icons.pause_rounded
+                                    : Icons.play_arrow_rounded,
+                                color: Colors.white.withValues(alpha: 0.85),
+                                size: 26,
+                              ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        // [QBSenHook] v7.5.5: 文件名移到上侧（顶部信息栏下方）
+        // [QBSenHook] v8.8: 与控制面板同显同隐（单击唤出）
+        if (_controlsVisible)
+          Positioned(
           left: 18,
           right: 90,
           top: MediaQuery.of(context).padding.top + 56,
@@ -1192,7 +1247,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     );
   }
 
-  /// [QBSenHook] v7.4: 切换播放/暂停（双击触发）。
+  /// [QBSenHook] v7.4: 切换播放/暂停（双击/右上角圆形按钮触发）。
   void _togglePlayPause() {
     final videoState = Provider.of<VideoPlayerState>(context, listen: false);
     if (!videoState.hasVideo) return;
@@ -1200,17 +1255,39 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       videoState.pause();
     } else {
       videoState.play();
+      // [QBSenHook] v8.8: 从暂停恢复播放后重新计时，3 秒后自动隐藏控件
+      if (_controlsVisible) {
+        _controlsTimer?.cancel();
+        _controlsTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _controlsVisible = false);
+        });
+      }
     }
   }
 
   /// [QBSenHook] v7.5.2: 单击调出播放控件面板，3 秒后自动隐藏。
+  /// [QBSenHook] v8.8: 暂停时保持显示（不启动自动隐藏计时）；播放中才 3 秒隐藏。
   void _showControlPanel() {
     if (!mounted) return;
     setState(() => _controlsVisible = true);
     _controlsTimer?.cancel();
+    final v = Provider.of<VideoPlayerState>(context, listen: false);
+    final playing = v.hasVideo && v.status == PlayerStatus.playing;
+    if (!playing) return;
     _controlsTimer = Timer(const Duration(seconds: 3), () {
       if (mounted) setState(() => _controlsVisible = false);
     });
+  }
+
+  /// [QBSenHook] v8.8: 单击切换 显示/隐藏 控制面板。
+  void _toggleControlPanel() {
+    if (!mounted) return;
+    if (_controlsVisible) {
+      _controlsTimer?.cancel();
+      setState(() => _controlsVisible = false);
+    } else {
+      _showControlPanel();
+    }
   }
 
   /// 面板按钮动作：执行操作并重置 3 秒隐藏计时。
@@ -1253,21 +1330,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
               final String total = _fmtDuration(videoState.duration);
               return Row(
                 children: [
-                  // 播放/暂停
-                  IconButton(
-                    padding: EdgeInsets.zero,
-                    constraints:
-                        const BoxConstraints(minWidth: 34, minHeight: 34),
-                    icon: Icon(
-                      hasVideo
-                          ? (isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded)
-                          : Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 26,
-                      shadows: const [Shadow(color: Colors.black87, blurRadius: 4)],
-                    ),
-                    onPressed: () => _panelAction(_togglePlayPause),
-                  ),
+                  // [QBSenHook] v8.8: 播放/暂停统一为右上角圆形进度环按钮，此处不再放置
                   // 当前时间
                   Text(
                     cur,
