@@ -899,7 +899,7 @@ class EmbyService extends MediaServerServiceBase
       // [QBSenHook] v8.11: 收藏页——部分服务端不认 Filters=IsFavorite 返回空，
       // 去掉过滤器重试一次，再由下方客户端按 UserData.IsFavorite 过滤兜底。
       if (favoritesOnly && all.isEmpty) {
-        final retryPath = path.replace('&Filters=IsFavorite', '');
+        final retryPath = path.replaceAll('&Filters=IsFavorite', '');
         await fetchAllFrom(retryPath);
       }
       // [QBSenHook] v8.10: 收藏模式双保险——服务端 Filters=IsFavorite 偶尔失效时，
