@@ -29,6 +29,8 @@ bool supportsPlayerHttpProxy(PlayerKernelType type) {
 class PlayerFactory {
   static const String _playerKernelTypeKey = 'player_kernel_type';
   static const String _precacheBufferSizeKey = 'player_precache_buffer_size_mb';
+  static const String _precacheBufferDurationKey =
+      'player_precache_buffer_duration_seconds';
   static const String _macOSNativeVideoEnabledKey =
       'macos_native_video_enabled';
   static const String _androidAudioOutputKey = 'android_audio_output';
@@ -36,8 +38,13 @@ class PlayerFactory {
   static const int defaultPrecacheBufferSizeMb = 32;
   static const int minPrecacheBufferSizeMb = 4;
   static const int maxPrecacheBufferSizeMb = 512;
+  static const int defaultPrecacheBufferDurationSeconds = 4;
+  static const int minPrecacheBufferDurationSeconds = 1;
+  static const int maxPrecacheBufferDurationSeconds = 120;
   static PlayerKernelType? _cachedKernelType;
   static int _cachedPrecacheBufferSizeMb = defaultPrecacheBufferSizeMb;
+  static int _cachedPrecacheBufferDurationSeconds =
+      defaultPrecacheBufferDurationSeconds;
   static bool _cachedMacOSNativeVideoEnabled = false;
   static String _cachedAndroidAudioOutput = 'opensles';
   static PlayerErikaAndroidOutputMode _cachedErikaAndroidOutputMode =
@@ -79,6 +86,8 @@ class PlayerFactory {
       final prefs = await SharedPreferences.getInstance();
       final kernelTypeIndex = prefs.getInt(_playerKernelTypeKey);
       final bufferSizeMb = prefs.getInt(_precacheBufferSizeKey);
+      final precacheBufferDurationSecs =
+          prefs.getInt(_precacheBufferDurationKey);
       final macOSNativeVideoEnabled =
           prefs.getBool(_macOSNativeVideoEnabledKey) ?? false;
       final androidAudioOutput =
@@ -113,6 +122,10 @@ class PlayerFactory {
       }
       _cachedPrecacheBufferSizeMb = _clampPrecacheBufferSizeMb(
         bufferSizeMb ?? defaultPrecacheBufferSizeMb,
+      );
+      _cachedPrecacheBufferDurationSeconds =
+          _clampPrecacheBufferDurationSeconds(
+        precacheBufferDurationSecs ?? defaultPrecacheBufferDurationSeconds,
       );
       _cachedMacOSNativeVideoEnabled = macOSNativeVideoEnabled;
       MediaKitPlayerAdapter.setMacOSNativeVideoPreference(
@@ -150,6 +163,8 @@ class PlayerFactory {
       // 这里没有真正同步，仅使用默认值，确保后续异步加载会更新缓存值
       _cachedKernelType = _defaultKernelType;
       _cachedPrecacheBufferSizeMb = defaultPrecacheBufferSizeMb;
+      _cachedPrecacheBufferDurationSeconds =
+          defaultPrecacheBufferDurationSeconds;
       _cachedMacOSNativeVideoEnabled = false;
       _cachedAndroidAudioOutput = 'opensles';
       _cachedErikaAndroidOutputMode = PlayerErikaAndroidOutputMode.sdr;
@@ -163,6 +178,8 @@ class PlayerFactory {
       SharedPreferences.getInstance().then((prefs) {
         final kernelTypeIndex = prefs.getInt(_playerKernelTypeKey);
         final bufferSizeMb = prefs.getInt(_precacheBufferSizeKey);
+        final precacheBufferDurationSecs =
+            prefs.getInt(_precacheBufferDurationKey);
         final macOSNativeVideoEnabled =
             prefs.getBool(_macOSNativeVideoEnabledKey) ?? false;
         final androidAudioOutput =
@@ -183,6 +200,12 @@ class PlayerFactory {
         if (bufferSizeMb != null) {
           _cachedPrecacheBufferSizeMb = _clampPrecacheBufferSizeMb(
             bufferSizeMb,
+          );
+        }
+        if (precacheBufferDurationSecs != null) {
+          _cachedPrecacheBufferDurationSeconds =
+              _clampPrecacheBufferDurationSeconds(
+            precacheBufferDurationSecs,
           );
         }
         _cachedMacOSNativeVideoEnabled = macOSNativeVideoEnabled;
@@ -288,6 +311,23 @@ class PlayerFactory {
 
   static int getPrecacheBufferSizeBytes() {
     return getPrecacheBufferSizeMb() * 1024 * 1024;
+  }
+
+  /// 获取播放预缓存时长（秒）。MediaKit 用作 mpv cache-secs，MDK 用作缓冲范围。
+  static int getPrecacheBufferDurationSeconds() {
+    if (!_hasLoadedSettings) {
+      _loadSettingsSync();
+    }
+    return _cachedPrecacheBufferDurationSeconds;
+  }
+
+  static int _clampPrecacheBufferDurationSeconds(int value) {
+    return value
+        .clamp(
+          minPrecacheBufferDurationSeconds,
+          maxPrecacheBufferDurationSeconds,
+        )
+        .toInt();
   }
 
   static Future<void> savePrecacheBufferSizeMb(int value) async {
@@ -427,7 +467,10 @@ class PlayerFactory {
     switch (kernelType) {
       case PlayerKernelType.mdk:
         debugPrint('[PlayerFactory] 创建 MDK 播放器');
-        return MdkPlayerAdapter(httpProxy: getHttpProxy());
+        return MdkPlayerAdapter(
+          httpProxy: getHttpProxy(),
+          bufferPrecacheSecs: getPrecacheBufferDurationSeconds(),
+        );
       case PlayerKernelType.videoPlayer:
         debugPrint('[PlayerFactory] 创建 Video Player 播放器');
         return VideoPlayerAdapter();
@@ -436,6 +479,7 @@ class PlayerFactory {
           bufferSize: getPrecacheBufferSizeBytes(),
           androidAudioOutput: getAndroidAudioOutput(),
           httpProxy: getHttpProxy(),
+          cacheSecs: getPrecacheBufferDurationSeconds(),
         );
       case PlayerKernelType.erika:
         debugPrint('[PlayerFactory] 创建 Erika 播放器');

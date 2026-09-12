@@ -198,9 +198,11 @@ class MdkPlayerAdapter implements AbstractPlayer {
   String? _activeAudioDecoder;
   int _internalAudioTrackCount = 0; // 内部音频轨道数，用于区分外挂MKA轨道
   final String _httpProxy;
+  final int _bufferPrecacheSecs;
 
-  MdkPlayerAdapter({String? httpProxy})
-      : _httpProxy = (httpProxy ?? '').trim() {
+  MdkPlayerAdapter({String? httpProxy, int bufferPrecacheSecs = 0})
+      : _httpProxy = (httpProxy ?? '').trim(),
+        _bufferPrecacheSecs = bufferPrecacheSecs {
     _mdkPlayer = mdk.Player();
     _attachMdkEventListeners();
     _applyInitialSettings();
@@ -458,6 +460,21 @@ class MdkPlayerAdapter implements AbstractPlayer {
       }
     }
     _mdkPlayer.setMedia(path, _fromPlayerMediaType(type));
+    // [QBSenHook] v8.10: 应用预缓存缓冲范围（秒→毫秒），缓解高码率视频卡顿
+    if (type == PlayerMediaType.video &&
+        path.isNotEmpty &&
+        _bufferPrecacheSecs > 0) {
+      try {
+        _mdkPlayer.setBufferRange(
+          min: _bufferPrecacheSecs * 1000,
+          max: _bufferPrecacheSecs * 1000 * 6,
+          drop: false,
+        );
+        debugPrint('MDK: 应用预缓存缓冲范围 ${_bufferPrecacheSecs}s');
+      } catch (e) {
+        debugPrint('MDK: 应用预缓存缓冲范围失败: $e');
+      }
+    }
   }
 
   @override

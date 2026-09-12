@@ -901,7 +901,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
             if (_items.isNotEmpty)
               Positioned(
                 top: MediaQuery.of(context).padding.top + 10,
-                right: 14,
+                right: 70,
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -1243,7 +1243,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
           ),
         ),
         // [QBSenHook] v8.5: 进度条合并——快进快退/单击均只显示下方控制面板进度条（可拖动）
-        if (_controlsVisible) _buildControlPanel(),
+        // [QBSenHook] v8.10: 未唤出控件时底部常驻极细播放进度条（显示播放到哪里）
+        if (_controlsVisible) _buildControlPanel() else _buildMiniProgressBar(),
         ],
       ),
     );
@@ -1296,6 +1297,41 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   void _panelAction(VoidCallback action) {
     action();
     _showControlPanel();
+  }
+
+  /// [QBSenHook] v8.10: 底部常驻极细播放进度条（无背景，仅显示播放进度）。
+  /// 单击唤出完整控制面板后由控制面板进度条替代。
+  Widget _buildMiniProgressBar() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: SafeArea(
+        top: false,
+        child: Consumer<VideoPlayerState>(
+          builder: (context, videoState, child) {
+            final bool hasVideo = videoState.hasVideo;
+            final double pos = hasVideo &&
+                    videoState.duration.inMilliseconds > 0
+                ? (videoState.position.inMilliseconds /
+                        videoState.duration.inMilliseconds)
+                    .clamp(0.0, 1.0)
+                : 0.0;
+            return Container(
+              height: 2.5,
+              color: Colors.black.withValues(alpha: 0.3),
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: pos,
+                child: Container(
+                  color: Colors.white.withValues(alpha: 0.85),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
   }
 
   /// [QBSenHook] v7.5.2: 循环切换画面尺寸模式。

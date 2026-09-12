@@ -28,9 +28,16 @@ void applyMediaKitNetworkOptions(
   void Function(String key, String value) setter, {
   required String userAgent,
   String httpProxy = '',
+  int cacheSecs = 0,
 }) {
   if (userAgent.isNotEmpty) setter('user-agent', userAgent);
   if (httpProxy.isNotEmpty) setter('http-proxy', httpProxy);
+  // [QBSenHook] v8.10: 启用 mpv 网络缓存（按秒预缓存 + 缓冲不足自动暂停等缓冲）
+  if (cacheSecs > 0) {
+    setter('cache', 'yes');
+    setter('cache-secs', '$cacheSecs');
+    setter('cache-pause', 'yes');
+  }
 }
 
 @visibleForTesting
@@ -65,6 +72,7 @@ class MediaKitPlayerAdapter
   static bool _macOSNativeVideoPreference = false;
   final String? _androidAudioOutput;
   final String _httpProxy;
+  final int _cacheSecs;
   static const int _defaultBufferSize = 32 * 1024 * 1024;
   static const String _hdrValidationFlag = 'NIPAPLAY_MACOS_HDR_VALIDATE';
   static const String _windowsHdrValidationFlag =
@@ -348,7 +356,9 @@ class MediaKitPlayerAdapter
     int? bufferSize,
     String? androidAudioOutput,
     String? httpProxy,
-  })  : _mpvDiagnosticsEnabled = _shouldEnableMpvDiagnostics(),
+    int cacheSecs = 0,
+  })  : _cacheSecs = cacheSecs,
+        _mpvDiagnosticsEnabled = _shouldEnableMpvDiagnostics(),
         _enableHardwareAcceleration = !_shouldDisableHardwareAcceleration(),
         _prefersPlatformVideoSurface = _shouldUsePlatformNativeVideoSurface(),
         _androidAudioOutput = androidAudioOutput,
@@ -376,6 +386,7 @@ class MediaKitPlayerAdapter
       _setMpvPropertyOption,
       userAgent: '',
       httpProxy: _httpProxy,
+      cacheSecs: _cacheSecs,
     );
     _bootstrapPlatformVideoSurface();
     if (!_prefersPlatformVideoSurface) {

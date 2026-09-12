@@ -892,7 +892,11 @@ class EmbyService extends MediaServerServiceBase
         if (total is num && startIndex >= total) break;
         if (startIndex >= 5000) break; // 安全上限，防止异常服务端死循环
       }
-      final result = all;
+      // [QBSenHook] v8.10: 收藏模式双保险——服务端 Filters=IsFavorite 偶尔失效时，
+      // 客户端按 UserData.IsFavorite 再过滤一次，避免收藏页为空。
+      final result = favoritesOnly
+          ? all.where((e) => e.userData?.isFavorite == true).toList()
+          : all;
       if (sortBy == 'random') {
         result.shuffle();
       } else if (sortBy == 'size') {
