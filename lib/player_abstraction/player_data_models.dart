@@ -74,8 +74,17 @@ class PlayerVideoCodecParams {
   final int width;
   final int height;
   final String? name;
+  /// [QBSenHook] v8.12: 视频旋转元数据（0/90/180/270，null 视为 0）。
+  /// 部分内核（media_kit/libmpv、MDK）的 codec 宽高为编码原始尺寸、不含旋转，
+  /// 而输出纹理已按旋转元数据校正；宽高比计算需据此交换，否则画面长宽反。
+  final int? rotate;
 
-  PlayerVideoCodecParams({required this.width, required this.height, this.name});
+  PlayerVideoCodecParams({
+    required this.width,
+    required this.height,
+    this.name,
+    this.rotate,
+  });
 }
 
 class PlayerVideoStreamInfo {

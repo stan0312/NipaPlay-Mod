@@ -551,6 +551,12 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 },
               );
 
+              // [QBSenHook] v8.12: 旋转元数据修正——倒置视频（180°）在竖屏分支补转 180°。
+              final int videoRot = _videoRotation(videoState);
+              final Widget rotatedTexture = videoRot == 180
+                  ? RotatedBox(quarterTurns: 2, child: texture)
+                  : texture;
+
               // [QBSenHook] v7.6: 横屏适配开关——视频旋转到横向后 cover 铺满（等效横屏观看）
               if (_landscapeView) {
                 return SizedBox.expand(
@@ -558,7 +564,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                     fit: BoxFit.cover,
                     clipBehavior: Clip.hardEdge,
                     child: RotatedBox(
-                      quarterTurns: ratio > 1.0 ? 0 : 1,
+                      quarterTurns: videoRot == 180 ? 2 : (ratio > 1.0 ? 0 : 1),
                       child: SizedBox(
                         width: maxW,
                         height: maxW / ratio,
@@ -579,7 +585,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                       fit: BoxFit.cover,
                       clipBehavior: Clip.hardEdge,
                       child: RotatedBox(
-                        quarterTurns: 1,
+                        quarterTurns: videoRot == 180 ? 2 : 1,
                         child: SizedBox(
                           width: maxW,
                           height: maxW / ratio,
@@ -593,7 +599,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                   child: FittedBox(
                     fit: BoxFit.contain,
                     child: RotatedBox(
-                      quarterTurns: 1,
+                      quarterTurns: videoRot == 180 ? 2 : 1,
                       child: SizedBox(
                         width: maxW,
                         height: maxW / ratio,
@@ -614,7 +620,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                       child: SizedBox(
                         width: maxW,
                         height: maxW / ratio,
-                        child: texture,
+                        child: rotatedTexture,
                       ),
                     ),
                   );
@@ -630,7 +636,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                       child: SizedBox(
                         width: maxW,
                         height: hTarget,
-                        child: texture,
+                        child: rotatedTexture,
                       ),
                     ),
                   );
@@ -645,7 +651,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                   child: SizedBox(
                     width: maxW,
                     height: hForWidth,
-                    child: texture,
+                    child: rotatedTexture,
                   ),
                 );
               }
@@ -654,7 +660,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 child: SizedBox(
                   width: maxW,
                   height: hForWidth,
-                  child: texture,
+                  child: rotatedTexture,
                 ),
               );
             },
@@ -688,12 +694,31 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       final video = videoState.player.mediaInfo.video;
       if (video == null || video.isEmpty) return null;
       final codec = video.first.codec;
-      final w = codec.width;
-      final h = codec.height;
+      var w = codec.width;
+      var h = codec.height;
       if (w <= 0 || h <= 0) return null;
+      // [QBSenHook] v8.12: 竖拍视频（rotation 90/270）纹理已按旋转校正，
+      // codec 宽高需交换，否则把竖拍视频当横屏再转一次导致长宽反。
+      final rotate = (codec.rotate ?? 0) % 360;
+      if (rotate == 90 || rotate == 270) {
+        final t = w;
+        w = h;
+        h = t;
+      }
       return w / h;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// [QBSenHook] v8.12: 视频旋转元数据（0/90/180/270），供旋转方向修正。
+  int _videoRotation(VideoPlayerState videoState) {
+    try {
+      final video = videoState.player.mediaInfo.video;
+      if (video == null || video.isEmpty) return 0;
+      return (video.first.codec.rotate ?? 0) % 360;
+    } catch (_) {
+      return 0;
     }
   }
 
@@ -1377,7 +1402,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                             v.seekTo(v.duration * ratio);
                           },
                           child: Container(
-                            height: double.infinity,
+                            height: 22, // [QBSenHook] v8.12: 固定手势热区高度，避免 Row 无界高度布局异常
                             alignment: Alignment.center,
                             child: Container(
                               height: 2.5,
@@ -1483,7 +1508,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                             v.seekTo(v.duration * ratio);
                           },
                           child: Container(
-                            height: double.infinity,
+                            height: 22, // [QBSenHook] v8.12: 固定手势热区高度，避免 Row 无界高度布局异常
                             alignment: Alignment.center,
                             child: Container(
                               height: 2.5,

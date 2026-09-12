@@ -1297,10 +1297,12 @@ class MediaKitPlayerAdapter
         }
 
         // 如果轨道信息中没有宽高，从_player.state获取
+        bool usedRotatedStateSize = false;
         if ((width == null || width == 0) &&
             (_player.state.width != null && _player.state.width! > 0)) {
           width = _player.state.width;
           height = _player.state.height;
+          usedRotatedStateSize = true;
           //debugPrint('[MediaKit] 从_player.state获取视频尺寸: ${width}x$height');
         }
 
@@ -1308,6 +1310,9 @@ class MediaKitPlayerAdapter
           codec: PlayerVideoCodecParams(
             width: width ?? 0,
             height: height ?? 0,
+            // [QBSenHook] v8.12: state 尺寸已含旋转校正，rotate 置空；
+            // 否则用 demux-rotate（0/90/180/270）供 UI 修正宽高比。
+            rotate: usedRotatedStateSize ? null : track.rotate,
             name: track.title ?? track.language ?? 'Unknown Video',
           ),
           codecName: track.codec ?? 'Unknown',
@@ -1459,6 +1464,8 @@ class MediaKitPlayerAdapter
               width: width,
               height: height,
               name: stream.codec.name,
+              // [QBSenHook] v8.12: 此分支宽高来自播放器 state（已含旋转校正），rotate 置空。
+              rotate: null,
             ),
             codecName: stream.codecName,
           );

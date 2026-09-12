@@ -147,9 +147,16 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
       final video = videoState.player.mediaInfo.video;
       if (video == null || video.isEmpty) return null;
       final codec = video.first.codec;
-      final w = codec.width;
-      final h = codec.height;
+      var w = codec.width;
+      var h = codec.height;
       if (w <= 0 || h <= 0) return null;
+      // [QBSenHook] v8.12: 竖拍视频（rotation 90/270）纹理已按旋转校正，宽高需交换。
+      final rotate = (codec.rotate ?? 0) % 360;
+      if (rotate == 90 || rotate == 270) {
+        final t = w;
+        w = h;
+        h = t;
+      }
       return w / h;
     } catch (_) {
       return null;

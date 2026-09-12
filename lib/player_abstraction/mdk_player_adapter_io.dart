@@ -75,6 +75,18 @@ mdk.MediaType _fromPlayerMediaType(PlayerMediaType type) {
   }
 }
 
+/// [QBSenHook] v8.12: 尽力读取 MDK 视频轨旋转元数据（fvp/mdk 各版本字段名不同）。
+int? _readMdkTrackRotation(dynamic videoTrack) {
+  try {
+    final dynamic codec = (videoTrack as dynamic).codec;
+    final dynamic r =
+        (codec != null) ? (codec.rotation ?? codec.rotate) : null;
+    if (r is int) return r;
+    if (r is num) return r.toInt();
+  } catch (_) {}
+  return null;
+}
+
 PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo,
     {int internalAudioTrackCount = 0}) {
   return PlayerMediaInfo(
@@ -102,7 +114,8 @@ PlayerMediaInfo _toPlayerMediaInfo(mdk.MediaInfo mdkInfo,
         codec: PlayerVideoCodecParams(
             width: v.codec.width ?? 0,
             height: v.codec.height ?? 0,
-            name: codecNameValue),
+            name: codecNameValue,
+            rotate: _readMdkTrackRotation(v)),
         codecName: codecNameValue,
       );
     }).toList(),

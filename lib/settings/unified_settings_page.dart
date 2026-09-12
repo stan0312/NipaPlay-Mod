@@ -49,13 +49,15 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
   }
 
   material.Widget _buildPhone(material.BuildContext context) {
-    // [QBSenHook] v8.1: 设置页只保留"添加媒体库（网络媒体库）"一项
+    // [QBSenHook] v8.1: 设置页精简为"添加媒体库"+"播放器设置"两项
+    // [QBSenHook] v8.12: 恢复播放器入口（内核选择 + 预缓存设置）
     final entries = buildUnifiedSettingEntries(
       context,
       surface: UnifiedSettingsSurface.phone,
     )
         .where((entry) =>
-            entry.id == UnifiedSettingEntryIds.remoteMediaLibrary)
+            entry.id == UnifiedSettingEntryIds.remoteMediaLibrary ||
+            entry.id == UnifiedSettingEntryIds.player)
         .toList(growable: false);
     _openPhoneInitialEntry(entries);
 
@@ -121,13 +123,15 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
   }
 
   material.Widget _buildDesktopTablet(material.BuildContext context) {
-    // [QBSenHook] v8.1: 设置页只保留"添加媒体库（网络媒体库）"一项
+    // [QBSenHook] v8.1: 设置页精简为"添加媒体库"+"播放器设置"两项
+    // [QBSenHook] v8.12: 恢复播放器入口（内核选择 + 预缓存设置）
     final entries = buildUnifiedSettingEntries(
       context,
       surface: UnifiedSettingsSurface.desktopTablet,
     )
         .where((entry) =>
-            entry.id == UnifiedSettingEntryIds.remoteMediaLibrary)
+            entry.id == UnifiedSettingEntryIds.remoteMediaLibrary ||
+            entry.id == UnifiedSettingEntryIds.player)
         .toList(growable: false);
     if (entries.isEmpty) {
       return const material.SizedBox.shrink();
