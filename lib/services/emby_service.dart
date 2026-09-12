@@ -867,7 +867,7 @@ class EmbyService extends MediaServerServiceBase
         // [QBSenHook] v8.13: 收藏查询追加 Series（否则收藏的剧集全部查不到）；
         // 普通媒体库仍只查可播放项。EnableUserData 双保险确保 UserData 返回。
         final includeTypes = favoritesOnly
-            ? 'Movie,Episode,Video,Series'
+            ? 'Movie,Episode,Video,Series,Folder'
             : 'Movie,Episode,Video';
         path =
             '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
@@ -890,7 +890,7 @@ class EmbyService extends MediaServerServiceBase
           if (items is! List || items.isEmpty) break;
           all.addAll(items
               .map((e) => EmbyMediaItem.fromJson(e))
-              .where((e) => !e.isFolder));
+              .where((e) => favoritesOnly || !e.isFolder));
           final total = data['TotalRecordCount'];
           idx += items.length;
           if (limit > 0) break;
@@ -907,9 +907,17 @@ class EmbyService extends MediaServerServiceBase
       }
       // [QBSenHook] v8.10: 收藏模式双保险——服务端 Filters=IsFavorite 偶尔失效时，
       // 客户端按 UserData.IsFavorite 再过滤一次，避免收藏页为空。
-      final result = favoritesOnly
-          ? all.where((e) => e.userData?.isFavorite == true).toList()
-          : all;
+      // [QBSenHook] v8.14: 客户端过滤结果为空但服务端非空时，说明老版 Emby 未返回
+      // UserData（对 EnableUserData 支持不全），此时直接信任服务端 IsFavorite 结果，
+      // 避免把全部收藏误杀成空列表。
+      final List<EmbyMediaItem> result;
+      if (!favoritesOnly) {
+        result = all;
+      } else {
+        final fav =
+            all.where((e) => e.userData?.isFavorite == true).toList();
+        result = (fav.isNotEmpty || all.isEmpty) ? fav : all;
+      }
       if (sortBy == 'random') {
         result.shuffle();
       } else if (sortBy == 'size') {

@@ -12,8 +12,7 @@ import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
-import 'package:nipaplay/settings/adaptive_settings_scope.dart';
-import 'package:nipaplay/settings/pages/remote_media_library_settings_content.dart';
+import 'package:nipaplay/settings/unified_settings_page.dart';
 import 'package:nipaplay/utils/theme_notifier.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
@@ -265,7 +264,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       _searchResults = [];
     }
     // [QBSenHook] v8.9: 进入子文件夹前保存当前列表滚动位置
-    if (_gridScroll.hasClients) _scrollStack.add(_gridScroll.offset);
+    _scrollStack.add(_gridScroll.hasClients ? _gridScroll.offset : 0.0);
     setState(() {
       _path.add(_FolderEntry(folder.id, folder.name));
       _currentId = folder.id;
@@ -276,7 +275,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
 
   void _enterLibrary(EmbyLibrary lib) {
     // [QBSenHook] v8.9: 进入分类前保存当前列表滚动位置
-    if (_gridScroll.hasClients) _scrollStack.add(_gridScroll.offset);
+    _scrollStack.add(_gridScroll.hasClients ? _gridScroll.offset : 0.0);
     setState(() {
       _path.clear();
       _path.add(_FolderEntry(lib.id, lib.name));
@@ -330,7 +329,14 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   /// [QBSenHook] v8.9: 数据加载完成后恢复滚动位置（clamp 到有效范围）。
   void _restoreScroll(double offset) {
     if (!mounted || offset <= 0) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // [QBSenHook] v8.14: _load() 的 setState 后 GridView 在下一帧才重建，
+    // 首帧 postFrame 回调执行时 hasClients 仍为 false，会导致滚动位置静默丢失、
+    // 返回后回到列表顶部。改为短轮询等待 GridView attach（最多约 500ms）再恢复。
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      for (int i = 0; i < 10 && mounted; i++) {
+        if (_gridScroll.hasClients) break;
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
       if (!mounted || !_gridScroll.hasClients) return;
       final max = _gridScroll.position.maxScrollExtent;
       _gridScroll.jumpTo(offset > max ? max : offset);
@@ -1264,13 +1270,11 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               icon: Icon(Icons.settings_rounded, color: iconColor, size: 22),
               tooltip: '设置',
               onPressed: () {
-                // [QBSenHook] v8.2: 设置入口直接打开"添加媒体库（网络媒体库）"
+                // [QBSenHook] v8.14: 设置入口打开统一设置页（仅"添加媒体库 + 播放器"两项，
+                // 播放器项内含内核选择 + 预缓存设置；此前只开媒体库页导致播放器设置不可见）
                 Navigator.of(context).push(
                   CupertinoPageRoute<void>(
-                    builder: (_) => const AdaptiveSettingsScope(
-                      style: AdaptiveSettingsStyle.phone,
-                      child: RemoteMediaLibrarySettingsContent(),
-                    ),
+                    builder: (_) => const UnifiedSettingsPage(),
                   ),
                 );
               },

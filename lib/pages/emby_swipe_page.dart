@@ -117,7 +117,9 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   bool _seekBarVisible = false;
   Timer? _controlsTimer;
   // 画面尺寸模式
-  EmbyFitMode _fitMode = EmbyFitMode.original;
+  // [QBSenHook] v8.14: 默认 cover——一进入视频即等比铺满全屏（不拉伸、边缘裁剪），
+  // 保留画面尺寸按钮可切回 original/16:9 等完整显示模式。
+  EmbyFitMode _fitMode = EmbyFitMode.cover;
   // [QBSenHook] v7.6: 屏幕方向适配开关（false=竖屏适配[默认]，true=横屏适配）
   bool _landscapeView = false;
 
@@ -130,6 +132,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   double _seekDragAccum = 0.0;
   // [QBSenHook] v8.5: 控制面板进度条拖动——按下时的比例起点
   double _panelBarStartRatio = 0.0;
+  // [QBSenHook] v8.14: 底部细进度条拖动——累计比例（d.delta 为逐次增量，必须累加）
+  double _panelBarDragRatio = 0.0;
   // 左右边缘手势起始模式：brightness / volume
   String? _edgeDragMode;
 
@@ -1423,6 +1427,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                             _panelBarStartRatio =
                                 (d.localPosition.dx / barWidth)
                                     .clamp(0.0, 1.0);
+                            _panelBarDragRatio = _panelBarStartRatio;
                           },
                           onHorizontalDragUpdate: (d) {
                             final v = Provider.of<VideoPlayerState>(context,
@@ -1431,10 +1436,10 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                                 v.duration.inMilliseconds <= 0) {
                               return;
                             }
-                            final ratio = (_panelBarStartRatio +
-                                    d.delta.dx / barWidth)
-                                .clamp(0.0, 1.0);
-                            v.seekTo(v.duration * ratio);
+                            _panelBarDragRatio =
+                                (_panelBarDragRatio + d.delta.dx / barWidth)
+                                    .clamp(0.0, 1.0);
+                            v.seekTo(v.duration * _panelBarDragRatio);
                           },
                           child: Container(
                             height: 22, // [QBSenHook] v8.12: 固定手势热区高度，避免 Row 无界高度布局异常
@@ -1529,6 +1534,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                             _panelBarStartRatio =
                                 (d.localPosition.dx / barWidth)
                                     .clamp(0.0, 1.0);
+                            _panelBarDragRatio = _panelBarStartRatio;
                           },
                           onHorizontalDragUpdate: (d) {
                             final v = Provider.of<VideoPlayerState>(context,
@@ -1537,10 +1543,10 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                                 v.duration.inMilliseconds <= 0) {
                               return;
                             }
-                            final ratio = (_panelBarStartRatio +
-                                    d.delta.dx / barWidth)
-                                .clamp(0.0, 1.0);
-                            v.seekTo(v.duration * ratio);
+                            _panelBarDragRatio =
+                                (_panelBarDragRatio + d.delta.dx / barWidth)
+                                    .clamp(0.0, 1.0);
+                            v.seekTo(v.duration * _panelBarDragRatio);
                           },
                           child: Container(
                             height: 22, // [QBSenHook] v8.12: 固定手势热区高度，避免 Row 无界高度布局异常
