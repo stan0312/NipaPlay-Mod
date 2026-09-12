@@ -403,7 +403,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"$PROJECT_DIR/../cpp_native/scripts/build_ios.sh\"\n";
+			shellScript = "bash \"$PROJECT_DIR/../cpp_native/scripts/build_ios.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

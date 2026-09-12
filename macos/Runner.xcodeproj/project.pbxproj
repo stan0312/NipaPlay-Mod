@@ -356,7 +356,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"$PROJECT_DIR/../cpp_native/scripts/build_macos.sh\"\n";
+			shellScript = "bash \"$PROJECT_DIR/../cpp_native/scripts/build_macos.sh\"\n";
 		};
 		2915594BD446538B5CE873B9 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
