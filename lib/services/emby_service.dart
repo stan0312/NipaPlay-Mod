@@ -864,10 +864,13 @@ class EmbyService extends MediaServerServiceBase
         final parent = libraryId != null && libraryId.isNotEmpty
             ? '&ParentId=$libraryId'
             : '';
-        // 直接查可播放项（不含 Series；Recursive=true 会把剧集展开成 Episode）
-        const includeTypes = 'Movie,Episode,Video';
+        // [QBSenHook] v8.13: 收藏查询追加 Series（否则收藏的剧集全部查不到）；
+        // 普通媒体库仍只查可播放项。EnableUserData 双保险确保 UserData 返回。
+        final includeTypes = favoritesOnly
+            ? 'Movie,Episode,Video,Series'
+            : 'Movie,Episode,Video';
         path =
-            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
+            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
       }
       // [QBSenHook] v8.0: 全量加载——分页循环拉取直到 TotalRecordCount（limit<=0 表示全量）
       final pageSize = limit > 0 ? limit : 500;
@@ -1287,6 +1290,50 @@ class EmbyService extends MediaServerServiceBase
       print('Error getting episodes: $e');
       print('Stack trace: $stackTrace');
       throw Exception('无法获取剧集信息: $e');
+    }
+  }
+
+  /// [QBSenHook] v8.13: 获取某部剧（Series）的全部剧集，供收藏页刷片展开。
+  Future<List<EmbyMediaItem>> getSeriesEpisodes(
+    String seriesId, {
+    String? sortBy,
+    bool sortAscending = false,
+  }) async {
+    if (!_isConnected || _userId == null || _accessToken == null) {
+      return [];
+    }
+    try {
+      String sortQuery;
+      final order = sortAscending ? 'Ascending' : 'Descending';
+      switch (sortBy) {
+        case 'name':
+          sortQuery = '&SortBy=SortName&SortOrder=$order';
+          break;
+        case 'size':
+          sortQuery = '&SortBy=Size&SortOrder=$order';
+          break;
+        default:
+          sortQuery = '&SortBy=DateCreated&SortOrder=$order';
+      }
+      final response = await _makeAuthenticatedRequest(
+          '/emby/Shows/$seriesId/Episodes?userId=$_userId'
+          '&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData'
+          '&EnableUserData=true$sortQuery');
+      if (response.statusCode != 200) {
+        DebugLogService().addLog(
+            'EmbyService: 获取剧集失败 HTTP ${response.statusCode}');
+        return [];
+      }
+      final data = json.decode(response.body);
+      final items = data['Items'];
+      if (items is! List) return [];
+      return items
+          .map((e) => EmbyMediaItem.fromJson(e))
+          .where((e) => !e.isFolder)
+          .toList();
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 获取剧集异常: $e');
+      return [];
     }
   }
 

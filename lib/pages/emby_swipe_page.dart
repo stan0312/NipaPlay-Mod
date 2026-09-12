@@ -113,6 +113,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
 
   // [QBSenHook] v7.5.2: 单击调出的播放控件面板（3 秒自动隐藏）
   bool _controlsVisible = false;
+  // [QBSenHook] v8.13: 左右滑快进快退时临时显示底部细进度条，松手自动隐藏
+  bool _seekBarVisible = false;
   Timer? _controlsTimer;
   // 画面尺寸模式
   EmbyFitMode _fitMode = EmbyFitMode.original;
@@ -336,7 +338,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       final service = EmbyService.instance;
       // 文件夹模式用 parentId 作为数据源
       final sourceId = _parentId ?? _libraryId;
-      final items = await service.getSwipeItems(
+      var items = await service.getSwipeItems(
         libraryId: sourceId,
         favoritesOnly: _favoritesOnly,
         playlistId: _playlistId,
@@ -344,6 +346,9 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         sortAscending: _sortAscending,
         limit: 0, // [QBSenHook] v8.0: 全量加载（分页拼接，不再截断 500 条）
       );
+      // [QBSenHook] v8.13: 收藏/播放列表中的 Series（剧集）展开为剧集列表，
+      // 这样收藏页能看到剧集，点击进入刷片可直接上下滑播放各集。
+      items = await _expandSeriesItems(items);
       if (!mounted) return;
       // [QBSenHook] v7.5.3: initialItemId 定位到该条目（详情页/文件夹点视频直进）
       var startIndex = 0;
@@ -377,6 +382,31 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         _loading = false;
       });
     }
+  }
+
+  /// [QBSenHook] v8.13: 将列表中的 Series 项展开为该剧的全部剧集（可播放）。
+  Future<List<EmbyMediaItem>> _expandSeriesItems(
+    List<EmbyMediaItem> items,
+  ) async {
+    if (!items.any((e) => e.type == 'Series')) return items;
+    final result = <EmbyMediaItem>[];
+    for (final item in items) {
+      if (item.type == 'Series') {
+        final episodes = await EmbyService.instance.getSeriesEpisodes(
+          item.id,
+          sortBy: _sort.name,
+          sortAscending: _sortAscending,
+        );
+        if (episodes.isNotEmpty) {
+          result.addAll(episodes);
+        } else {
+          result.add(item);
+        }
+      } else {
+        result.add(item);
+      }
+    }
+    return result;
   }
 
   Future<void> _loadSourceOptions() async {
@@ -1290,7 +1320,12 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         ),
         // [QBSenHook] v8.5: 进度条合并——快进快退/单击均只显示下方控制面板进度条（可拖动）
         // [QBSenHook] v8.10: 未唤出控件时底部常驻极细播放进度条（显示播放到哪里）
-        if (_controlsVisible) _buildControlPanel() else _buildMiniProgressBar(),
+        if (_controlsVisible)
+          _buildControlPanel()
+        else if (_seekBarVisible)
+          _buildMiniProgressBar()
+        else
+          const SizedBox.shrink(),
         ],
       ),
     );
@@ -1586,7 +1621,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     _seekDragging = true;
     _seekDragStartPos = videoState.position;
     _seekDragAccum = 0.0;
-    // [QBSenHook] v8.11: 底部常驻进度条已实时显示进度，快进快退时不再弹出控制面板
+    // [QBSenHook] v8.13: 左右滑快进时显示底部细进度条（与顶部文件名同隐同显体系）
+    if (mounted) setState(() => _seekBarVisible = true);
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
@@ -1612,7 +1648,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   void _onHorizontalDragEnd(DragEndDetails details) {
     _seekDragging = false;
     _seekDragAccum = 0.0;
-    // [QBSenHook] v8.5: 不手动隐藏，由控制面板 3 秒自动隐藏计时器接管
+    // [QBSenHook] v8.13: 手离开屏幕立即隐藏快进进度条
+    if (mounted) setState(() => _seekBarVisible = false);
   }
 
   // [QBSenHook] v7.5.3: 视频区左右边缘手势条——左边缘上下滑调亮度、

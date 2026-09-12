@@ -75,8 +75,16 @@ mdk.MediaType _fromPlayerMediaType(PlayerMediaType type) {
   }
 }
 
-/// [QBSenHook] v8.12: 尽力读取 MDK 视频轨旋转元数据（fvp/mdk 各版本字段名不同）。
+/// [QBSenHook] v8.13: 读取 MDK 视频轨旋转元数据（修复长宽反）。
+/// fvp 0.33.1 起 rotation 挂在 VideoStreamInfo 轨道对象上（0/90/180/270），
+/// VideoCodecParameters 只有 width/height，没有 rotation/rotate 字段。
+/// 优先读轨道自身 rotation，保留旧版本 codec.rotate 兜底兼容。
 int? _readMdkTrackRotation(dynamic videoTrack) {
+  try {
+    final dynamic trackRotation = (videoTrack as dynamic).rotation;
+    if (trackRotation is int) return trackRotation;
+    if (trackRotation is num) return trackRotation.toInt();
+  } catch (_) {}
   try {
     final dynamic codec = (videoTrack as dynamic).codec;
     final dynamic r =
@@ -212,10 +220,15 @@ class MdkPlayerAdapter implements AbstractPlayer {
   int _internalAudioTrackCount = 0; // 内部音频轨道数，用于区分外挂MKA轨道
   final String _httpProxy;
   final int _bufferPrecacheSecs;
+  final int _bufferPrecacheSizeMb;
 
-  MdkPlayerAdapter({String? httpProxy, int bufferPrecacheSecs = 0})
-      : _httpProxy = (httpProxy ?? '').trim(),
-        _bufferPrecacheSecs = bufferPrecacheSecs {
+  MdkPlayerAdapter({
+    String? httpProxy,
+    int bufferPrecacheSecs = 0,
+    int bufferPrecacheSizeMb = 0,
+  })  : _httpProxy = (httpProxy ?? '').trim(),
+        _bufferPrecacheSecs = bufferPrecacheSecs,
+        _bufferPrecacheSizeMb = bufferPrecacheSizeMb {
     _mdkPlayer = mdk.Player();
     _attachMdkEventListeners();
     _applyInitialSettings();
@@ -486,6 +499,21 @@ class MdkPlayerAdapter implements AbstractPlayer {
         debugPrint('MDK: 应用预缓存缓冲范围 ${_bufferPrecacheSecs}s');
       } catch (e) {
         debugPrint('MDK: 应用预缓存缓冲范围失败: $e');
+      }
+    }
+    // [QBSenHook] v8.13: MDK 也应用字节级预读缓冲上限（avformat.buffer_size），
+    // 让设置里的"播放预缓存大小(MB)"对 MDK 内核真正生效，缓解高码率卡顿。
+    if (type == PlayerMediaType.video &&
+        path.isNotEmpty &&
+        _bufferPrecacheSizeMb > 0) {
+      try {
+        _mdkPlayer.setProperty(
+          'avformat.buffer_size',
+          '${_bufferPrecacheSizeMb * 1024 * 1024}',
+        );
+        debugPrint('MDK: 应用预缓存大小 ${_bufferPrecacheSizeMb}MB');
+      } catch (e) {
+        debugPrint('MDK: 应用预缓存大小失败: $e');
       }
     }
   }

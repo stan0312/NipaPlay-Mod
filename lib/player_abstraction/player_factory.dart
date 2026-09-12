@@ -38,7 +38,7 @@ class PlayerFactory {
   static const int defaultPrecacheBufferSizeMb = 32;
   static const int minPrecacheBufferSizeMb = 4;
   static const int maxPrecacheBufferSizeMb = 512;
-  static const int defaultPrecacheBufferDurationSeconds = 15;
+  static const int defaultPrecacheBufferDurationSeconds = 30;
   static const int minPrecacheBufferDurationSeconds = 1;
   static const int maxPrecacheBufferDurationSeconds = 120;
   static PlayerKernelType? _cachedKernelType;
@@ -483,6 +483,7 @@ class PlayerFactory {
         return MdkPlayerAdapter(
           httpProxy: getHttpProxy(),
           bufferPrecacheSecs: getPrecacheBufferDurationSeconds(),
+          bufferPrecacheSizeMb: getPrecacheBufferSizeMb(),
         );
       case PlayerKernelType.videoPlayer:
         debugPrint('[PlayerFactory] 创建 Video Player 播放器');
