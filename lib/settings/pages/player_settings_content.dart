@@ -61,6 +61,11 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
   ];
   static const int _minSkipSeconds = 10;
   static const int _maxSkipSeconds = 600;
+  // [QBSenHook] v8.11: 播放预缓存设置（秒 / MB）
+  double _precacheBufferSecs =
+      PlayerFactory.defaultPrecacheBufferDurationSeconds.toDouble();
+  double _precacheBufferSizeMb =
+      PlayerFactory.defaultPrecacheBufferSizeMb.toDouble();
 
   @override
   void initState() {
@@ -74,6 +79,16 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
     _loadMacOSNativeVideoSettings();
     _loadAndroidAudioOutputSettings();
     _loadErikaAndroidOutputSettings();
+    _loadPrecacheSettings();
+  }
+
+  Future<void> _loadPrecacheSettings() async {
+    if (!mounted) return;
+    setState(() {
+      _precacheBufferSecs =
+          PlayerFactory.getPrecacheBufferDurationSeconds().toDouble();
+      _precacheBufferSizeMb = PlayerFactory.getPrecacheBufferSizeMb().toDouble();
+    });
   }
 
   Future<void> _loadPlayerKernelSettings() async {
@@ -388,6 +403,48 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
                   _savePlayerKernelSettings(kernelType);
                 },
                 dropdownKey: _playerKernelDropdownKey,
+              ),
+              Divider(
+                  color: colorScheme.onSurface.withValues(alpha: 0.12),
+                  height: 1),
+            ],
+            // [QBSenHook] v8.11: 播放网络缓存设置（缓解高码率视频卡顿）
+            if (!kIsWeb && !globals.isTvOS) ...[
+              AdaptiveSettingsTile.slider(
+                title: '播放预缓存时长（秒）',
+                subtitle: '越大缓冲越充分，高码率/慢速 NAS 更流畅；受内存限制',
+                icon: Ionicons.battery_charging_outline,
+                value: _precacheBufferSecs,
+                min: PlayerFactory.minPrecacheBufferDurationSeconds.toDouble(),
+                max: PlayerFactory.maxPrecacheBufferDurationSeconds.toDouble(),
+                divisions:
+                    PlayerFactory.maxPrecacheBufferDurationSeconds -
+                        PlayerFactory.minPrecacheBufferDurationSeconds,
+                labelFormatter: (v) => '${v.round()} 秒',
+                onChanged: (v) {
+                  setState(() => _precacheBufferSecs = v);
+                  PlayerFactory.savePrecacheBufferDurationSeconds(v.round());
+                },
+              ),
+              Divider(
+                  color: colorScheme.onSurface.withValues(alpha: 0.12),
+                  height: 1),
+              AdaptiveSettingsTile.slider(
+                title: '播放预缓存大小（MB）',
+                subtitle: '网络预读缓存上限，越大越流畅但占内存更多',
+                icon: Ionicons.hardware_chip_outline,
+                value: _precacheBufferSizeMb,
+                min: PlayerFactory.minPrecacheBufferSizeMb.toDouble(),
+                max: PlayerFactory.maxPrecacheBufferSizeMb.toDouble(),
+                divisions:
+                    (PlayerFactory.maxPrecacheBufferSizeMb -
+                            PlayerFactory.minPrecacheBufferSizeMb) ~/
+                        4,
+                labelFormatter: (v) => '${v.round()} MB',
+                onChanged: (v) {
+                  setState(() => _precacheBufferSizeMb = v);
+                  PlayerFactory.savePrecacheBufferSizeMb(v.round());
+                },
               ),
               Divider(
                   color: colorScheme.onSurface.withValues(alpha: 0.12),

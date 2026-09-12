@@ -872,25 +872,35 @@ class EmbyService extends MediaServerServiceBase
       // [QBSenHook] v8.0: 全量加载——分页循环拉取直到 TotalRecordCount（limit<=0 表示全量）
       final pageSize = limit > 0 ? limit : 500;
       final all = <EmbyMediaItem>[];
-      var startIndex = 0;
-      while (true) {
-        final pagePath = '$path&StartIndex=$startIndex&Limit=$pageSize';
-        final response = await _makeAuthenticatedRequest(pagePath);
-        if (response.statusCode != 200) {
-          DebugLogService().addLog('EmbyService: 获取刷片条目失败 HTTP ');
-          break;
+      Future<void> fetchAllFrom(String p) async {
+        var idx = 0;
+        while (true) {
+          final pagePath = '$p&StartIndex=$idx&Limit=$pageSize';
+          final response = await _makeAuthenticatedRequest(pagePath);
+          if (response.statusCode != 200) {
+            DebugLogService().addLog(
+                'EmbyService: 获取刷片条目失败 HTTP ${response.statusCode}');
+            break;
+          }
+          final data = json.decode(response.body);
+          final items = data['Items'];
+          if (items is! List || items.isEmpty) break;
+          all.addAll(items
+              .map((e) => EmbyMediaItem.fromJson(e))
+              .where((e) => !e.isFolder));
+          final total = data['TotalRecordCount'];
+          idx += items.length;
+          if (limit > 0) break;
+          if (total is num && idx >= total) break;
+          if (idx >= 5000) break; // 安全上限，防止异常服务端死循环
         }
-        final data = json.decode(response.body);
-        final items = data['Items'];
-        if (items is! List || items.isEmpty) break;
-        all.addAll(items
-            .map((e) => EmbyMediaItem.fromJson(e))
-            .where((e) => !e.isFolder));
-        final total = data['TotalRecordCount'];
-        startIndex += items.length;
-        if (limit > 0) break;
-        if (total is num && startIndex >= total) break;
-        if (startIndex >= 5000) break; // 安全上限，防止异常服务端死循环
+      }
+      await fetchAllFrom(path);
+      // [QBSenHook] v8.11: 收藏页——部分服务端不认 Filters=IsFavorite 返回空，
+      // 去掉过滤器重试一次，再由下方客户端按 UserData.IsFavorite 过滤兜底。
+      if (favoritesOnly && all.isEmpty) {
+        final retryPath = path.replace('&Filters=IsFavorite', '');
+        await fetchAllFrom(retryPath);
       }
       // [QBSenHook] v8.10: 收藏模式双保险——服务端 Filters=IsFavorite 偶尔失效时，
       // 客户端按 UserData.IsFavorite 再过滤一次，避免收藏页为空。

@@ -38,7 +38,7 @@ class PlayerFactory {
   static const int defaultPrecacheBufferSizeMb = 32;
   static const int minPrecacheBufferSizeMb = 4;
   static const int maxPrecacheBufferSizeMb = 512;
-  static const int defaultPrecacheBufferDurationSeconds = 4;
+  static const int defaultPrecacheBufferDurationSeconds = 15;
   static const int minPrecacheBufferDurationSeconds = 1;
   static const int maxPrecacheBufferDurationSeconds = 120;
   static PlayerKernelType? _cachedKernelType;
@@ -328,6 +328,19 @@ class PlayerFactory {
           maxPrecacheBufferDurationSeconds,
         )
         .toInt();
+  }
+
+  /// 保存播放预缓存时长（秒），1~120。
+  static Future<void> savePrecacheBufferDurationSeconds(int value) async {
+    final resolved = _clampPrecacheBufferDurationSeconds(value);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_precacheBufferDurationKey, resolved);
+      _cachedPrecacheBufferDurationSeconds = resolved;
+      debugPrint('[PlayerFactory] 已保存播放预缓存时长: ${resolved}s');
+    } catch (e) {
+      debugPrint('[PlayerFactory] 保存播放预缓存时长出错: $e');
+    }
   }
 
   static Future<void> savePrecacheBufferSizeMb(int value) async {

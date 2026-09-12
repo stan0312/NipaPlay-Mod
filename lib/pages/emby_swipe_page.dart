@@ -162,6 +162,11 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   void dispose() {
     // [QBSenHook] v8.5: 返回上一层时保存播放记录
     _savePlayRecord();
+    // [QBSenHook] v8.11: 立即恢复竖屏，不等 stop 异步完成（修复偶发退出后横屏）
+    ScreenOrientationManager.instance.forcePortraitPlayback = true;
+    unawaited(SystemChrome.setPreferredOrientations(const [
+      DeviceOrientation.portraitUp,
+    ]));
     WidgetsBinding.instance.removeObserver(this);
     _controlsTimer?.cancel();
     // [QBSenHook] v7.5.3: 退出刷片页立即停止播放，避免"退出后仍有声音"
@@ -564,13 +569,29 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 );
               }
 
-              // [QBSenHook] v7.5.4: 横屏视频（宽>高）自动旋转 90° 竖着铺满全屏，
-              // 等比不拉伸（cover 裁切左右），与抖音横视频观看一致；竖视频走下方正常逻辑
+              // [QBSenHook] v7.5.4: 横屏视频（宽>高）自动旋转 90° 竖着播放；
+              // [QBSenHook] v8.11: 按 _fitMode 控制画面尺寸——cover 铺满，
+              // 其余模式（原尺寸/16:9/4:3/1:1/9:16）旋转后完整显示不拉伸。
               if (ratio > 1.0) {
-                return SizedBox.expand(
+                if (_fitMode == EmbyFitMode.cover) {
+                  return SizedBox.expand(
+                    child: FittedBox(
+                      fit: BoxFit.cover,
+                      clipBehavior: Clip.hardEdge,
+                      child: RotatedBox(
+                        quarterTurns: 1,
+                        child: SizedBox(
+                          width: maxW,
+                          height: maxW / ratio,
+                          child: texture,
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                return Center(
                   child: FittedBox(
-                    fit: BoxFit.cover,
-                    clipBehavior: Clip.hardEdge,
+                    fit: BoxFit.contain,
                     child: RotatedBox(
                       quarterTurns: 1,
                       child: SizedBox(
@@ -1299,7 +1320,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     _showControlPanel();
   }
 
-  /// [QBSenHook] v8.10: 底部常驻极细播放进度条（无背景，仅显示播放进度）。
+  /// [QBSenHook] v8.11: 底部常驻进度条——当前时间 + 可拖动进度条 + 总时长。
   /// 单击唤出完整控制面板后由控制面板进度条替代。
   Widget _buildMiniProgressBar() {
     return Positioned(
@@ -1308,27 +1329,85 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       bottom: 0,
       child: SafeArea(
         top: false,
-        child: Consumer<VideoPlayerState>(
-          builder: (context, videoState, child) {
-            final bool hasVideo = videoState.hasVideo;
-            final double pos = hasVideo &&
-                    videoState.duration.inMilliseconds > 0
-                ? (videoState.position.inMilliseconds /
-                        videoState.duration.inMilliseconds)
-                    .clamp(0.0, 1.0)
-                : 0.0;
-            return Container(
-              height: 2.5,
-              color: Colors.black.withValues(alpha: 0.3),
-              alignment: Alignment.centerLeft,
-              child: FractionallySizedBox(
-                widthFactor: pos,
-                child: Container(
-                  color: Colors.white.withValues(alpha: 0.85),
-                ),
-              ),
-            );
-          },
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: Consumer<VideoPlayerState>(
+            builder: (context, videoState, child) {
+              final bool hasVideo = videoState.hasVideo;
+              final double pos = hasVideo &&
+                      videoState.duration.inMilliseconds > 0
+                  ? (videoState.position.inMilliseconds /
+                          videoState.duration.inMilliseconds)
+                      .clamp(0.0, 1.0)
+                  : 0.0;
+              final String cur = _fmtDuration(videoState.position);
+              final String total = _fmtDuration(videoState.duration);
+              return Row(
+                children: [
+                  Text(
+                    cur,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      shadows: [Shadow(color: Colors.black87, blurRadius: 3)],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final double barWidth = constraints.maxWidth;
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onHorizontalDragStart: (d) {
+                            _panelBarStartRatio =
+                                (d.localPosition.dx / barWidth)
+                                    .clamp(0.0, 1.0);
+                          },
+                          onHorizontalDragUpdate: (d) {
+                            final v = Provider.of<VideoPlayerState>(context,
+                                listen: false);
+                            if (!v.hasVideo ||
+                                v.duration.inMilliseconds <= 0) {
+                              return;
+                            }
+                            final ratio = (_panelBarStartRatio +
+                                    d.delta.dx / barWidth)
+                                .clamp(0.0, 1.0);
+                            v.seekTo(v.duration * ratio);
+                          },
+                          child: Container(
+                            height: double.infinity,
+                            alignment: Alignment.center,
+                            child: Container(
+                              height: 2.5,
+                              color: Colors.black.withValues(alpha: 0.35),
+                              alignment: Alignment.centerLeft,
+                              child: FractionallySizedBox(
+                                widthFactor: pos,
+                                child: Container(
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    total,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      shadows: [Shadow(color: Colors.black87, blurRadius: 3)],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ),
     );
@@ -1482,8 +1561,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     _seekDragging = true;
     _seekDragStartPos = videoState.position;
     _seekDragAccum = 0.0;
-    // [QBSenHook] v8.5: 快进快退时显示控制面板（含可拖动进度条），3 秒自动隐藏
-    _showControlPanel();
+    // [QBSenHook] v8.11: 底部常驻进度条已实时显示进度，快进快退时不再弹出控制面板
   }
 
   void _onHorizontalDragUpdate(DragUpdateDetails details) {
