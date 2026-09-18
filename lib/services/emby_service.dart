@@ -860,17 +860,21 @@ class EmbyService extends MediaServerServiceBase
         path =
             '/emby/Playlists/$playlistId/Items?UserId=$_userId&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
       } else {
-        final filter = favoritesOnly ? '&Filters=IsFavorite' : '';
         final parent = libraryId != null && libraryId.isNotEmpty
             ? '&ParentId=$libraryId'
             : '';
-        // [QBSenHook] v8.13: 收藏查询追加 Series（否则收藏的剧集全部查不到）；
-        // 普通媒体库仍只查可播放项。EnableUserData 双保险确保 UserData 返回。
-        final includeTypes = favoritesOnly
-            ? 'Movie,Episode,Video,Series,Folder'
-            : 'Movie,Episode,Video';
-        path =
-            '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=$includeTypes$filter$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
+        // [QBSenHook] v8.15: 收藏页改用 Emby 原生 /FavoriteItems 接口——
+        // 直接返回该用户所有收藏项，不依赖 IncludeItemTypes/Filters 组合。
+        // 老版 Emby 对 Filters=IsFavorite + IncludeItemTypes=...Folder 组合直接返回空，
+        // 且客户端按 userData.IsFavorite 过滤又因服务端不返回 UserData 而失效，
+        // 导致收藏页一直空白。/FavoriteItems 是 Emby 官方收藏列表专用接口，最兼容。
+        if (favoritesOnly) {
+          path =
+              '/emby/Users/$_userId/FavoriteItems?Recursive=true&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
+        } else {
+          path =
+              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
+        }
       }
       // [QBSenHook] v8.0: 全量加载——分页循环拉取直到 TotalRecordCount（limit<=0 表示全量）
       final pageSize = limit > 0 ? limit : 500;
@@ -899,25 +903,9 @@ class EmbyService extends MediaServerServiceBase
         }
       }
       await fetchAllFrom(path);
-      // [QBSenHook] v8.11: 收藏页——部分服务端不认 Filters=IsFavorite 返回空，
-      // 去掉过滤器重试一次，再由下方客户端按 UserData.IsFavorite 过滤兜底。
-      if (favoritesOnly && all.isEmpty) {
-        final retryPath = path.replaceAll('&Filters=IsFavorite', '');
-        await fetchAllFrom(retryPath);
-      }
-      // [QBSenHook] v8.10: 收藏模式双保险——服务端 Filters=IsFavorite 偶尔失效时，
-      // 客户端按 UserData.IsFavorite 再过滤一次，避免收藏页为空。
-      // [QBSenHook] v8.14: 客户端过滤结果为空但服务端非空时，说明老版 Emby 未返回
-      // UserData（对 EnableUserData 支持不全），此时直接信任服务端 IsFavorite 结果，
-      // 避免把全部收藏误杀成空列表。
-      final List<EmbyMediaItem> result;
-      if (!favoritesOnly) {
-        result = all;
-      } else {
-        final fav =
-            all.where((e) => e.userData?.isFavorite == true).toList();
-        result = (fav.isNotEmpty || all.isEmpty) ? fav : all;
-      }
+      // [QBSenHook] v8.15: /FavoriteItems 接口返回的就是收藏项，直接使用，
+      // 不再依赖服务端 Filters=IsFavorite 或客户端 userData 二次过滤。
+      final List<EmbyMediaItem> result = all;
       if (sortBy == 'random') {
         result.shuffle();
       } else if (sortBy == 'size') {
@@ -2163,14 +2151,11 @@ class EmbyService extends MediaServerServiceBase
             'Overview,Genres,People,Studios,ProviderIds,DateCreated,PremiereDate,CommunityRating,ProductionYear,UserData,Size,ParentId,Path',
       };
 
-      // 如果指定了父级媒体库，则只在该媒体库中搜索
+      // [QBSenHook] v8.15: 搜索全局递归——Emby 的 ParentId 只接受单个 ID，
+      // 之前把多个媒体库 ID 用逗号 join 传 ParentId 会直接查询失败返回空（搜索无反应）。
+      // 现在不传 ParentId，走 Recursive=true 全局递归搜全部媒体库和文件夹。
       if (parentId != null) {
         queryParams['ParentId'] = parentId;
-      } else {
-        // 如果没有指定，则在所有选中的媒体库中搜索
-        if (_selectedLibraryIds.isNotEmpty) {
-          queryParams['ParentId'] = _selectedLibraryIds.join(',');
-        }
       }
 
       final queryString = queryParams.entries

@@ -612,91 +612,62 @@ class _EmbySwipePageState extends State<EmbySwipePage>
               // [QBSenHook] v7.5.4: 横屏视频（宽>高）自动旋转 90° 竖着播放；
               // [QBSenHook] v8.11: 按 _fitMode 控制画面尺寸——cover 铺满，
               // 其余模式（原尺寸/16:9/4:3/1:1/9:16）旋转后完整显示不拉伸。
-              if (ratio > 1.0) {
+              // [QBSenHook] v8.15: 画面尺寸统一重写——
+              // cover：铺满不拉伸（边缘裁剪）；
+              // 16:9/4:3/1:1/9:16：目标比例显示区 + 内部真实比例 contain 居中，绝不拉伸；
+              // original：真实比例完整显示（上下/左右留白）。
+              // 关键修复：横屏视频之前 cover 外所有比例全落到同一个 contain 分支（点了没反应）；
+              // 竖屏视频之前用目标比例 SizedBox 直接包 Texture，Texture 被强行拉满 → 画面拉伸。
+              // 现在 Texture 永远先放进真实比例 SizedBox（不拉伸），外层再按目标比例布局。
+              final Widget realVideoBase = SizedBox(
+                width: maxW,
+                height: maxW / ratio,
+                child: texture,
+              );
+              Widget buildFit(Widget realVideo) {
                 if (_fitMode == EmbyFitMode.cover) {
                   return SizedBox.expand(
                     child: FittedBox(
                       fit: BoxFit.cover,
                       clipBehavior: Clip.hardEdge,
-                      child: RotatedBox(
-                        quarterTurns: videoRot == 180 ? 2 : 1,
-                        child: SizedBox(
-                          width: maxW,
-                          height: maxW / ratio,
-                          child: texture,
-                        ),
-                      ),
+                      child: realVideo,
                     ),
                   );
                 }
+                if (_fitMode == EmbyFitMode.original) {
+                  return Center(
+                    child: FittedBox(
+                      fit: BoxFit.contain,
+                      child: realVideo,
+                    ),
+                  );
+                }
+                final double targetRatio = _fitModeRatio(_fitMode);
                 return Center(
-                  child: FittedBox(
-                    fit: BoxFit.contain,
-                    child: RotatedBox(
-                      quarterTurns: videoRot == 180 ? 2 : 1,
-                      child: SizedBox(
-                        width: maxW,
-                        height: maxW / ratio,
-                        child: texture,
-                      ),
+                  child: AspectRatio(
+                    aspectRatio: targetRatio,
+                    child: FittedBox(
+                      fit: BoxFit.contain,
+                      child: realVideo,
                     ),
                   ),
                 );
               }
 
-              // 竖屏模式：按 _fitMode 控制画面尺寸
-              switch (_fitMode) {
-                case EmbyFitMode.cover:
-                  return SizedBox.expand(
-                    child: FittedBox(
-                      fit: BoxFit.cover,
-                      clipBehavior: Clip.hardEdge,
-                      child: SizedBox(
-                        width: maxW,
-                        height: maxW / ratio,
-                        child: rotatedTexture,
-                      ),
-                    ),
-                  );
-                case EmbyFitMode.r16_9:
-                case EmbyFitMode.r4_3:
-                case EmbyFitMode.r1_1:
-                case EmbyFitMode.r9_16:
-                  final double targetRatio = _fitModeRatio(_fitMode);
-                  final double hTarget = maxW / targetRatio;
-                  return Center(
-                    child: FittedBox(
-                      fit: BoxFit.contain,
-                      child: SizedBox(
-                        width: maxW,
-                        height: hTarget,
-                        child: rotatedTexture,
-                      ),
-                    ),
-                  );
-                case EmbyFitMode.original:
-                  break;
-              }
-              // 原始模式：宽铺满（横屏视频上下留白），高度受限时 contain
-              final double hForWidth = maxW / ratio;
-              if (hForWidth <= maxH) {
-                return Align(
-                  alignment: Alignment.center,
-                  child: SizedBox(
-                    width: maxW,
-                    height: hForWidth,
-                    child: rotatedTexture,
-                  ),
+              if (ratio > 1.0) {
+                // 横屏视频旋转 90° 竖屏显示（180° 倒置保持原逻辑）
+                final realVideo = RotatedBox(
+                  quarterTurns: videoRot == 180 ? 2 : 1,
+                  child: realVideoBase,
                 );
+                return buildFit(realVideo);
               }
-              return FittedBox(
-                fit: BoxFit.contain,
-                child: SizedBox(
-                  width: maxW,
-                  height: hForWidth,
-                  child: rotatedTexture,
-                ),
-              );
+              // 竖屏视频（rotatedTexture 已处理 180° 旋转）
+              return buildFit(SizedBox(
+                width: maxW,
+                height: maxW / ratio,
+                child: rotatedTexture,
+              ));
             },
           );
         } catch (e) {
