@@ -12,6 +12,6 @@ COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 # 复制 Flutter web 构建产物（Actions 下载的 zip 解压后的 web 目录内容）
 COPY web/ /usr/share/nginx/html/
 
-EXPOSE 80
+EXPOSE 179
 
 CMD ["nginx", "-g", "daemon off;"]
