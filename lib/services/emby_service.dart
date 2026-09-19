@@ -865,13 +865,13 @@ class EmbyService extends MediaServerServiceBase
             : '';
         // [QBSenHook] v8.17: 收藏恢复 v8.9 之前验证过的查询——
         // IncludeItemTypes=Movie,Episode,Video（不含 Series）+ Filters=IsFavorite。
-        // 之前 /FavoriteItems 和含 Series 的组合在本版 Emby 上都返回空。
+        // 去掉 &EnableUserData=true（非标准参数，老版 Emby 可能导致请求异常返回空）。
         if (favoritesOnly) {
           path =
-              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
+              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
         } else {
           path =
-              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
+              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
         }
       }
       // [QBSenHook] v8.0: 全量加载——分页循环拉取直到 TotalRecordCount（limit<=0 表示全量）
