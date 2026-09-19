@@ -903,8 +903,20 @@ class EmbyService extends MediaServerServiceBase
         }
       }
       await fetchAllFrom(path);
-      // [QBSenHook] v8.15: /FavoriteItems 接口返回的就是收藏项，直接使用，
-      // 不再依赖服务端 Filters=IsFavorite 或客户端 userData 二次过滤。
+      // [QBSenHook] v8.16: 收藏多接口兜底——不同版本 Emby 收藏接口兼容性不同。
+      // 先试 /FavoriteItems（4.x+），空则回退 /Items?Filters=IsFavorite。
+      if (favoritesOnly && all.isEmpty) {
+        const fields =
+            '&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true';
+        await fetchAllFrom(
+            '/emby/Users/$_userId/Items?Recursive=true&Filters=IsFavorite&IncludeItemTypes=Movie,Episode,Video,Series$fields$sortQuery');
+      }
+      if (favoritesOnly && all.isEmpty) {
+        const fields =
+            '&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true';
+        await fetchAllFrom(
+            '/emby/Users/$_userId/Items?Recursive=true&Filters=IsFavorite$fields$sortQuery');
+      }
       final List<EmbyMediaItem> result = all;
       if (sortBy == 'random') {
         result.shuffle();
