@@ -1,4 +1,4 @@
-name: Build and Deploy Web
+name: Build Web (for NAS deployment)
 
 on:
   push:
@@ -7,15 +7,6 @@ on:
       - '**.md'
       - '.github/workflows/build-ios.yml'
   workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -38,21 +29,15 @@ jobs:
       - name: Build web
         run: flutter build web --release --base-href /
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Package zip
+        run: |
+          cd build
+          zip -r ../nipaplay-web.zip web
+          cd ..
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          path: build/web
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          name: nipaplay-web
+          path: nipaplay-web.zip
+          retention-days: 90
