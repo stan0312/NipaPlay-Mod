@@ -863,14 +863,12 @@ class EmbyService extends MediaServerServiceBase
         final parent = libraryId != null && libraryId.isNotEmpty
             ? '&ParentId=$libraryId'
             : '';
-        // [QBSenHook] v8.15: 收藏页改用 Emby 原生 /FavoriteItems 接口——
-        // 直接返回该用户所有收藏项，不依赖 IncludeItemTypes/Filters 组合。
-        // 老版 Emby 对 Filters=IsFavorite + IncludeItemTypes=...Folder 组合直接返回空，
-        // 且客户端按 userData.IsFavorite 过滤又因服务端不返回 UserData 而失效，
-        // 导致收藏页一直空白。/FavoriteItems 是 Emby 官方收藏列表专用接口，最兼容。
+        // [QBSenHook] v8.17: 收藏恢复 v8.9 之前验证过的查询——
+        // IncludeItemTypes=Movie,Episode,Video（不含 Series）+ Filters=IsFavorite。
+        // 之前 /FavoriteItems 和含 Series 的组合在本版 Emby 上都返回空。
         if (favoritesOnly) {
           path =
-              '/emby/Users/$_userId/FavoriteItems?Recursive=true&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
+              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
         } else {
           path =
               '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true$sortQuery';
@@ -903,20 +901,6 @@ class EmbyService extends MediaServerServiceBase
         }
       }
       await fetchAllFrom(path);
-      // [QBSenHook] v8.16: 收藏多接口兜底——不同版本 Emby 收藏接口兼容性不同。
-      // 先试 /FavoriteItems（4.x+），空则回退 /Items?Filters=IsFavorite。
-      if (favoritesOnly && all.isEmpty) {
-        const fields =
-            '&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true';
-        await fetchAllFrom(
-            '/emby/Users/$_userId/Items?Recursive=true&Filters=IsFavorite&IncludeItemTypes=Movie,Episode,Video,Series$fields$sortQuery');
-      }
-      if (favoritesOnly && all.isEmpty) {
-        const fields =
-            '&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&EnableUserData=true';
-        await fetchAllFrom(
-            '/emby/Users/$_userId/Items?Recursive=true&Filters=IsFavorite$fields$sortQuery');
-      }
       final List<EmbyMediaItem> result = all;
       if (sortBy == 'random') {
         result.shuffle();
