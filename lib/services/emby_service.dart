@@ -868,7 +868,7 @@ class EmbyService extends MediaServerServiceBase
         // 客户端再过滤掉文件夹。
         if (favoritesOnly) {
           path =
-              '/emby/Users/$_userId/Items?Recursive=true&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
+              '/emby/Users/$_userId/FavoriteItems?Recursive=true&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
         } else {
           path =
               '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
