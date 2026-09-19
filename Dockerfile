@@ -1,22 +1,6 @@
-# NipaPlay Web 版 Dockerfile
-# 多阶段构建：第一阶段用 Flutter SDK 编译 web，第二阶段用 nginx 托管静态文件
+# NipaPlay Web 版 Dockerfile（NAS 部署版）
+# 直接使用 GitHub Actions 构建好的 web 静态文件，无需在 NAS 上安装 Flutter
 
-# ===== 阶段 1：Flutter Web 构建 =====
-FROM ghcr.io/fluttertools/flutter:stable AS builder
-
-WORKDIR /app
-
-# 复制 pubspec 并先拉依赖（利用 Docker 缓存层）
-COPY pubspec.yaml pubspec.lock ./
-RUN flutter pub get
-
-# 复制剩余源码
-COPY . .
-
-# 构建 web release（ renderer=canvaskit 兼容性最好，base-href=/ ）
-RUN flutter build web --release --web-renderer canvaskit --base-href /
-
-# ===== 阶段 2：Nginx 托管 =====
 FROM nginx:alpine
 
 # 删除默认 nginx 配置
@@ -25,8 +9,8 @@ RUN rm /etc/nginx/conf.d/default.conf
 # 复制自定义 nginx 配置（支持 SPA 路由）
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 
-# 复制 Flutter web 构建产物
-COPY --from=builder /app/build/web /usr/share/nginx/html
+# 复制 Flutter web 构建产物（Actions 下载的 zip 解压后的 web 目录内容）
+COPY web/ /usr/share/nginx/html/
 
 EXPOSE 80
 
