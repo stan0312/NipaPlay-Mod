@@ -863,12 +863,12 @@ class EmbyService extends MediaServerServiceBase
         final parent = libraryId != null && libraryId.isNotEmpty
             ? '&ParentId=$libraryId'
             : '';
-        // [QBSenHook] v8.17: 收藏恢复 v8.9 之前验证过的查询——
-        // IncludeItemTypes=Movie,Episode,Video（不含 Series）+ Filters=IsFavorite。
-        // 去掉 &EnableUserData=true（非标准参数，老版 Emby 可能导致请求异常返回空）。
+        // [QBSenHook] v8.18: 收藏查询去掉 IncludeItemTypes 限制——
+        // 老版 Emby 加类型过滤反而可能返回空，直接 Filters=IsFavorite 全量，
+        // 客户端再过滤掉文件夹。
         if (favoritesOnly) {
           path =
-              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
+              '/emby/Users/$_userId/Items?Recursive=true&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
         } else {
           path =
               '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';

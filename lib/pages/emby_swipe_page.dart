@@ -1200,24 +1200,24 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                             .clamp(0.0, 1.0)
                         : 0.0;
                 return SizedBox(
-                  width: 48,
-                  height: 48,
+                  width: 36,
+                  height: 36,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
                       SizedBox(
-                        width: 48,
-                        height: 48,
+                        width: 36,
+                        height: 36,
                         child: CircularProgressIndicator(
                           value: buffering ? null : progress,
-                          strokeWidth: 3,
+                          strokeWidth: 2.5,
                           backgroundColor: Colors.white.withValues(alpha: 0.22),
                           color: Colors.white,
                         ),
                       ),
                       Container(
-                        width: 38,
-                        height: 38,
+                        width: 28,
+                        height: 28,
                         decoration: BoxDecoration(
                           color: Colors.black.withValues(alpha: 0.35),
                           shape: BoxShape.circle,
@@ -1225,10 +1225,10 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                         child: buffering
                             // [QBSenHook] v8.8b: 缓冲=转圈缓冲图标（无文字）
                             ? const SizedBox(
-                                width: 22,
-                                height: 22,
+                                width: 16,
+                                height: 16,
                                 child: CircularProgressIndicator(
-                                  strokeWidth: 2.6,
+                                  strokeWidth: 2.2,
                                   color: Colors.white70,
                                 ),
                               )
@@ -1238,7 +1238,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                                     ? Icons.play_arrow_rounded
                                     : Icons.pause_rounded,
                                 color: Colors.white.withValues(alpha: 0.85),
-                                size: 26,
+                                size: 18,
                               ),
                       ),
                     ],
