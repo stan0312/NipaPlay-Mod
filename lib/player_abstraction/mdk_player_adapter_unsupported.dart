@@ -5,7 +5,7 @@ import './player_data_models.dart';
 import 'dart:async';
 
 class MdkPlayerAdapter implements AbstractPlayer {
-  MdkPlayerAdapter({String? httpProxy});
+  MdkPlayerAdapter({String? httpProxy, int bufferPrecacheSecs = 0, int bufferPrecacheSizeMb = 0});
 
   @override
   double get volume => 1.0;
