@@ -884,11 +884,15 @@ class EmbyService extends MediaServerServiceBase
           final response = await _makeAuthenticatedRequest(pagePath);
           if (response.statusCode != 200) {
             DebugLogService().addLog(
-                'EmbyService: 获取刷片条目失败 HTTP ${response.statusCode}');
+                'EmbyService: 获取刷片条目失败 HTTP ${response.statusCode} url=$pagePath');
             break;
           }
           final data = json.decode(response.body);
           final items = data['Items'];
+          if (favoritesOnly && idx == 0) {
+            DebugLogService().addLog(
+                '收藏查询: HTTP 200 TotalRecordCount=${data['TotalRecordCount']} 返回条数=${items is List ? items.length : 0}');
+          }
           if (items is! List || items.isEmpty) break;
           all.addAll(items
               .map((e) => EmbyMediaItem.fromJson(e))
@@ -946,7 +950,8 @@ class EmbyService extends MediaServerServiceBase
       var startIndex = 0;
       while (true) {
         final response = await _makeAuthenticatedRequest(
-            '/emby/Users/$_userId/Items?ParentId=$parentId&IncludeItemTypes=Folder,Movie,Episode,Video&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&StartIndex=$startIndex&Limit=300');
+            // [QBSenHook] v8.19: 去掉 IncludeItemTypes 限制——电视类别下文件夹是 Series 类型会被过滤掉
+            '/emby/Users/$_userId/Items?ParentId=$parentId&Recursive=false$sortQuery&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData&StartIndex=$startIndex&Limit=300');
         if (response.statusCode != 200) {
           return [];
         }

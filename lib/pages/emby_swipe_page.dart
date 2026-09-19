@@ -149,6 +149,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     // [QBSenHook] v7.5.4: 强制竖屏播放（播放回调不再切横屏）
     ScreenOrientationManager.instance.forcePortraitPlayback = true;
     _videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    // [QBSenHook] v8.19: 抖音模式视频播完自动切下一集
+    _videoState.addListener(_onVideoStateChanged);
     _libraryId = widget.initialLibraryId;
     _favoritesOnly = widget.favoritesOnly;
     _playlistId = widget.playlistId;
@@ -168,6 +170,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   void dispose() {
     // [QBSenHook] v8.5: 返回上一层时保存播放记录
     _savePlayRecord();
+    // [QBSenHook] v8.19: 移除自动下一集监听
+    _videoState.removeListener(_onVideoStateChanged);
     // [QBSenHook] v8.11: 立即恢复竖屏，不等 stop 异步完成（修复偶发退出后横屏）
     ScreenOrientationManager.instance.forcePortraitPlayback = true;
     unawaited(SystemChrome.setPreferredOrientations(const [
@@ -425,6 +429,26 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   }
 
   // ============ 内嵌播放 ============
+
+  // [QBSenHook] v8.19: 抖音模式视频播完自动切下一集
+  bool _autoNextTriggered = false;
+  void _onVideoStateChanged() {
+    if (!_videoState.hasVideo) return;
+    final dur = _videoState.duration.inMilliseconds;
+    if (dur <= 0) return;
+    final pos = _videoState.position.inMilliseconds;
+    // 播完（距结束 < 800ms）且不是最后一个
+    if (pos >= dur - 800 && _currentIndex < _items.length - 1) {
+      if (_autoNextTriggered) return;
+      _autoNextTriggered = true;
+      _pageController.nextPage(
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+      );
+    } else if (pos < dur - 2000) {
+      _autoNextTriggered = false;
+    }
+  }
 
   Future<void> _autoPlay(EmbyMediaItem item) async {
     // [QBSenHook] v8.4: 防重入——jumpToPage 触发的 onPageChanged 与 _load 显式调用
