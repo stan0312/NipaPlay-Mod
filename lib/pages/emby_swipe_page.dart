@@ -450,18 +450,38 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     }
   }
 
-  // [QBSenHook] v8.22: 预缓存下2个视频的播放会话（后台HTTP预创建，不阻塞当前播放）
+  // [QBSenHook] v8.23: 真正预缓存——提前创建播放会话+resolve视频流，切换时不用等网络
   void _preloadNextSessions() {
     for (var i = 1; i <= 2; i++) {
       final idx = _currentIndex + i;
       if (idx >= _items.length) break;
       final next = _items[idx];
-      // 后台异步预创建播放会话，fire-and-forget
+      // 后台异步预创建播放会话+resolve视频流，fire-and-forget
       Future(() async {
         try {
-          await EmbyService.instance.createPlaybackSession(itemId: next.id);
+          final session = await EmbyService.instance
+              .createPlaybackSession(itemId: next.id);
+          // 预resolve视频流URL，这样切换时不用等
+          final historyItem = WatchHistoryItem(
+            filePath: 'emby://${next.id}',
+            animeName: next.name,
+            episodeTitle: null,
+            watchProgress: 0.0,
+            lastPosition: 0,
+            duration: 0,
+            lastWatchTime: DateTime.now(),
+            animeId: null,
+            isFromScan: false,
+          );
+          final playable = PlayableItem(
+            videoPath: historyItem.filePath,
+            title: next.name,
+            historyItem: historyItem,
+            playbackSession: session,
+          );
+          await PlaybackSourceService.resolve(context, playable);
         } catch (_) {
-          // 预创建失败不影响播放
+          // 预缓存失败不影响播放
         }
       });
     }
