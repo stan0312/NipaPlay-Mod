@@ -958,6 +958,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 controller: _pageController,
                 scrollDirection: Axis.vertical,
                 itemCount: _items.length,
+                cacheExtent: MediaQuery.of(context).size.height,
                 onPageChanged: (i) {
                   setState(() => _currentIndex = i);
                   if (i >= 0 && i < _items.length) {

@@ -13,6 +13,7 @@ import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/settings/unified_settings_page.dart';
+import 'package:nipaplay/settings/pages/remote_media_library_settings_content.dart';
 import 'package:nipaplay/utils/theme_notifier.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:nipaplay/widgets/media_server_network_image.dart';
@@ -1270,11 +1271,10 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               icon: Icon(Icons.settings_rounded, color: iconColor, size: 22),
               tooltip: '设置',
               onPressed: () {
-                // [QBSenHook] v8.14: 设置入口打开统一设置页（仅"添加媒体库 + 播放器"两项，
-                // 播放器项内含内核选择 + 预缓存设置；此前只开媒体库页导致播放器设置不可见）
+                // [QBSenHook] 设置直接打开媒体库配置页
                 Navigator.of(context).push(
                   CupertinoPageRoute<void>(
-                    builder: (_) => const UnifiedSettingsPage(),
+                    builder: (_) => const RemoteMediaLibrarySettingsContent(),
                   ),
                 );
               },
