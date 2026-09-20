@@ -450,6 +450,23 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     }
   }
 
+  // [QBSenHook] v8.22: 预缓存下2个视频的播放会话（后台HTTP预创建，不阻塞当前播放）
+  void _preloadNextSessions() {
+    for (var i = 1; i <= 2; i++) {
+      final idx = _currentIndex + i;
+      if (idx >= _items.length) break;
+      final next = _items[idx];
+      // 后台异步预创建播放会话，fire-and-forget
+      Future(() async {
+        try {
+          await EmbyService.instance.createPlaybackSession(itemId: next.id);
+        } catch (_) {
+          // 预创建失败不影响播放
+        }
+      });
+    }
+  }
+
   Future<void> _autoPlay(EmbyMediaItem item) async {
     // [QBSenHook] v8.4: 防重入——jumpToPage 触发的 onPageChanged 与 _load 显式调用
     // 会连续触发同一视频的 _autoPlay，并发初始化会竞争播放器单例，导致播放器
@@ -537,6 +554,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         _pendingPlayId = null;
         _playbackError = null;
       });
+      // [QBSenHook] v8.22: 预缓存下2个视频的播放会话（HTTP预创建，切换时不用等网络）
+      _preloadNextSessions();
       // 自动开始播放（initializePlayer 已就绪，直接 play）
       // [QBSenHook] v7.3: play() 是同步 void，不可 await
       try {

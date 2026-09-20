@@ -1281,12 +1281,16 @@ class _RemoteMediaLibrarySettingsContentState
       barrierColor: Colors.transparent,
       child: Builder(
         builder: (dialogContext) {
-          final colorScheme = Theme.of(dialogContext).colorScheme;
+          final isDark = Theme.of(dialogContext).brightness == Brightness.dark;
+          final textColor = isDark ? Colors.white : Colors.black87;
+          final subtextColor = isDark ? Colors.white70 : Colors.black54;
+          final bgColor = isDark ? const Color(0xFF2C2C2C) : Colors.white;
           final screenSize = MediaQuery.of(dialogContext).size;
           final maxWidth = (screenSize.width * 0.95).clamp(360.0, 1280.0);
           return NipaplayWindowScaffold(
             maxWidth: maxWidth,
             maxHeightFactor: 0.88,
+            backgroundColor: bgColor,
             onClose: () => Navigator.of(dialogContext).maybePop(),
             child: Column(
               children: [
@@ -1297,7 +1301,7 @@ class _RemoteMediaLibrarySettingsContentState
                     child: Text(
                       title,
                       style: TextStyle(
-                        color: colorScheme.onSurface,
+                        color: textColor,
                         fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
@@ -1306,7 +1310,7 @@ class _RemoteMediaLibrarySettingsContentState
                 ),
                 Divider(
                   height: 1,
-                  color: colorScheme.onSurface.withValues(alpha: 0.12),
+                  color: subtextColor.withValues(alpha: 0.2),
                 ),
                 Expanded(child: child),
               ],
