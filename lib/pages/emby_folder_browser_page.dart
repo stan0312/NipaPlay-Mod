@@ -212,7 +212,10 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       _error = null;
     });
     try {
-      if (_currentId == null) {
+      if (_favoritesOnly) {
+        // [QBSenHook] v8.9: 收藏页——全局收藏视频（Emby 原生 IsFavorite，像媒体库一样陈列）
+        await _loadFavorites();
+      } else if (_currentId == null) {
         // [QBSenHook] v7.7: 根目录先从服务器刷新媒体库列表，避免只显示缓存
         try {
           await EmbyService.instance.loadAvailableLibraries();
@@ -228,9 +231,6 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
           _videos = [];
           _loading = false;
         });
-      } else if (_favoritesOnly) {
-        // [QBSenHook] v8.9: 收藏页——全局收藏视频（Emby 原生 IsFavorite，像媒体库一样陈列）
-        await _loadFavorites();
       } else if (_videoGridMode) {
         // [QBSenHook] v7.5.5: 分类视频陈列（3 个一排）
         await _loadVideoGrid();
