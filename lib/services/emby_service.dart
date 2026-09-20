@@ -891,7 +891,13 @@ class EmbyService extends MediaServerServiceBase
           final items = data['Items'];
           if (favoritesOnly && idx == 0) {
             DebugLogService().addLog(
-                '收藏查询: HTTP 200 TotalRecordCount=${data['TotalRecordCount']} 返回条数=${items is List ? items.length : 0}');
+                '收藏查询: HTTP ${response.statusCode} url=$pagePath');
+            DebugLogService().addLog(
+                '收藏查询: TotalRecordCount=${data['TotalRecordCount']} 返回条数=${items is List ? items.length : 0}');
+            if (items is List && items.isNotEmpty) {
+              DebugLogService().addLog(
+                  '收藏查询: 第一个item类型=${items[0]['Type']} 名称=${items[0]['Name']}');
+            }
           }
           if (items is! List || items.isEmpty) break;
           all.addAll(items
