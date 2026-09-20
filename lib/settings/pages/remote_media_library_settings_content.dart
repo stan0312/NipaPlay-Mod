@@ -47,7 +47,7 @@ class _RemoteMediaLibrarySettingsContentState
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: ListTile(
-                  leading: Icon(Icons.cloud_outline, color: textColor),
+                  leading: Icon(Icons.cloud_outlined, color: textColor),
                   title: Text(
                     '添加媒体库',
                     style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w500),
@@ -63,7 +63,7 @@ class _RemoteMediaLibrarySettingsContentState
                     Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => const NetworkMediaServerDialog(
-                          type: MediaServerType.emby,
+                          serverType: MediaServerType.emby,
                         ),
                       ),
                     );
@@ -141,15 +141,14 @@ class DebugLogPage extends StatelessWidget {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('日志已清空')),
               );
-              setState(() {});
             },
           ),
         ],
       ),
-      body: ValueListenableBuilder(
-        valueListenable: DebugLogService(),
-        builder: (context, _, __) {
-          final logs = DebugLogService().logs.reversed.toList();
+      body: AnimatedBuilder(
+        animation: DebugLogService(),
+        builder: (context, _) {
+          final logs = DebugLogService().logEntries.reversed.toList();
           return ListView.builder(
             padding: const EdgeInsets.all(12),
             itemCount: logs.length,
@@ -173,9 +172,4 @@ class DebugLogPage extends StatelessWidget {
       ),
     );
   }
-}
-
-// 简单的 setState 回调（避免引入 hook）
-void setState(VoidCallback fn) {
-  fn();
 }
