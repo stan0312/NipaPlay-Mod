@@ -78,7 +78,7 @@ class _RemoteMediaLibrarySettingsContentState
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: ListTile(
-                  leading: Icon(Icons.bug_report_outline, color: textColor),
+                  leading: Icon(Icons.bug_report, color: textColor),
                   title: Text(
                     '调试日志',
                     style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w500),
