@@ -1,5 +1,5 @@
-import 'package:flutter/cupertino.dart' as cupertino;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:nipaplay/providers/emby_provider.dart';
 import 'package:nipaplay/services/debug_log_service.dart';
@@ -40,7 +40,6 @@ class _RemoteMediaLibrarySettingsContentState
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              // 添加媒体库
               Container(
                 decoration: BoxDecoration(
                   color: cardColor,
@@ -71,7 +70,6 @@ class _RemoteMediaLibrarySettingsContentState
                 ),
               ),
               const SizedBox(height: 16),
-              // 调试日志
               Container(
                 decoration: BoxDecoration(
                   color: cardColor,
@@ -84,7 +82,7 @@ class _RemoteMediaLibrarySettingsContentState
                     style: TextStyle(color: textColor, fontSize: 16, fontWeight: FontWeight.w500),
                   ),
                   subtitle: Text(
-                    '查看收藏查询等调试信息',
+                    '查看收藏查询等调试信息，可复制',
                     style: TextStyle(color: subtextColor, fontSize: 13),
                   ),
                   trailing: Icon(Icons.chevron_right, color: subtextColor),
@@ -110,7 +108,7 @@ class _RemoteMediaLibrarySettingsContentState
   }
 }
 
-class DebugLogPage extends StatelessWidget {
+class DebugLogPage extends StatefulWidget {
   final Color bgColor;
   final Color cardColor;
   final Color textColor;
@@ -125,17 +123,36 @@ class DebugLogPage extends StatelessWidget {
   });
 
   @override
+  State<DebugLogPage> createState() => _DebugLogPageState();
+}
+
+class _DebugLogPageState extends State<DebugLogPage> {
+  String _filter = '全部';
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: bgColor,
+      backgroundColor: widget.bgColor,
       appBar: AppBar(
-        backgroundColor: bgColor,
+        backgroundColor: widget.bgColor,
         elevation: 0,
-        title: Text('调试日志', style: TextStyle(color: textColor, fontSize: 18)),
-        iconTheme: IconThemeData(color: textColor),
+        title: Text('调试日志', style: TextStyle(color: widget.textColor, fontSize: 18)),
+        iconTheme: IconThemeData(color: widget.textColor),
         actions: [
           IconButton(
-            icon: Icon(Icons.delete_outline, color: subtextColor),
+            icon: Icon(Icons.copy, color: widget.subtextColor),
+            tooltip: '复制全部日志',
+            onPressed: () {
+              final logs = DebugLogService().logEntries;
+              final text = logs.map((e) => e.toFormattedString()).join('\n');
+              Clipboard.setData(ClipboardData(text: text));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('日志已复制到剪贴板')),
+              );
+            },
+          ),
+          IconButton(
+            icon: Icon(Icons.delete_outline, color: widget.subtextColor),
             onPressed: () {
               DebugLogService().clearLogs();
               ScaffoldMessenger.of(context).showSnackBar(
@@ -145,30 +162,95 @@ class DebugLogPage extends StatelessWidget {
           ),
         ],
       ),
-      body: AnimatedBuilder(
-        animation: DebugLogService(),
-        builder: (context, _) {
-          final logs = DebugLogService().logEntries.reversed.toList();
-          return ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: logs.length,
-            itemBuilder: (context, index) {
-              final entry = logs[index];
-              return Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  entry.message,
-                  style: TextStyle(color: textColor, fontSize: 13, height: 1.4),
-                ),
-              );
-            },
-          );
-        },
+      body: Column(
+        children: [
+          // 过滤按钮
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: [
+                _buildFilterButton('全部'),
+                const SizedBox(width: 8),
+                _buildFilterButton('收藏'),
+                const SizedBox(width: 8),
+                _buildFilterButton('错误'),
+              ],
+            ),
+          ),
+          Expanded(
+            child: AnimatedBuilder(
+              animation: DebugLogService(),
+              builder: (context, _) {
+                var logs = DebugLogService().logEntries.reversed.toList();
+                if (_filter == '收藏') {
+                  logs = logs.where((e) => e.message.contains('收藏')).toList();
+                } else if (_filter == '错误') {
+                  logs = logs.where((e) => e.level == 'ERROR' || e.message.contains('失败') || e.message.contains('错误')).toList();
+                }
+                return ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: logs.length,
+                  itemBuilder: (context, index) {
+                    final entry = logs[index];
+                    final isError = entry.level == 'ERROR' || entry.message.contains('失败') || entry.message.contains('错误');
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: widget.cardColor,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            entry.toFormattedString(),
+                            style: TextStyle(
+                              color: isError ? Colors.redAccent : widget.textColor,
+                              fontSize: 11,
+                              height: 1.4,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            entry.message,
+                            style: TextStyle(
+                              color: isError ? Colors.redAccent : widget.textColor,
+                              fontSize: 13,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterButton(String label) {
+    final isSelected = _filter == label;
+    return GestureDetector(
+      onTap: () => setState(() => _filter = label),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue : widget.cardColor,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.white : widget.textColor,
+            fontSize: 13,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+          ),
+        ),
       ),
     );
   }
