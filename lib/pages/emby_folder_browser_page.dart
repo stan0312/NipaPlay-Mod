@@ -11,6 +11,7 @@ import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/pages/emby_fullscreen_player_page.dart';
 import 'package:nipaplay/pages/emby_swipe_page.dart';
 import 'package:nipaplay/services/emby_service.dart';
+import 'package:nipaplay/services/debug_log_service.dart';
 import 'package:nipaplay/services/playback_source_service.dart';
 import 'package:nipaplay/settings/unified_settings_page.dart';
 import 'package:nipaplay/settings/pages/remote_media_library_settings_content.dart';
@@ -441,18 +442,25 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   /// [QBSenHook] v8.9: 收藏页加载（服务端排序，全量）。
   Future<void> _loadFavorites() async {
     try {
+      DebugLogService().addLog('收藏页: 开始加载收藏视频', level: 'INFO', tag: '收藏');
       final items = await EmbyService.instance.getSwipeItems(
         favoritesOnly: true,
         sortBy: _sort.name,
         sortAscending: _sortAscending,
         limit: 0, // 全量
       );
+      DebugLogService().addLog('收藏页: 加载完成，共 ${items.length} 个收藏视频', level: 'INFO', tag: '收藏');
+      if (items.isEmpty) {
+        DebugLogService().addWarning('收藏页: 返回空列表！可能是 Emby 里没有收藏，或者接口返回空', tag: '收藏');
+      }
       if (!mounted) return;
       setState(() {
         _videos = items;
         _loading = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
+      DebugLogService().addError('收藏页: 加载失败: $e', tag: '收藏');
+      DebugLogService().addError('收藏页: 异常堆栈: $stackTrace', tag: '收藏');
       if (!mounted) return;
       setState(() {
         _error = '$e';
