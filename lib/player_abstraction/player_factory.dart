@@ -28,6 +28,8 @@ bool supportsPlayerHttpProxy(PlayerKernelType type) {
 
 class PlayerFactory {
   static const String _playerKernelTypeKey = 'player_kernel_type';
+  static const String _autoSwitchKernelKey = 'auto_switch_player_kernel';
+  static const String _kernelPriorityKey = 'player_kernel_priority';
   static const String _precacheBufferSizeKey = 'player_precache_buffer_size_mb';
   static const String _precacheBufferDurationKey =
       'player_precache_buffer_duration_seconds';
@@ -42,6 +44,8 @@ class PlayerFactory {
   static const int minPrecacheBufferDurationSeconds = 1;
   static const int maxPrecacheBufferDurationSeconds = 120;
   static PlayerKernelType? _cachedKernelType;
+  static bool _cachedAutoSwitchKernel = false;
+  static List<PlayerKernelType> _cachedKernelPriority = PlayerKernelType.values;
   static int _cachedPrecacheBufferSizeMb = defaultPrecacheBufferSizeMb;
   static int _cachedPrecacheBufferDurationSeconds =
       defaultPrecacheBufferDurationSeconds;
@@ -85,6 +89,21 @@ class PlayerFactory {
     try {
       final prefs = await SharedPreferences.getInstance();
       final kernelTypeIndex = prefs.getInt(_playerKernelTypeKey);
+      _cachedAutoSwitchKernel = prefs.getBool(_autoSwitchKernelKey) ?? false;
+      final priorityIndexList = prefs.getStringList(_kernelPriorityKey);
+      if (priorityIndexList != null && priorityIndexList.isNotEmpty) {
+        _cachedKernelPriority = priorityIndexList
+            .map((e) => int.tryParse(e))
+            .where((i) => i != null && i >= 0 && i < PlayerKernelType.values.length)
+            .map((i) => PlayerKernelType.values[i!])
+            .toList();
+        // 补齐缺失的内核
+        for (final k in PlayerKernelType.values) {
+          if (!_cachedKernelPriority.contains(k)) {
+            _cachedKernelPriority.add(k);
+          }
+        }
+      }
       final bufferSizeMb = prefs.getInt(_precacheBufferSizeKey);
       final precacheBufferDurationSecs =
           prefs.getInt(_precacheBufferDurationKey);
@@ -503,6 +522,45 @@ class PlayerFactory {
       // case PlayerKernelType.otherPlayer:
       //   // return OtherPlayerAdapter(ThirdPartyPlayerApi());
       //   throw UnimplementedError('Other player types not yet supported.');
+    }
+  }
+
+  // 获取自动切换内核开关状态
+  static bool getAutoSwitchKernel() {
+    if (!_hasLoadedSettings) _loadSettingsSync();
+    return _cachedAutoSwitchKernel;
+  }
+
+  // 保存自动切换内核开关状态
+  static Future<void> saveAutoSwitchKernel(bool enabled) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_autoSwitchKernelKey, enabled);
+      _cachedAutoSwitchKernel = enabled;
+      debugPrint('[PlayerFactory] 自动切换内核已${enabled ? "开启" : "关闭"}');
+    } catch (e) {
+      debugPrint('[PlayerFactory] 保存自动切换内核设置出错: $e');
+    }
+  }
+
+  // 获取内核优先级列表
+  static List<PlayerKernelType> getKernelPriority() {
+    if (!_hasLoadedSettings) _loadSettingsSync();
+    return List.unmodifiable(_cachedKernelPriority);
+  }
+
+  // 保存内核优先级列表
+  static Future<void> saveKernelPriority(List<PlayerKernelType> priority) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        _kernelPriorityKey,
+        priority.map((e) => e.index.toString()).toList(),
+      );
+      _cachedKernelPriority = List.unmodifiable(priority);
+      debugPrint('[PlayerFactory] 内核优先级已保存: ${priority.map((e) => e.name).join(" -> ")}');
+    } catch (e) {
+      debugPrint('[PlayerFactory] 保存内核优先级设置出错: $e');
     }
   }
 

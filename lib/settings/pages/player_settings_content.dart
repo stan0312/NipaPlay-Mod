@@ -28,6 +28,8 @@ class PlayerSettingsContent extends StatefulWidget {
 
 class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
   PlayerKernelType _selectedKernelType = PlayerKernelType.mdk;
+  bool _autoSwitchKernel = false;
+  List<PlayerKernelType> _kernelPriority = PlayerKernelType.values;
   bool _macOSNativeVideoEnabled = false;
   String _androidAudioOutput = 'opensles';
   PlayerErikaAndroidOutputMode _erikaAndroidOutputMode =
@@ -76,6 +78,8 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _loadPlayerKernelSettings();
+    _autoSwitchKernel = PlayerFactory.getAutoSwitchKernel();
+    _kernelPriority = PlayerFactory.getKernelPriority();
     _loadMacOSNativeVideoSettings();
     _loadAndroidAudioOutputSettings();
     _loadErikaAndroidOutputSettings();
@@ -404,6 +408,67 @@ class _PlayerSettingsContentState extends State<PlayerSettingsContent> {
                 },
                 dropdownKey: _playerKernelDropdownKey,
               ),
+              Divider(
+                  color: colorScheme.onSurface.withValues(alpha: 0.12),
+                  height: 1),
+              AdaptiveSettingsTile<bool>.toggle(
+                title: '自动切换播放核心',
+                subtitle: '当前核心播放失败时，按优先级自动尝试下一个核心',
+                icon: Ionicons.swap_horizontal_outline,
+                value: _autoSwitchKernel,
+                onChanged: (v) async {
+                  await PlayerFactory.saveAutoSwitchKernel(v);
+                  if (!mounted) return;
+                  setState(() => _autoSwitchKernel = v);
+                  BlurSnackBar.show(context, v ? '已开启自动切换播放核心' : '已关闭自动切换播放核心');
+                },
+              ),
+              if (_autoSwitchKernel) ...[
+                Divider(
+                    color: colorScheme.onSurface.withValues(alpha: 0.12),
+                    height: 1),
+                AdaptiveSettingsSection(
+                  title: const Text('核心优先级（从上到下，播放失败时依次尝试）'),
+                  addDividers: true,
+                  children: [
+                    for (int i = 0; i < _kernelPriority.length; i++) ...[
+                      AdaptiveSettingsTile(
+                        leading: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.arrow_upward_rounded, size: 18),
+                              onPressed: i == 0 ? null : () async {
+                                final newList = List<PlayerKernelType>.from(_kernelPriority);
+                                final tmp = newList[i-1];
+                                newList[i-1] = newList[i];
+                                newList[i] = tmp;
+                                await PlayerFactory.saveKernelPriority(newList);
+                                if (!mounted) return;
+                                setState(() => _kernelPriority = newList);
+                              },
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.arrow_downward_rounded, size: 18),
+                              onPressed: i == _kernelPriority.length - 1 ? null : () async {
+                                final newList = List<PlayerKernelType>.from(_kernelPriority);
+                                final tmp = newList[i+1];
+                                newList[i+1] = newList[i];
+                                newList[i] = tmp;
+                                await PlayerFactory.saveKernelPriority(newList);
+                                if (!mounted) return;
+                                setState(() => _kernelPriority = newList);
+                              },
+                            ),
+                          ],
+                        ),
+                        title: Text('优先级 ${i+1}：${_kernelPriority[i].name}'),
+                        subtitle: Text(_getPlayerKernelDescription(_kernelPriority[i]).split('\n').first),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
               Divider(
                   color: colorScheme.onSurface.withValues(alpha: 0.12),
                   height: 1),
