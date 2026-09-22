@@ -470,7 +470,6 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 
   void _openSwipeInCurrentFolder({String? initialItemId}) {
-    if (_currentId == null) return;
     // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
     // [QBSenHook] v7.8: 传入当前排序设置，刷片模式与外部排序一致
     // [QBSenHook] v8.3: 单击视频默认进入刷片模式，initialItemId 定位到点击的视频
@@ -491,6 +490,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       );
       return;
     }
+    if (_currentId == null) return;
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => EmbySwipePage(
