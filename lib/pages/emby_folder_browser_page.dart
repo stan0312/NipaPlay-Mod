@@ -470,6 +470,11 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 
   void _openSwipeInCurrentFolder({String? initialItemId}) {
+    // [QBSenHook] v8.5.4: 调试收藏页点击无响应
+    DebugLogService().addLog(
+        '刷片: _openSwipeInCurrentFolder 被调用, favoritesOnly=$_favoritesOnly, currentId=$_currentId, initialItemId=$initialItemId',
+        level: 'INFO', tag: '刷片');
+    try {
     // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
     // [QBSenHook] v7.8: 传入当前排序设置，刷片模式与外部排序一致
     // [QBSenHook] v8.3: 单击视频默认进入刷片模式，initialItemId 定位到点击的视频
@@ -490,7 +495,10 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       );
       return;
     }
-    if (_currentId == null) return;
+    if (_currentId == null) {
+      DebugLogService().addWarning('刷片: currentId 为 null 且非收藏页，无法进入刷片', tag: '刷片');
+      return;
+    }
     Navigator.of(context).push(
       CupertinoPageRoute<void>(
         builder: (_) => EmbySwipePage(
@@ -505,6 +513,9 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
         ),
       ),
     );
+    } catch (e, st) {
+      DebugLogService().addError('刷片: 进入刷片失败: $e\n$st', tag: '刷片');
+    }
   }
 
   /// [QBSenHook] v8.5: 长按抖音按钮列出播放记录
@@ -1279,16 +1290,16 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               icon: Icon(Icons.settings_rounded, color: iconColor, size: 22),
               tooltip: '设置',
               onPressed: () {
-                // [QBSenHook] 设置直接打开媒体库配置页
+                // [QBSenHook] v8.51: 打开统一设置页（含媒体库 + 播放器内核设置）
                 Navigator.of(context).push(
                   CupertinoPageRoute<void>(
-                    builder: (_) => const RemoteMediaLibrarySettingsContent(),
+                    builder: (_) => const UnifiedSettingsPage(),
                   ),
                 );
               },
             ),
-            // [QBSenHook] v8.6: 右上角刷新按钮 -> 选择按钮（批量操作；下拉仍可刷新）
-            if (_currentId != null)
+            // [QBSenHook] v8.51: 收藏页也显示选择按钮
+            if (_currentId != null || _favoritesOnly)
               IconButton(
                 icon: Icon(
                   _selectionMode
