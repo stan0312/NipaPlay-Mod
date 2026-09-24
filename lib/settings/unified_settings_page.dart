@@ -135,39 +135,9 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
   }
 
   material.Widget _buildDesktopTablet(material.BuildContext context) {
-    // [QBSenHook] v8.1: 设置页精简为"添加媒体库"+"播放器设置"两项
-    // [QBSenHook] v8.12: 恢复播放器入口（内核选择 + 预缓存设置）
-    final entries = buildUnifiedSettingEntries(
-      context,
-      surface: UnifiedSettingsSurface.desktopTablet,
-    )
-        .where((entry) =>
-            entry.id == UnifiedSettingEntryIds.remoteMediaLibrary ||
-            entry.id == UnifiedSettingEntryIds.player ||
-            entry.id == UnifiedSettingEntryIds.developerOptions)
-        .toList(growable: false);
-    if (entries.isEmpty) {
-      return const material.SizedBox.shrink();
-    }
-
-    final selectedEntry = _effectiveDesktopEntry(entries);
-    final content = material.KeyedSubtree(
-      key: material.ValueKey<String>(selectedEntry.id),
-      child: selectedEntry.buildPage(
-        context,
-        UnifiedSettingsSurface.desktopTablet,
-      ),
-    );
-
-    return AdaptiveSettingsScope(
-      style: AdaptiveSettingsStyle.desktopTablet,
-      child: SettingsNoRippleTheme(
-        disableBlurEffect: true,
-        child: NipaplayLargeScreenModeScope.isActiveOf(context)
-            ? _buildLargeScreen(context, entries, selectedEntry, content)
-            : _buildDesktopSplit(context, entries, selectedEntry, content),
-      ),
-    );
+    // 手机上 push 设置页时没有 AppDisplaySurfaceScope，默认走 desktopTablet。
+    // 直接复用 phone 的 Material 单列布局，避免左侧分栏样式错乱。
+    return _buildPhone(context);
   }
 
   UnifiedSettingEntry _effectiveDesktopEntry(
