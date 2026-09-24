@@ -97,11 +97,11 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
                 onTap: () {
                   if (entry.id == UnifiedSettingEntryIds.developerOptions) {
                     // 直接打开日志查看器，不进开发者选项页
-                    cupertino.CupertinoBottomSheet.show(
+                    CupertinoBottomSheet.show(
                       context: context,
                       title: '调试日志',
                       floatingTitle: true,
-                      child: const cupertino.CupertinoDebugLogViewerSheet(),
+                      child: const CupertinoDebugLogViewerSheet(),
                     );
                   } else {
                     openUnifiedCupertinoSettingEntry(context, entry);
