@@ -172,7 +172,16 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       });
     }
     try {
-      if (_currentId == null) {
+      if (_favoritesOnly) {
+        final items = await EmbyService.instance.getSwipeItems(
+          favoritesOnly: true,
+          sortBy: _sort.name,
+          sortAscending: _sortAscending,
+          limit: 0,
+        );
+        if (!mounted) return;
+        setState(() => _videos = items);
+      } else if (_currentId == null) {
         await EmbyService.instance.loadAvailableLibraries();
         if (!mounted) return;
         setState(() => _rootLibraries = EmbyService.instance.availableLibraries);
@@ -210,7 +219,10 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       _error = null;
     });
     try {
-      if (_currentId == null) {
+      if (_favoritesOnly) {
+        // 收藏页——全局收藏视频（Emby 原生 IsFavorite）
+        await _loadFavorites();
+      } else if (_currentId == null) {
         // [QBSenHook] v7.7: 根目录先从服务器刷新媒体库列表，避免只显示缓存
         try {
           await EmbyService.instance.loadAvailableLibraries();
@@ -226,9 +238,6 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
           _videos = [];
           _loading = false;
         });
-      } else if (_favoritesOnly) {
-        // [QBSenHook] v8.9: 收藏页——全局收藏视频（Emby 原生 IsFavorite，像媒体库一样陈列）
-        await _loadFavorites();
       } else if (_videoGridMode) {
         // [QBSenHook] v7.5.5: 分类视频陈列（3 个一排）
         await _loadVideoGrid();
@@ -461,7 +470,6 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
   }
 
   void _openSwipeInCurrentFolder({String? initialItemId}) {
-    if (_currentId == null) return;
     // [QBSenHook] v7.5.4: Cupertino 路由支持左缘右滑返回
     // [QBSenHook] v7.8: 传入当前排序设置，刷片模式与外部排序一致
     // [QBSenHook] v8.3: 单击视频默认进入刷片模式，initialItemId 定位到点击的视频
