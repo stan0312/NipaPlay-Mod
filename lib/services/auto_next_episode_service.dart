@@ -208,32 +208,9 @@ class AutoNextEpisodeService {
 
   // 显示没有下一话的消息
   void _showNoNextEpisodeMessage(BuildContext context) {
-    // 如果上一轮显示过续播倒计时（说明存在下一话，用户只是手动退出），
-    // 不弹出"已经全部看完了"以免误报。
-    if (_countdownWasActive) {
-      debugPrint('[AutoNext] 上一轮存在续播倒计时，跳过"全部看完"提示');
-      _countdownWasActive = false;
-      return;
-    }
-    final canComment = BangumiCommentPromptController.isAvailable;
-    final videoState = Provider.of<VideoPlayerState>(context, listen: false);
-    BlurSnackBar.show(
-      context,
-      canComment ? '已经全部看完了，要留个评论吗？' : '播放完成，没有下一话了',
-      actionText: canComment ? '打分和评论' : null,
-      actionColor: canComment ? Theme.of(context).colorScheme.primary : null,
-      duration: canComment ? const Duration(seconds: 8) : null,
-      onAction: canComment
-          ? () {
-              unawaited(
-                BangumiCommentPromptController.showForCurrentAnime(
-                  context,
-                  videoState,
-                ),
-              );
-            }
-          : null,
-    );
+    // 用户要求：不再显示"播放完成，没有下一话了"提示
+    debugPrint('[AutoNext] 已跳过"没有下一话"提示（用户要求去除）');
+    return;
   }
 
   // 播放下一话

@@ -49,8 +49,6 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
   }
 
   material.Widget _buildPhone(material.BuildContext context) {
-    // [QBSenHook] v8.1: 设置页精简为"添加媒体库"+"播放器设置"两项
-    // [QBSenHook] v8.12: 恢复播放器入口（内核选择 + 预缓存设置）
     final entries = buildUnifiedSettingEntries(
       context,
       surface: UnifiedSettingsSurface.phone,
@@ -62,42 +60,33 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
         .toList(growable: false);
     _openPhoneInitialEntry(entries);
 
-    final background = cupertino.CupertinoDynamicColor.resolve(
-      cupertino.CupertinoColors.systemGroupedBackground,
-      context,
-    );
-    final bottomPadding =
-        material.MediaQuery.viewPaddingOf(context).bottom + 32;
-
-    return AdaptiveSettingsScope(
-      style: AdaptiveSettingsStyle.phone,
-      child: CupertinoBottomSheetContentLayout(
-        controller: _phoneScrollController,
-        backgroundColor: background,
-        sliversBuilder: (context, topSpacing) => [
-          material.SliverPadding(
-            padding: material.EdgeInsets.only(top: topSpacing + 8),
-            sliver: material.SliverToBoxAdapter(
-              child: material.Column(
-                crossAxisAlignment: material.CrossAxisAlignment.stretch,
-                children: [
-                  for (final section in UnifiedSettingSection.values) ...[
-                    UnifiedCupertinoSettingsSectionView(
-                      section: section,
-                      entries: entries
-                          .where((entry) => entry.section == section)
-                          .toList(growable: false),
-                    ),
-                    if (section != UnifiedSettingSection.values.last)
-                      const material.SizedBox(height: 24),
-                  ],
-                ],
+    final theme = material.Theme.of(context);
+    return material.Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
+      appBar: material.AppBar(
+        backgroundColor: theme.scaffoldBackgroundColor,
+        elevation: 0,
+        title: const material.Text('设置', style: material.TextStyle(fontSize: 18, fontWeight: material.FontWeight.w600)),
+        centerTitle: false,
+      ),
+      body: material.ListView(
+        padding: const material.EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        children: [
+          for (final entry in entries)
+            material.Card(
+              elevation: 0,
+              margin: const material.EdgeInsets.only(bottom: 12),
+              shape: material.RoundedRectangleBorder(
+                borderRadius: material.BorderRadius.circular(12),
+              ),
+              color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+              child: material.ListTile(
+                title: material.Text(entry.title, style: const material.TextStyle(fontSize: 16)),
+                subtitle: entry.subtitle != null ? material.Text(entry.subtitle!, style: material.TextStyle(fontSize: 13, color: material.Theme.of(context).colorScheme.onSurfaceVariant)) : null,
+                trailing: const material.Icon(material.Icons.chevron_right),
+                onTap: () => openUnifiedCupertinoSettingEntry(context, entry),
               ),
             ),
-          ),
-          material.SliverToBoxAdapter(
-            child: material.SizedBox(height: bottomPadding),
-          ),
         ],
       ),
     );
