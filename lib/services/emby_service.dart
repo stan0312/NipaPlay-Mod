@@ -868,7 +868,7 @@ class EmbyService extends MediaServerServiceBase
         // 客户端再过滤掉文件夹。
         if (favoritesOnly) {
           path =
-              '/emby/Users/$_userId/Items?Recursive=true&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
+              '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video&Filters=IsFavorite&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
         } else {
           path =
               '/emby/Users/$_userId/Items?Recursive=true&IncludeItemTypes=Movie,Episode,Video$parent&Fields=Overview,Genres,CommunityRating,ProductionYear,DateCreated,Size,ParentId,Path,UserData$sortQuery';
@@ -889,6 +889,16 @@ class EmbyService extends MediaServerServiceBase
           }
           final data = json.decode(response.body);
           final items = data['Items'];
+          if (favoritesOnly && idx == 0) {
+            DebugLogService().addLog(
+                '收藏查询: HTTP ${response.statusCode} url=$pagePath');
+            DebugLogService().addLog(
+                '收藏查询: TotalRecordCount=${data['TotalRecordCount']} 返回条数=${items is List ? items.length : 0}');
+            if (items is List && items.isNotEmpty) {
+              DebugLogService().addLog(
+                  '收藏查询: 第一个item类型=${items[0]['Type']} 名称=${items[0]['Name']}');
+            }
+          }
           if (items is! List || items.isEmpty) break;
           all.addAll(items
               .map((e) => EmbyMediaItem.fromJson(e))
