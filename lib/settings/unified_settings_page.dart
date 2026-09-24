@@ -57,7 +57,8 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
     )
         .where((entry) =>
             entry.id == UnifiedSettingEntryIds.remoteMediaLibrary ||
-            entry.id == UnifiedSettingEntryIds.player)
+            entry.id == UnifiedSettingEntryIds.player ||
+            entry.id == UnifiedSettingEntryIds.developerOptions)
         .toList(growable: false);
     _openPhoneInitialEntry(entries);
 
@@ -131,7 +132,8 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
     )
         .where((entry) =>
             entry.id == UnifiedSettingEntryIds.remoteMediaLibrary ||
-            entry.id == UnifiedSettingEntryIds.player)
+            entry.id == UnifiedSettingEntryIds.player ||
+            entry.id == UnifiedSettingEntryIds.developerOptions)
         .toList(growable: false);
     if (entries.isEmpty) {
       return const material.SizedBox.shrink();

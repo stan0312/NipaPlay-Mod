@@ -149,6 +149,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     // [QBSenHook] v7.5.4: 强制竖屏播放（播放回调不再切横屏）
     ScreenOrientationManager.instance.forcePortraitPlayback = true;
     _videoState = Provider.of<VideoPlayerState>(context, listen: false);
+    // 刷片模式：播放结束自动滑到下一集
+    _videoState.position.addListener(_onPositionChanged);
     _libraryId = widget.initialLibraryId;
     _favoritesOnly = widget.favoritesOnly;
     _playlistId = widget.playlistId;
@@ -196,6 +198,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       ]);
     }
     _pageController.dispose();
+    _videoState.position.removeListener(_onPositionChanged);
     _playingItemId = null;
     super.dispose();
   }
@@ -425,6 +428,25 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   }
 
   // ============ 内嵌播放 ============
+
+  // 刷片模式：视频播放结束自动滑到下一集
+  void _onPositionChanged() {
+    if (!mounted) return;
+    if (_currentIndex >= _items.length - 1) return; // 最后一集不自动跳
+    final pos = _videoState.position.value;
+    final dur = _videoState.duration;
+    if (dur.inMilliseconds <= 0) return;
+    // 播放到末尾98%且正在播放，自动滑下一集
+    if (_videoState.status == PlayerStatus.playing &&
+        pos.inMilliseconds >= dur.inMilliseconds * 0.98) {
+      if (_pageController.hasClients) {
+        _pageController.nextPage(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    }
+  }
 
   Future<void> _autoPlay(EmbyMediaItem item) async {
     // [QBSenHook] v8.4: 防重入——jumpToPage 触发的 onPageChanged 与 _load 显式调用
@@ -1229,45 +1251,43 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                             .clamp(0.0, 1.0)
                         : 0.0;
                 return SizedBox(
-                  width: 48,
-                  height: 48,
+                  width: 30,
+                  height: 30,
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
                       SizedBox(
-                        width: 48,
-                        height: 48,
+                        width: 30,
+                        height: 30,
                         child: CircularProgressIndicator(
                           value: buffering ? null : progress,
-                          strokeWidth: 3,
-                          backgroundColor: Colors.white.withValues(alpha: 0.22),
-                          color: Colors.white,
+                          strokeWidth: 2,
+                          backgroundColor: Colors.white.withValues(alpha: 0.15),
+                          color: Colors.white.withValues(alpha: 0.6),
                         ),
                       ),
                       Container(
-                        width: 38,
-                        height: 38,
+                        width: 24,
+                        height: 24,
                         decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.35),
+                          color: Colors.black.withValues(alpha: 0.25),
                           shape: BoxShape.circle,
                         ),
                         child: buffering
-                            // [QBSenHook] v8.8b: 缓冲=转圈缓冲图标（无文字）
                             ? const SizedBox(
-                                width: 22,
-                                height: 22,
+                                width: 14,
+                                height: 14,
                                 child: CircularProgressIndicator(
-                                  strokeWidth: 2.6,
-                                  color: Colors.white70,
+                                  strokeWidth: 1.8,
+                                  color: Colors.white54,
                                 ),
                               )
-                            // [QBSenHook] v8.8b: 图标反映当前状态：播放=播放图标，暂停=暂停图标
                             : Icon(
                                 playing
                                     ? Icons.play_arrow_rounded
                                     : Icons.pause_rounded,
-                                color: Colors.white.withValues(alpha: 0.85),
-                                size: 26,
+                                color: Colors.white.withValues(alpha: 0.6),
+                                size: 16,
                               ),
                       ),
                     ],
