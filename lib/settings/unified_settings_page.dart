@@ -81,8 +81,8 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
               ),
               color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
               child: material.ListTile(
-                title: material.Text(entry.title, style: const material.TextStyle(fontSize: 16)),
-                subtitle: entry.subtitle != null ? material.Text(entry.subtitle!, style: material.TextStyle(fontSize: 13, color: material.Theme.of(context).colorScheme.onSurfaceVariant)) : null,
+                title: material.Text(entry.title(context, UnifiedSettingsSurface.phone), style: const material.TextStyle(fontSize: 16)),
+                subtitle: entry.subtitleBuilder != null ? material.Text(entry.subtitleBuilder!(context, UnifiedSettingsSurface.phone) ?? '', style: material.TextStyle(fontSize: 13, color: material.Theme.of(context).colorScheme.onSurfaceVariant)) : null,
                 trailing: const material.Icon(material.Icons.chevron_right),
                 onTap: () => openUnifiedCupertinoSettingEntry(context, entry),
               ),
