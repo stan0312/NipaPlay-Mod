@@ -6,6 +6,7 @@ import 'package:nipaplay/l10n/l10n.dart';
 import 'package:nipaplay/settings/adaptive_settings_scope.dart';
 import 'package:nipaplay/settings/unified_settings_entries.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
+import 'package:nipaplay/themes/cupertino/widgets/cupertino_debug_log_viewer_sheet.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_focusable_action.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_page_scaffold.dart';
@@ -81,10 +82,31 @@ class _UnifiedSettingsPageState extends material.State<UnifiedSettingsPage> {
               ),
               color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
               child: material.ListTile(
-                title: material.Text(entry.title(context, UnifiedSettingsSurface.phone), style: const material.TextStyle(fontSize: 16)),
-                subtitle: entry.subtitleBuilder != null ? material.Text(entry.subtitleBuilder!(context, UnifiedSettingsSurface.phone) ?? '', style: material.TextStyle(fontSize: 13, color: material.Theme.of(context).colorScheme.onSurfaceVariant)) : null,
+                title: material.Text(
+                  entry.id == UnifiedSettingEntryIds.developerOptions
+                      ? '调试日志'
+                      : entry.title(context, UnifiedSettingsSurface.phone),
+                  style: const material.TextStyle(fontSize: 16),
+                ),
+                subtitle: entry.id == UnifiedSettingEntryIds.developerOptions
+                    ? const material.Text('查看运行日志和错误信息', style: material.TextStyle(fontSize: 13))
+                    : (entry.subtitleBuilder != null
+                        ? material.Text(entry.subtitleBuilder!(context, UnifiedSettingsSurface.phone) ?? '', style: material.TextStyle(fontSize: 13, color: material.Theme.of(context).colorScheme.onSurfaceVariant))
+                        : null),
                 trailing: const material.Icon(material.Icons.chevron_right),
-                onTap: () => openUnifiedCupertinoSettingEntry(context, entry),
+                onTap: () {
+                  if (entry.id == UnifiedSettingEntryIds.developerOptions) {
+                    // 直接打开日志查看器，不进开发者选项页
+                    cupertino.CupertinoBottomSheet.show(
+                      context: context,
+                      title: '调试日志',
+                      floatingTitle: true,
+                      child: const cupertino.CupertinoDebugLogViewerSheet(),
+                    );
+                  } else {
+                    openUnifiedCupertinoSettingEntry(context, entry);
+                  }
+                },
               ),
             ),
         ],
