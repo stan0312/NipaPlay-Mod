@@ -150,7 +150,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     ScreenOrientationManager.instance.forcePortraitPlayback = true;
     _videoState = Provider.of<VideoPlayerState>(context, listen: false);
     // 刷片模式：播放结束自动滑到下一集
-    _videoState.position.addListener(_onPositionChanged);
+    _videoState.addListener(_onPositionChanged);
     _libraryId = widget.initialLibraryId;
     _favoritesOnly = widget.favoritesOnly;
     _playlistId = widget.playlistId;
@@ -198,7 +198,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       ]);
     }
     _pageController.dispose();
-    _videoState.position.removeListener(_onPositionChanged);
+    _videoState.removeListener(_onPositionChanged);
     _playingItemId = null;
     super.dispose();
   }
@@ -430,21 +430,24 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   // ============ 内嵌播放 ============
 
   // 刷片模式：视频播放结束自动滑到下一集
+  bool _autoAdvanceTriggered = false;
   void _onPositionChanged() {
     if (!mounted) return;
-    if (_currentIndex >= _items.length - 1) return; // 最后一集不自动跳
-    final pos = _videoState.position.value;
+    if (_currentIndex >= _items.length - 1) return;
+    final pos = _videoState.position;
     final dur = _videoState.duration;
     if (dur.inMilliseconds <= 0) return;
-    // 播放到末尾98%且正在播放，自动滑下一集
     if (_videoState.status == PlayerStatus.playing &&
         pos.inMilliseconds >= dur.inMilliseconds * 0.98) {
-      if (_pageController.hasClients) {
+      if (!_autoAdvanceTriggered && _pageController.hasClients) {
+        _autoAdvanceTriggered = true;
         _pageController.nextPage(
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
       }
+    } else if (pos.inMilliseconds < dur.inMilliseconds * 0.9) {
+      _autoAdvanceTriggered = false;
     }
   }
 
