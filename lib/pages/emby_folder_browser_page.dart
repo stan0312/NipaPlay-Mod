@@ -1288,7 +1288,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
               },
             ),
             // [QBSenHook] v8.6: 右上角刷新按钮 -> 选择按钮（批量操作；下拉仍可刷新）
-            if (_currentId != null)
+            if (_currentId != null || _favoritesOnly)
               IconButton(
                 icon: Icon(
                   _selectionMode
