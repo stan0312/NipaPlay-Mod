@@ -20,6 +20,9 @@ class WindowController with ChangeNotifier {
   Future<void> setMinimumSize(Size size) async {}
   Future<void> setAspectRatio(double ratio) async {}
   Future<void> setFullscreen(bool fullscreen) async {}
+  bool get isAlwaysOnTop => false;
+  Future<void> setAlwaysOnTop(bool alwaysOnTop) async {}
+  Future<void> setPictureInPictureMode(bool enabled) async {}
   Future<void> startDragging([Offset? globalPosition]) async {}
   Future<void> updateDragging([Offset? globalPosition]) async {}
   Future<void> endDragging([Offset? globalPosition]) async {}
