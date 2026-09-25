@@ -7,7 +7,7 @@ import 'package:flutter/widgets.dart';
 class WindowController {
   int get viewId => -1;
   bool get isClosed => true;
-  void get pointer => null;
+  dynamic get pointer => null;
   Future<void> setSize(Size size) async {}
   Future<void> setPosition(Offset position) async {}
   Future<void> close() async {}
@@ -39,9 +39,11 @@ class DesktopMultiWindow {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
 
-  static Future<WindowController> createWindow(
-    Map<String, dynamic> args,
-  ) async {
+  static Future<WindowController> createWindow({
+    String? title,
+    Size? size,
+    Size? minimumSize,
+  }) async {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
 
