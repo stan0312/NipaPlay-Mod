@@ -17,6 +17,7 @@ class WindowController with ChangeNotifier {
   Future<void> hide() async {}
   Future<void> setTitle(String title) async {}
   Future<void> setPreventClose(bool prevent) async {}
+  Future<void> setMinimumSize(Size size) async {}
   Future<void> setFullscreen(bool fullscreen) async {}
   Future<void> startDragging([Offset? globalPosition]) async {}
   Future<void> updateDragging([Offset? globalPosition]) async {}
