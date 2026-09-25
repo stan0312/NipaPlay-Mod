@@ -59,6 +59,24 @@ class DesktopMultiWindowHost extends StatelessWidget {
   Widget build(BuildContext context) => child;
 }
 
+/// Stub DesktopTransientWindowPlacement enum.
+enum DesktopTransientWindowPlacement { above, below, left, right, center }
+
+/// Stub DesktopTransientOverlay — no-op on web.
+class DesktopTransientOverlay {
+  static DesktopTransientOverlay showPopup({
+    required BuildContext context,
+    required WidgetBuilder builder,
+    DesktopTransientWindowPlacement placement =
+        DesktopTransientWindowPlacement.below,
+  }) {
+    return DesktopTransientOverlay._();
+  }
+
+  DesktopTransientOverlay._();
+  void close() {}
+}
+
 /// Stub runDesktopMultiWindowApp — just calls runApp on web.
 void runDesktopMultiWindowApp(Widget app) {
   runApp(app);
