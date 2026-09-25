@@ -15,9 +15,9 @@ class WindowController {
   Future<void> hide() async {}
   Future<void> setTitle(String title) async {}
   Future<void> setPreventClose(bool prevent) async {}
-  void startDragging(Offset globalPosition) {}
-  void updateDragging(Offset globalPosition) {}
-  void endDragging(Offset globalPosition) {}
+  void startDragging([Offset? globalPosition]) {}
+  void updateDragging([Offset? globalPosition]) {}
+  void endDragging([Offset? globalPosition]) {}
 }
 
 /// Stub DesktopTooltipWindowController — no-op on web.
@@ -43,6 +43,7 @@ class DesktopMultiWindow {
     String? title,
     Size? size,
     Size? minimumSize,
+    bool frameless = false,
   }) async {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
