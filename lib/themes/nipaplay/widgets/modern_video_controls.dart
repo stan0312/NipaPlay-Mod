@@ -1,6 +1,6 @@
 import 'dart:ui' show ImageFilter;
 
-import '../../stubs/desktop_multi_window.dart';
+import '../../../stubs/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:nipaplay/utils/app_accent_color.dart';
