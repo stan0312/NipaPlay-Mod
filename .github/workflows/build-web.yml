@@ -17,7 +17,7 @@ jobs:
 
       - run: flutter pub get
 
-      - run: flutter build web --release --web-renderer canvaskit --base-href /
+      - run: flutter build web --release --base-href /
 
       - name: Zip web output
         run: cd build && zip -r /tmp/swipeplay-web.zip web

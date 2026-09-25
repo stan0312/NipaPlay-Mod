@@ -11,7 +11,7 @@ RUN flutter pub get
 COPY . .
 
 # 构建 Web 版（renderer=canvaskit，体积小、兼容性好）
-RUN flutter build web --release --web-renderer canvaskit --base-href /
+RUN flutter build web --release --base-href /
 
 # ---------- 运行阶段：Nginx ----------
 FROM nginx:alpine
