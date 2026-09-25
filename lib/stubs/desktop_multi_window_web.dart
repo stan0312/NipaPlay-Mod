@@ -41,7 +41,7 @@ class DesktopTooltipWindowController {
   bool get ready => true;
   dynamic get flutterView => null;
   Future<void> close() async {}
-  Future<void> updatePosition(Rect rect) async {}
+  Future<void> updatePosition({Rect? anchorRect, dynamic placement, double? gap}) async {}
 }
 
 /// Stub DesktopPopupWindowController — no-op on web.
@@ -98,16 +98,22 @@ class DesktopMultiWindow {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
 
-  static Future<DesktopTooltipWindowController> createTooltipWindow(
-    BuildContext context, {
-    required Widget Function(BuildContext context, Widget? child) builder,
+  static Future<DesktopTooltipWindowController> createTooltipWindow({
+    required BuildContext context,
+    Rect? anchorRect,
+    Size? size,
+    dynamic placement,
+    Widget Function(BuildContext context, Widget? child)? builder,
   }) async {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
 
-  static Future<DesktopPopupWindowController> createPopupWindow(
-    BuildContext context, {
-    required Widget Function(BuildContext context, Widget? child) builder,
+  static Future<DesktopPopupWindowController> createPopupWindow({
+    required BuildContext context,
+    Rect? anchorRect,
+    Size? size,
+    dynamic placement,
+    Widget Function(BuildContext context, Widget? child)? builder,
   }) async {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
