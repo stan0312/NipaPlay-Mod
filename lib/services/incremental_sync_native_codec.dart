@@ -156,10 +156,10 @@ class IncrementalSyncNativeCodec {
         includeWatchHistory: request.includeWatchHistory,
         includeEpisodeMatches: request.includeEpisodeMatches,
         includeAccounts: request.includeAccounts,
-        batchSize: request.batchSize,
+        batchSize: BigInt.from(request.batchSize),
       );
       return FullBackupNativeRestorePlan(
-        version: result.version,
+        version: result.version.toInt(),
         timestamp: result.timestamp,
         appVersion: result.appVersion,
         preferencesJson: result.preferencesJson,
@@ -167,8 +167,8 @@ class IncrementalSyncNativeCodec {
         accountsJson: result.accountsJson,
         watchHistoryBatches: result.watchHistoryBatches,
         episodeMatchBatches: result.episodeMatchBatches,
-        invalidWatchHistoryCount: result.invalidWatchHistoryCount,
-        invalidEpisodeMatchCount: result.invalidEpisodeMatchCount,
+        invalidWatchHistoryCount: result.invalidWatchHistoryCount.toInt(),
+        invalidEpisodeMatchCount: result.invalidEpisodeMatchCount.toInt(),
         usedRust: true,
       );
     }
@@ -233,7 +233,7 @@ class IncrementalSyncNativeCodec {
         snapshotBytes: snapshotBytes,
         expectedSha256: expectedSha256,
         expectedRepositoryId: expectedRepositoryId,
-        expectedSnapshotVersion: expectedSnapshotVersion,
+        expectedSnapshotVersion: BigInt.from(expectedSnapshotVersion),
       );
       return _stateFromJsonMap(await compute(
         _decodeJsonMap,
@@ -278,7 +278,7 @@ class IncrementalSyncNativeCodec {
                   expectedId: patch.expectedId,
                 ))
             .toList(),
-        maximumSnapshotVersion: maximumSnapshotVersion,
+        maximumSnapshotVersion: BigInt.from(maximumSnapshotVersion),
       );
       return IncrementalSyncNativePatchResult(
         state: _stateFromJsonMap(await compute(
