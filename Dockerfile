@@ -3,14 +3,12 @@ FROM ghcr.io/cirruslabs/flutter:stable AS builder
 
 WORKDIR /app
 
-# 复制依赖文件
-COPY pubspec.yaml pubspec.lock ./
-RUN flutter pub get
-
-# 复制全部源码
+# 复制全部源码（包括本地路径依赖 third_party/）
 COPY . .
 
-# 构建 Web 版（renderer=canvaskit，体积小、兼容性好）
+RUN flutter pub get
+
+# 构建 Web 版
 RUN flutter build web --release --base-href /
 
 # ---------- 运行阶段：Nginx ----------
