@@ -4,9 +4,10 @@ library desktop_multi_window;
 import 'package:flutter/widgets.dart';
 
 /// Stub WindowController — no-op on web.
-class WindowController {
+class WindowController with ChangeNotifier {
   int get viewId => -1;
   bool get isClosed => true;
+  bool get isFullscreen => false;
   dynamic get pointer => null;
   dynamic get flutterView => null;
   Future<void> setSize(Size size) async {}
@@ -16,6 +17,7 @@ class WindowController {
   Future<void> hide() async {}
   Future<void> setTitle(String title) async {}
   Future<void> setPreventClose(bool prevent) async {}
+  Future<void> setFullscreen(bool fullscreen) async {}
   Future<void> startDragging([Offset? globalPosition]) async {}
   Future<void> updateDragging([Offset? globalPosition]) async {}
   Future<void> endDragging([Offset? globalPosition]) async {}
@@ -25,14 +27,17 @@ class WindowController {
 class DesktopTooltipWindowController {
   int get viewId => -1;
   bool get isClosed => true;
+  bool get ready => true;
   dynamic get flutterView => null;
   Future<void> close() async {}
+  Future<void> updatePosition(Rect rect) async {}
 }
 
 /// Stub DesktopPopupWindowController — no-op on web.
 class DesktopPopupWindowController {
   int get viewId => -1;
   bool get isClosed => true;
+  bool get ready => true;
   dynamic get flutterView => null;
   Future<void> close() async {}
 }
