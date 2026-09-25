@@ -104,6 +104,8 @@ class DesktopMultiWindow {
     Rect? anchorRect,
     Size? size,
     dynamic placement,
+    double? gap,
+    void Function()? onClosed,
     Widget Function(BuildContext context, Widget? child)? builder,
   }) async {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
@@ -114,6 +116,8 @@ class DesktopMultiWindow {
     Rect? anchorRect,
     Size? size,
     dynamic placement,
+    double? gap,
+    void Function()? onClosed,
     Widget Function(BuildContext context, Widget? child)? builder,
   }) async {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
