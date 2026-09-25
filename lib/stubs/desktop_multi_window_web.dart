@@ -56,7 +56,14 @@ class DesktopMultiWindow {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
 
-  static void detachTransientView(DesktopTooltipWindowController controller) {}
+  static void detachTransientView(dynamic controller) {}
+
+  static void attachTransientView(dynamic controller, dynamic view) {}
+
+  static Widget inheritTransientViewContext(
+      BuildContext context, Widget child) {
+    return child;
+  }
 }
 
 /// Stub DesktopMultiWindowHost — just returns child on web.
