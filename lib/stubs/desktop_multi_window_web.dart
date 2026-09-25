@@ -99,7 +99,7 @@ class DesktopMultiWindow {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
 
-  static Future<DesktopTooltipWindowController> createTooltipWindow({
+  static DesktopTooltipWindowController createTooltipWindow({
     required BuildContext context,
     Rect? anchorRect,
     Size? size,
@@ -107,11 +107,11 @@ class DesktopMultiWindow {
     double? gap,
     void Function()? onClosed,
     Widget Function(BuildContext context, Widget? child)? builder,
-  }) async {
-    throw UnsupportedError('DesktopMultiWindow is not available on web');
+  }) {
+    return DesktopTooltipWindowController();
   }
 
-  static Future<DesktopPopupWindowController> createPopupWindow({
+  static DesktopPopupWindowController createPopupWindow({
     required BuildContext context,
     Rect? anchorRect,
     Size? size,
@@ -119,8 +119,8 @@ class DesktopMultiWindow {
     double? gap,
     void Function()? onClosed,
     Widget Function(BuildContext context, Widget? child)? builder,
-  }) async {
-    throw UnsupportedError('DesktopMultiWindow is not available on web');
+  }) {
+    return DesktopPopupWindowController();
   }
 
   static void detachTransientView(dynamic controller) {}
