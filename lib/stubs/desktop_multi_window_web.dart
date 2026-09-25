@@ -18,6 +18,7 @@ class WindowController with ChangeNotifier {
   Future<void> setTitle(String title) async {}
   Future<void> setPreventClose(bool prevent) async {}
   Future<void> setMinimumSize(Size size) async {}
+  Future<void> setAspectRatio(double ratio) async {}
   Future<void> setFullscreen(bool fullscreen) async {}
   Future<void> startDragging([Offset? globalPosition]) async {}
   Future<void> updateDragging([Offset? globalPosition]) async {}
@@ -82,6 +83,8 @@ class DesktopMultiWindow {
     Size? minimumSize,
     bool frameless = false,
     double? aspectRatio,
+    Widget Function(BuildContext context, WindowController controller)? builder,
+    void Function()? onClosed,
   }) async {
     throw UnsupportedError('DesktopMultiWindow is not available on web');
   }
