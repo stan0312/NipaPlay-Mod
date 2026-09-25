@@ -6,6 +6,8 @@ import 'package:flutter/widgets.dart';
 /// Stub WindowController — no-op on web.
 class WindowController {
   int get viewId => -1;
+  bool get isClosed => true;
+  void get pointer => null;
   Future<void> setSize(Size size) async {}
   Future<void> setPosition(Offset position) async {}
   Future<void> close() async {}
@@ -13,6 +15,9 @@ class WindowController {
   Future<void> hide() async {}
   Future<void> setTitle(String title) async {}
   Future<void> setPreventClose(bool prevent) async {}
+  void startDragging(Offset globalPosition) {}
+  void updateDragging(Offset globalPosition) {}
+  void endDragging(Offset globalPosition) {}
 }
 
 /// Stub DesktopTooltipWindowController — no-op on web.
