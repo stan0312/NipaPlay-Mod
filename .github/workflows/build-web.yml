@@ -1,0 +1,28 @@
+name: Build Web
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - run: flutter build web --release --web-renderer canvaskit --base-href /
+
+      - name: Zip web output
+        run: cd build && zip -r /tmp/swipeplay-web.zip web
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swipeplay-web
+          path: /tmp/swipeplay-web.zip
