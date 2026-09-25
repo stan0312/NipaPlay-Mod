@@ -21,7 +21,9 @@ class WindowController with ChangeNotifier {
   Future<void> setAspectRatio(double ratio) async {}
   Future<void> setFullscreen(bool fullscreen) async {}
   bool get isAlwaysOnTop => false;
+  String get title => '';
   Future<void> setAlwaysOnTop(bool alwaysOnTop) async {}
+  Future<void> toggleAlwaysOnTop() async {}
   Future<void> setPictureInPictureMode(bool enabled) async {}
   Future<void> startDragging([Offset? globalPosition]) async {}
   Future<void> updateDragging([Offset? globalPosition]) async {}
@@ -126,7 +128,7 @@ class DesktopMultiWindowHost extends StatelessWidget {
 }
 
 /// Stub DesktopTransientWindowPlacement enum.
-enum DesktopTransientWindowPlacement { above, below, left, right, center }
+enum DesktopTransientWindowPlacement { above, below, left, right, center, pointer }
 
 /// Stub runDesktopMultiWindowApp — just calls runApp on web.
 void runDesktopMultiWindowApp(Widget app) {
