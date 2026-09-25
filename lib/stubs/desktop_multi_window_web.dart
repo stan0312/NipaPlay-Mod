@@ -51,6 +51,7 @@ class DesktopPopupWindowController {
   bool get ready => true;
   dynamic get flutterView => null;
   Future<void> close() async {}
+  Future<void> updatePosition({Rect? anchorRect, dynamic placement, double? gap}) async {}
 }
 
 /// Stub DesktopTooltipWindow widget — just returns child on web.
