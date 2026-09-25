@@ -976,6 +976,7 @@ class _EmbyFolderBrowserPageState extends State<EmbyFolderBrowserPage>
       _selectionMode = false;
       _selectedIds.clear();
       _videoGridMode = false;
+      _favoritesOnly = false;
       _path.clear();
       _path.add(_FolderEntry(parentId, ''));
       _currentId = parentId;
