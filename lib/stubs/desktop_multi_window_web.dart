@@ -8,6 +8,7 @@ class WindowController {
   int get viewId => -1;
   bool get isClosed => true;
   dynamic get pointer => null;
+  dynamic get flutterView => null;
   Future<void> setSize(Size size) async {}
   Future<void> setPosition(Offset position) async {}
   Future<void> close() async {}
@@ -23,7 +24,37 @@ class WindowController {
 /// Stub DesktopTooltipWindowController — no-op on web.
 class DesktopTooltipWindowController {
   int get viewId => -1;
+  bool get isClosed => true;
+  dynamic get flutterView => null;
   Future<void> close() async {}
+}
+
+/// Stub DesktopPopupWindowController — no-op on web.
+class DesktopPopupWindowController {
+  int get viewId => -1;
+  bool get isClosed => true;
+  dynamic get flutterView => null;
+  Future<void> close() async {}
+}
+
+/// Stub DesktopTooltipWindow widget — just returns child on web.
+class DesktopTooltipWindow extends StatelessWidget {
+  final dynamic controller;
+  final Widget child;
+  const DesktopTooltipWindow({super.key, required this.controller, required this.child});
+
+  @override
+  Widget build(BuildContext context) => child;
+}
+
+/// Stub DesktopPopupWindow widget — just returns child on web.
+class DesktopPopupWindow extends StatelessWidget {
+  final dynamic controller;
+  final Widget child;
+  const DesktopPopupWindow({super.key, required this.controller, required this.child});
+
+  @override
+  Widget build(BuildContext context) => child;
 }
 
 /// Stub DesktopMultiWindow — all static methods return safe defaults on web.
@@ -50,6 +81,13 @@ class DesktopMultiWindow {
   }
 
   static Future<DesktopTooltipWindowController> createTooltipWindow(
+    BuildContext context, {
+    required Widget Function(BuildContext context, Widget? child) builder,
+  }) async {
+    throw UnsupportedError('DesktopMultiWindow is not available on web');
+  }
+
+  static Future<DesktopPopupWindowController> createPopupWindow(
     BuildContext context, {
     required Widget Function(BuildContext context, Widget? child) builder,
   }) async {
