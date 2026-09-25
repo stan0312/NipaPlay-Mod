@@ -24,7 +24,11 @@ class WindowController with ChangeNotifier {
   String get title => '';
   Future<void> setAlwaysOnTop(bool alwaysOnTop) async {}
   Future<void> toggleAlwaysOnTop() async {}
-  Future<void> setPictureInPictureMode(bool enabled) async {}
+  Future<void> setPictureInPictureMode({
+    bool enabled = false,
+    double? aspectRatio,
+    dynamic placement,
+  }) async {}
   Future<void> startDragging([Offset? globalPosition]) async {}
   Future<void> updateDragging([Offset? globalPosition]) async {}
   Future<void> endDragging([Offset? globalPosition]) async {}
