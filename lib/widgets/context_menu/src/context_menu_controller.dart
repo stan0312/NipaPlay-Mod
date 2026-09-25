@@ -1,4 +1,4 @@
-import 'package:desktop_multi_window/desktop_multi_window.dart';
+import '../../../stubs/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:nipaplay/widgets/desktop_transient_overlay.dart';
 

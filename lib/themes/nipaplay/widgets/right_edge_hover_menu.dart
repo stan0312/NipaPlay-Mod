@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:desktop_multi_window/desktop_multi_window.dart';
+import '../../stubs/desktop_multi_window.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'package:nipaplay/utils/video_player_state.dart';

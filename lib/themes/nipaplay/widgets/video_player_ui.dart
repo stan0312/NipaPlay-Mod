@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:desktop_multi_window/desktop_multi_window.dart';
+import '../../stubs/desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
