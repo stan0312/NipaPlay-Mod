@@ -156,7 +156,7 @@ class IncrementalSyncNativeCodec {
         includeWatchHistory: request.includeWatchHistory,
         includeEpisodeMatches: request.includeEpisodeMatches,
         includeAccounts: request.includeAccounts,
-        batchSize: BigInt.from(request.batchSize),
+        batchSize: request.batchSize,
       );
       return FullBackupNativeRestorePlan(
         version: result.version.toInt(),
@@ -233,7 +233,7 @@ class IncrementalSyncNativeCodec {
         snapshotBytes: snapshotBytes,
         expectedSha256: expectedSha256,
         expectedRepositoryId: expectedRepositoryId,
-        expectedSnapshotVersion: BigInt.from(expectedSnapshotVersion),
+        expectedSnapshotVersion: expectedSnapshotVersion,
       );
       return _stateFromJsonMap(await compute(
         _decodeJsonMap,
@@ -278,7 +278,7 @@ class IncrementalSyncNativeCodec {
                   expectedId: patch.expectedId,
                 ))
             .toList(),
-        maximumSnapshotVersion: BigInt.from(maximumSnapshotVersion),
+        maximumSnapshotVersion: maximumSnapshotVersion,
       );
       return IncrementalSyncNativePatchResult(
         state: _stateFromJsonMap(await compute(
