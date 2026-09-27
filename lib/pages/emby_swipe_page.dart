@@ -683,43 +683,18 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                       ),
                     ),
                   );
-                case EmbyFitMode.r16_9:
-                case EmbyFitMode.r4_3:
-                case EmbyFitMode.r1_1:
-                case EmbyFitMode.r9_16:
-                  final double targetRatio = _fitModeRatio(_fitMode);
-                  final double hTarget = maxW / targetRatio;
-                  return Center(
-                    child: FittedBox(
-                      fit: BoxFit.contain,
-                      child: SizedBox(
-                        width: maxW,
-                        height: hTarget,
-                        child: rotatedTexture,
-                      ),
-                    ),
-                  );
                 case EmbyFitMode.original:
                   break;
               }
-              // 原始模式：宽铺满（横屏视频上下留白），高度受限时 contain
-              final double hForWidth = maxW / ratio;
-              if (hForWidth <= maxH) {
-                return Align(
-                  alignment: Alignment.center,
+              // 原始模式：不拉伸，放大到最大画幅（contain）
+              return Center(
+                child: FittedBox(
+                  fit: BoxFit.contain,
                   child: SizedBox(
                     width: maxW,
-                    height: hForWidth,
+                    height: maxW / ratio,
                     child: rotatedTexture,
                   ),
-                );
-              }
-              return FittedBox(
-                fit: BoxFit.contain,
-                child: SizedBox(
-                  width: maxW,
-                  height: hForWidth,
-                  child: rotatedTexture,
                 ),
               );
             },
@@ -729,22 +704,6 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         }
       },
     );
-  }
-
-  /// [QBSenHook] v7.5.4: 尺寸模式对应的目标宽高比。
-  double _fitModeRatio(EmbyFitMode mode) {
-    switch (mode) {
-      case EmbyFitMode.r16_9:
-        return 16 / 9;
-      case EmbyFitMode.r4_3:
-        return 4 / 3;
-      case EmbyFitMode.r1_1:
-        return 1.0;
-      case EmbyFitMode.r9_16:
-        return 9 / 16;
-      default:
-        return 16 / 9;
-    }
   }
 
   /// 从播放器媒体信息读取视频宽高比（未知时返回 null，走 16:9 默认）。

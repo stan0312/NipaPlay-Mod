@@ -10,14 +10,10 @@ import 'package:nipaplay/utils/screen_orientation_manager.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:provider/provider.dart';
 
-/// [QBSenHook] v7.5.2: 画面尺寸模式。
+/// [QBSenHook] v8.50: 画面尺寸模式——精简为填充和原始。
 enum EmbyFitMode {
-  original('原始'),
-  cover('填满'),
-  r16_9('16:9'),
-  r4_3('4:3'),
-  r1_1('1:1'),
-  r9_16('9:16');
+  cover('填充'),
+  original('原始');
 
   const EmbyFitMode(this.label);
   final String label;
@@ -533,7 +529,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
         );
         switch (_fitMode) {
           case EmbyFitMode.cover:
-            // 填满屏幕、居中裁剪，不拉伸
+            // 填充：不拉伸铺满屏幕，居中裁剪
             return FittedBox(
               fit: BoxFit.cover,
               clipBehavior: Clip.hardEdge,
@@ -544,17 +540,7 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
               ),
             );
           case EmbyFitMode.original:
-            // 原始比例：宽优先铺满，高度受限时 contain，不拉伸
-            if (hForWidth <= maxH) {
-              return Align(
-                alignment: Alignment.center,
-                child: SizedBox(
-                  width: maxW,
-                  height: hForWidth,
-                  child: texture,
-                ),
-              );
-            }
+            // 原始：不拉伸，放大到最大画幅（contain）
             return FittedBox(
               fit: BoxFit.contain,
               child: SizedBox(
@@ -563,40 +549,9 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                 child: texture,
               ),
             );
-          default:
-            // 固定比例框内 contain（16:9 / 4:3 / 1:1 / 9:16），不拉伸
-            final double boxRatio = _fitModeBoxRatio();
-            return Center(
-              child: AspectRatio(
-                aspectRatio: boxRatio,
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: SizedBox(
-                    width: 100,
-                    height: 100 / ratio,
-                    child: texture,
-                  ),
-                ),
-              ),
-            );
         }
       },
     );
-  }
-
-  double _fitModeBoxRatio() {
-    switch (_fitMode) {
-      case EmbyFitMode.r16_9:
-        return 16 / 9;
-      case EmbyFitMode.r4_3:
-        return 4 / 3;
-      case EmbyFitMode.r1_1:
-        return 1.0;
-      case EmbyFitMode.r9_16:
-        return 9 / 16;
-      default:
-        return 16 / 9;
-    }
   }
 
   /// [QBSenHook] v8.3: 音轨菜单接通 Emby 服务端接口
