@@ -634,37 +634,34 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 );
               }
 
-              // [QBSenHook] v7.5.4: 横屏视频（宽>高）自动旋转 90° 竖着播放；
-              // [QBSenHook] v8.11: 按 _fitMode 控制画面尺寸——cover 铺满，
-              // 其余模式（原尺寸/16:9/4:3/1:1/9:16）旋转后完整显示不拉伸。
+              // 横屏视频（宽>高）自动旋转 90° 竖着播放
               if (ratio > 1.0) {
-                if (_fitMode == EmbyFitMode.cover) {
+                final rotated = RotatedBox(
+                  quarterTurns: videoRot == 180 ? 2 : 1,
+                  child: SizedBox(
+                    width: maxW,
+                    height: maxW / ratio,
+                    child: texture,
+                  ),
+                );
+                if (_fitMode == EmbyFitMode.manual) {
                   return SizedBox.expand(
-                    child: FittedBox(
-                      fit: BoxFit.cover,
-                      clipBehavior: Clip.hardEdge,
-                      child: RotatedBox(
-                        quarterTurns: videoRot == 180 ? 2 : 1,
-                        child: SizedBox(
-                          width: maxW,
-                          height: maxW / ratio,
-                          child: texture,
-                        ),
+                    child: Container(
+                      color: Colors.black,
+                      child: InteractiveViewer(
+                        minScale: 1.0,
+                        maxScale: 5.0,
+                        child: Center(child: rotated),
                       ),
                     ),
                   );
                 }
-                return Center(
+                // 横屏视频：填充和原始都铺满屏幕
+                return SizedBox.expand(
                   child: FittedBox(
-                    fit: BoxFit.contain,
-                    child: RotatedBox(
-                      quarterTurns: videoRot == 180 ? 2 : 1,
-                      child: SizedBox(
-                        width: maxW,
-                        height: maxW / ratio,
-                        child: texture,
-                      ),
-                    ),
+                    fit: BoxFit.cover,
+                    clipBehavior: Clip.hardEdge,
+                    child: rotated,
                   ),
                 );
               }
@@ -684,19 +681,37 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                     ),
                   );
                 case EmbyFitMode.original:
-                  break;
+                  return Center(
+                    child: FittedBox(
+                      fit: BoxFit.contain,
+                      child: SizedBox(
+                        width: maxW,
+                        height: maxW / ratio,
+                        child: rotatedTexture,
+                      ),
+                    ),
+                  );
+                case EmbyFitMode.manual:
+                  return SizedBox.expand(
+                    child: Container(
+                      color: Colors.black,
+                      child: InteractiveViewer(
+                        minScale: 1.0,
+                        maxScale: 5.0,
+                        child: Center(
+                          child: FittedBox(
+                            fit: BoxFit.contain,
+                            child: SizedBox(
+                              width: maxW,
+                              height: maxW / ratio,
+                              child: rotatedTexture,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
               }
-              // 原始模式：不拉伸，放大到最大画幅（contain）
-              return Center(
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: SizedBox(
-                    width: maxW,
-                    height: maxW / ratio,
-                    child: rotatedTexture,
-                  ),
-                ),
-              );
             },
           );
         } catch (e) {

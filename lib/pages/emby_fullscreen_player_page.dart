@@ -10,10 +10,11 @@ import 'package:nipaplay/utils/screen_orientation_manager.dart';
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:provider/provider.dart';
 
-/// [QBSenHook] v8.50: 画面尺寸模式——精简为填充和原始。
+/// [QBSenHook] v8.50: 画面尺寸模式——填充、原始、手动。
 enum EmbyFitMode {
   cover('填充'),
-  original('原始');
+  original('原始'),
+  manual('手动');
 
   const EmbyFitMode(this.label);
   final String label;
@@ -547,6 +548,25 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
                 width: maxW,
                 height: hForWidth,
                 child: texture,
+              ),
+            );
+          case EmbyFitMode.manual:
+            // 手动：双指缩放/拖动调整画面
+            return Container(
+              color: Colors.black,
+              child: InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 5.0,
+                child: Center(
+                  child: FittedBox(
+                    fit: BoxFit.contain,
+                    child: SizedBox(
+                      width: maxW,
+                      height: hForWidth,
+                      child: texture,
+                    ),
+                  ),
+                ),
               ),
             );
         }
