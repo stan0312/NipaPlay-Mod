@@ -644,11 +644,20 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                     child: texture,
                   ),
                 );
-                // 横屏视频：填充和原始都铺满屏幕
+                if (_fitMode == EmbyFitMode.cover) {
+                  // 填充：铺满屏幕，居中裁剪
+                  return SizedBox.expand(
+                    child: FittedBox(
+                      fit: BoxFit.cover,
+                      clipBehavior: Clip.hardEdge,
+                      child: rotated,
+                    ),
+                  );
+                }
+                // 原始：完整显示，不裁剪不拉伸，留黑边
                 return SizedBox.expand(
                   child: FittedBox(
-                    fit: BoxFit.cover,
-                    clipBehavior: Clip.hardEdge,
+                    fit: BoxFit.contain,
                     child: rotated,
                   ),
                 );
