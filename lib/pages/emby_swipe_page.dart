@@ -644,18 +644,6 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                     child: texture,
                   ),
                 );
-                if (_fitMode == EmbyFitMode.manual) {
-                  return SizedBox.expand(
-                    child: Container(
-                      color: Colors.black,
-                      child: InteractiveViewer(
-                        minScale: 1.0,
-                        maxScale: 5.0,
-                        child: Center(child: rotated),
-                      ),
-                    ),
-                  );
-                }
                 // 横屏视频：填充和原始都铺满屏幕
                 return SizedBox.expand(
                   child: FittedBox(
@@ -688,26 +676,6 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                         width: maxW,
                         height: maxW / ratio,
                         child: rotatedTexture,
-                      ),
-                    ),
-                  );
-                case EmbyFitMode.manual:
-                  return SizedBox.expand(
-                    child: Container(
-                      color: Colors.black,
-                      child: InteractiveViewer(
-                        minScale: 1.0,
-                        maxScale: 5.0,
-                        child: Center(
-                          child: FittedBox(
-                            fit: BoxFit.contain,
-                            child: SizedBox(
-                              width: maxW,
-                              height: maxW / ratio,
-                              child: rotatedTexture,
-                            ),
-                          ),
-                        ),
                       ),
                     ),
                   );
