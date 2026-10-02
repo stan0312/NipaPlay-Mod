@@ -174,7 +174,7 @@ void main(List<String> args) async {
   _installFrameTimingTrace();
   await ensureLinuxSystemFontLoaded();
   await globals.initializeStartupDeviceProfile();
-  if (globals.isPhone) {
+  if (globals.isPhone && !kIsWeb) {
     await LiquidGlassWidgets.initialize();
   }
   debugPaintBaselinesEnabled = false;
