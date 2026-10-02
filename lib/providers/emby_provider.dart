@@ -124,11 +124,7 @@ class EmbyProvider extends ChangeNotifier {
     _notifyCoalesced();
     
     try {
-      if (kIsWeb) {
-        await _syncFromRemote();
-      } else {
-        await _embyService.loadSavedSettings();
-      }
+      await _embyService.loadSavedSettings();
       await _loadSortSettings(); // 加载排序设置
       _isInitialized = true;
       

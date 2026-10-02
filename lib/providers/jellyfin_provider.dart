@@ -154,11 +154,7 @@ class JellyfinProvider extends ChangeNotifier {
     _notifyCoalesced();
     
     try {
-      if (kIsWeb) {
-        await _syncFromRemote();
-      } else {
-        await _jellyfinService.loadSavedSettings();
-      }
+      await _jellyfinService.loadSavedSettings();
       await _loadSortSettings(); // 加载排序设置
       _isInitialized = true;
       
