@@ -273,24 +273,7 @@ class JellyfinProvider extends ChangeNotifier {
     try {
       bool success;
       if (kIsWeb) {
-        final base = await WebRemoteAccessService.resolveCandidateBaseUrl();
-        if (base == null) throw Exception('Remote server not found');
-        
-        final response = await http.post(
-          Uri.parse('$base/api/settings/network/jellyfin'),
-          body: json.encode({
-            'serverUrl': serverUrl,
-            'username': username,
-            'password': password,
-          }),
-        );
-        
-        if (response.statusCode == 200) {
-          await _syncFromRemote();
-          success = _jellyfinService.isConnected;
-        } else {
-          throw Exception('Remote connection failed: ${response.body}');
-        }
+        success = await _jellyfinService.connect(serverUrl, username, password, addressName: addressName);
       } else {
         success = await _jellyfinService.connect(serverUrl, username, password, addressName: addressName);
       }

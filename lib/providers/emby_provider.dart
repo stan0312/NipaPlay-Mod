@@ -247,24 +247,8 @@ class EmbyProvider extends ChangeNotifier {
     try {
       bool success;
       if (kIsWeb) {
-        final base = await WebRemoteAccessService.resolveCandidateBaseUrl();
-        if (base == null) throw Exception('Remote server not found');
-        
-        final response = await http.post(
-          Uri.parse('$base/api/settings/network/emby'),
-          body: json.encode({
-            'serverUrl': serverUrl,
-            'username': username,
-            'password': password,
-          }),
-        );
-        
-        if (response.statusCode == 200) {
-          await _syncFromRemote();
-          success = _embyService.isConnected;
-        } else {
-          throw Exception('Remote connection failed: ${response.body}');
-        }
+        // Web版直接连接Emby服务器（通过nginx反向代理解决跨域）
+        success = await _embyService.connect(serverUrl, username, password, addressName: addressName);
       } else {
         success = await _embyService.connect(serverUrl, username, password, addressName: addressName);
       }
