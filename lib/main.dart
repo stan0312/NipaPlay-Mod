@@ -1014,10 +1014,11 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
               homeBuilders: <AppDisplaySurface, Widget Function()>{
                 AppDisplaySurface.desktopTablet: () =>
                     MainPage(launchFilePath: widget.launchFilePath),
-                AppDisplaySurface.phone: () =>
-                    CupertinoMainPage(
-                      launchFilePath: widget.launchFilePath,
-                    ),
+                AppDisplaySurface.phone: () => kIsWeb
+                    ? MainPage(launchFilePath: widget.launchFilePath)
+                    : CupertinoMainPage(
+                        launchFilePath: widget.launchFilePath,
+                      ),
                 // Temporary compatibility renderer. A dedicated television
                 // shell can replace this entry without changing page data.
                 AppDisplaySurface.television: () =>
