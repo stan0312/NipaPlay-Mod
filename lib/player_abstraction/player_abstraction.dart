@@ -100,6 +100,13 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
   String get media => _delegate.media;
   set media(String value) => _delegate.media = value;
 
+  /// Web 专用：设置播放候选 URL 列表（委托给内部内核）
+  void setPlaybackCandidates(List<String> urls) =>
+      _delegate.setPlaybackCandidates(urls);
+
+  /// Web 专用：返回 HTML video 平台视图（委托给内部内核）
+  Widget buildWebSurface() => _delegate.buildWebSurface();
+
   PlayerMediaInfo get mediaInfo => _delegate.mediaInfo;
 
   List<int> get activeSubtitleTracks => _delegate.activeSubtitleTracks;

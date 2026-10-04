@@ -1486,9 +1486,9 @@ class EmbyService extends MediaServerServiceBase
       return '';
     }
 
-    // Web 平台：浏览器不支持 HEVC 和 HLS，强制 H.264 渐进式 MP4 转码
+    // Web 平台：优先直连（浏览器原生支持 H.264/AAC MP4），失败时由播放器降级转码
     if (kIsWeb) {
-      return _buildWebTranscodeUrl(itemId);
+      return _buildWebDirectUrl(itemId);
     }
 
     // 使用缓存的转码设置决定默认质量
@@ -1508,6 +1508,19 @@ class EmbyService extends MediaServerServiceBase
     );
   }
 
+  /// Web 专用：构建直连 URL（Static=true，浏览器原生播放 H.264/AAC）
+  String _buildWebDirectUrl(String itemId) {
+    final params = <String, String>{
+      'Static': 'true',
+      'MediaSourceId': itemId,
+      'api_key': _accessToken!,
+    };
+    final uri = Uri.parse('$_serverUrl/emby/Videos/$itemId/stream')
+        .replace(queryParameters: params);
+    debugPrint('[Emby Web] 构建直连URL: $uri');
+    return uri.toString();
+  }
+
   /// Web 专用：构建 H.264 渐进式 MP4 转码 URL（浏览器通用）
   String _buildWebTranscodeUrl(String itemId) {
     final params = <String, String>{
@@ -1524,6 +1537,15 @@ class EmbyService extends MediaServerServiceBase
     return uri.toString();
   }
 
+  /// Web 专用：返回播放候选 URL 列表 [直连, 转码]，播放失败自动降级
+  List<String> getWebPlaybackUrls(String itemId) {
+    if (!_isConnected || _accessToken == null) return <String>[];
+    return <String>[
+      _buildWebDirectUrl(itemId),
+      _buildWebTranscodeUrl(itemId),
+    ];
+  }
+
   /// 获取流媒体URL（同步），与 Jellyfin 保持一致的调用方式
   /// 若 quality 为 original 或强制直连，则返回直连 Static 流；否则返回带转码参数的 HLS master.m3u8。
   String getStreamUrlWithOptions(
@@ -1537,9 +1559,9 @@ class EmbyService extends MediaServerServiceBase
       throw Exception('未连接到Emby服务器');
     }
 
-    // Web 平台：强制 H.264 MP4 转码
+    // Web 平台：优先直连（浏览器原生播放），失败降级转码
     if (kIsWeb) {
-      return _buildWebTranscodeUrl(itemId);
+      return _buildWebDirectUrl(itemId);
     }
 
     // 强制直连
@@ -1739,27 +1761,24 @@ class EmbyService extends MediaServerServiceBase
 
     bool useTranscoding = false;
     String? chosenUrl;
-    // Web 平台强制转码（浏览器不支持 HEVC/HLS）
-    final webForceTranscode = kIsWeb;
-    if (!forceDirectPlay &&
+    if (kIsWeb) {
+      // Web 平台：优先直连（浏览器原生播放 H.264/AAC）。
+      // 注意：不用服务器返回的 directStreamUrl/transcodingUrl（可能是内网 IP 或 HLS），
+      // 统一用基于用户配置 _serverUrl 构建的 URL，保证浏览器可达。
+      chosenUrl = _buildWebDirectUrl(itemId);
+      useTranscoding = false;
+    } else if (!forceDirectPlay &&
         transcodingUrl != null &&
         transcodingUrl.isNotEmpty) {
-      if (webForceTranscode ||
-          preferTranscoding ||
+      if (preferTranscoding ||
           directStreamUrl == null ||
           directStreamUrl.isEmpty) {
         useTranscoding = true;
         chosenUrl = transcodingUrl;
       }
     }
-    // Web 上没有转码 URL 时，用我们的 H.264 MP4 转码 URL
     if (chosenUrl == null || chosenUrl.isEmpty) {
-      if (webForceTranscode) {
-        chosenUrl = _buildWebTranscodeUrl(itemId);
-        useTranscoding = true;
-      } else {
-        chosenUrl = directStreamUrl;
-      }
+      chosenUrl = directStreamUrl;
     }
 
     final resolvedUrl = (chosenUrl != null && chosenUrl.isNotEmpty)

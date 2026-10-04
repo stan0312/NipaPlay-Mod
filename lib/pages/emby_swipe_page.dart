@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
@@ -595,20 +596,26 @@ class _EmbySwipePageState extends State<EmbySwipePage>
               final double maxW = constraints.maxWidth;
               final double maxH = constraints.maxHeight;
               if (maxW <= 0 || maxH <= 0) return const SizedBox.shrink();
-              final Widget texture = ValueListenableBuilder<int?>(
-                valueListenable: player.textureId,
-                builder: (context, textureId, child) {
-                  if (textureId == null || textureId < 0) {
-                    return const SizedBox.shrink();
-                  }
-                  return SizedBox.expand(
-                    child: Texture(
-                      textureId: textureId,
-                      filterQuality: FilterQuality.medium,
-                    ),
-                  );
-                },
-              );
+              final Widget texture;
+              if (kIsWeb) {
+                // Web：video_player_web 用 HtmlElementView（平台视图）渲染，Texture 无效
+                texture = player.buildWebSurface();
+              } else {
+                texture = ValueListenableBuilder<int?>(
+                  valueListenable: player.textureId,
+                  builder: (context, textureId, child) {
+                    if (textureId == null || textureId < 0) {
+                      return const SizedBox.shrink();
+                    }
+                    return SizedBox.expand(
+                      child: Texture(
+                        textureId: textureId,
+                        filterQuality: FilterQuality.medium,
+                      ),
+                    );
+                  },
+                );
+              }
 
               // [QBSenHook] v8.12: 旋转元数据修正——倒置视频（180°）在竖屏分支补转 180°。
               final int videoRot = _videoRotation(videoState);

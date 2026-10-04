@@ -438,6 +438,28 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       // 设置媒体源 - 如果提供了播放会话URL则使用它，否则使用videoPath
       String playUrl = resolvedActualPlayUrl ?? videoPath;
 
+      // Web + Emby 流媒体：注入播放候选 URL（直连优先，转码兜底，失败自动切换）
+      if (kIsWeb && playUrl.startsWith('http') && videoPath.startsWith('emby://')) {
+        try {
+          final embyPath = videoPath.replaceFirst('emby://', '');
+          final parts = embyPath.split('/');
+          final itemId = parts.isNotEmpty ? parts.last : embyPath;
+          final candidates = EmbyService.instance.getWebPlaybackUrls(itemId);
+          if (candidates.isNotEmpty) {
+            // 播放会话 URL 通常是转码/服务器 URL，优先用我们的直连 URL
+            if (candidates.first.isNotEmpty &&
+                !playUrl.contains(candidates.first)) {
+              debugPrint('VideoPlayerState: Web Emby 使用直连候选 URL');
+              playUrl = candidates.first;
+            }
+            player.media = playUrl;
+            player.setPlaybackCandidates(candidates);
+          }
+        } catch (e) {
+          debugPrint('VideoPlayerState: Web Emby 候选 URL 注入失败: $e');
+        }
+      }
+
       // MediaKit/mpv: 通过audio-add命令在主媒体加载后添加外部音频
       if (isMediaKitKernel) {
         if (kDebugMode)

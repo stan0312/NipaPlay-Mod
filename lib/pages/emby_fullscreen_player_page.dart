@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
@@ -513,20 +514,26 @@ class _EmbyFullscreenPlayerPageState extends State<EmbyFullscreenPlayerPage> {
         final double maxH = constraints.maxHeight;
         if (maxW <= 0 || maxH <= 0) return const SizedBox.shrink();
         final double hForWidth = maxW / ratio;
-        final Widget texture = ValueListenableBuilder<int?>(
-          valueListenable: player.textureId,
-          builder: (context, textureId, child) {
-            if (textureId == null || textureId < 0) {
-              return const SizedBox.shrink();
-            }
-            return SizedBox.expand(
-              child: Texture(
-                textureId: textureId,
-                filterQuality: FilterQuality.medium,
-              ),
-            );
-          },
-        );
+        final Widget texture;
+        if (kIsWeb) {
+          // Web：video_player_web 用 HtmlElementView（平台视图）渲染，Texture 无效
+          texture = player.buildWebSurface();
+        } else {
+          texture = ValueListenableBuilder<int?>(
+            valueListenable: player.textureId,
+            builder: (context, textureId, child) {
+              if (textureId == null || textureId < 0) {
+                return const SizedBox.shrink();
+              }
+              return SizedBox.expand(
+                child: Texture(
+                  textureId: textureId,
+                  filterQuality: FilterQuality.medium,
+                ),
+              );
+            },
+          );
+        }
         switch (_fitMode) {
           case EmbyFitMode.cover:
             // 填充：不拉伸铺满屏幕，居中裁剪

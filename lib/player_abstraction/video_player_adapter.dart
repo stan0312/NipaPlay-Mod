@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/widgets.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter/services.dart';
 
@@ -21,6 +22,11 @@ class VideoPlayerAdapter implements AbstractPlayer, TickerProvider {
   VideoPlayerController? _controller;
   final ValueNotifier<int?> _textureIdNotifier = ValueNotifier<int?>(null);
   String _mediaPath = '';
+
+  // Web 播放候选 URL：优先直连，失败自动切换到转码 URL（浏览器可解码）
+  List<String> _playbackUrlCandidates = <String>[];
+  int _activeCandidateIndex = 0;
+  bool _disposed = false;
   PlayerMediaInfo _mediaInfo = PlayerMediaInfo(duration: 0);
   double _volume = 1.0;
   double _playbackRate = 1.0;
@@ -200,12 +206,43 @@ class VideoPlayerAdapter implements AbstractPlayer, TickerProvider {
     _disposeController();
     
     _mediaPath = value;
+    // 新媒体源：重置播放候选，默认只有当前 URL
+    _playbackUrlCandidates = [value];
+    _activeCandidateIndex = 0;
     if (value.isEmpty) return;
     
     print('[VideoPlayerAdapter] 设置媒体路径: $_mediaPath');
     
     // 使用通用方法创建控制器
     _createOrRebuildController();
+  }
+
+  /// 设置 Web 播放候选 URL 列表（第一个优先，播放失败自动切换下一个）。
+  /// 需在设置 [media] 之后调用，例如 [directUrl, transcodeUrl]。
+  void setPlaybackCandidates(List<String> urls) {
+    final valid = urls.where((u) => u.isNotEmpty).toList();
+    if (valid.isEmpty) return;
+    _playbackUrlCandidates = valid;
+    _activeCandidateIndex = 0;
+    debugPrint('[VideoPlayerAdapter] Web候选URL ${valid.length} 个，首个: ${_redactUrl(valid.first)}');
+  }
+
+  String _redactUrl(String url) {
+    try {
+      final uri = Uri.parse(url);
+      return '${uri.scheme}://${uri.host}${uri.path}?api_key=***';
+    } catch (_) {
+      return '<url>';
+    }
+  }
+
+  /// Web 专用：返回 HTML video 平台视图。
+  /// video_player_web 通过 HtmlElementView 渲染画面，Texture(textureId) 在 Web 上无效。
+  Widget buildWebSurface() {
+    if (!kIsWeb) return const SizedBox.shrink();
+    final tid = _textureIdNotifier.value;
+    if (tid == null) return const SizedBox.shrink();
+    return HtmlElementView(viewType: 'videoPlayer-$tid');
   }
 
   void _disposeController() {
@@ -548,6 +585,7 @@ class VideoPlayerAdapter implements AbstractPlayer, TickerProvider {
 
   @override
   void dispose() {
+    _disposed = true;
     _ticker?.dispose();
   _wasPlaying = false; // 最终复位
     _disposeController();
@@ -997,9 +1035,52 @@ class VideoPlayerAdapter implements AbstractPlayer, TickerProvider {
       // 报告错误
       if (value.hasError) {
         print('[VideoPlayerAdapter] 控制器报告错误: ${value.errorDescription}');
+        _switchToNextCandidate();
       }
     } catch (e) {
       print('[VideoPlayerAdapter] 监听器处理状态变化时出错: $e');
+    }
+  }
+
+  /// 播放失败时自动切换到下一个候选 URL（Web：直连失败 → 转码兜底）
+  Future<void> _switchToNextCandidate() async {
+    if (!kIsWeb || _disposed) return;
+    if (_playbackUrlCandidates.length < 2) return;
+    if (_activeCandidateIndex >= _playbackUrlCandidates.length - 1) {
+      debugPrint('[VideoPlayerAdapter] 所有候选 URL 均播放失败，放弃切换');
+      return;
+    }
+    // 防止连续错误触发重复切换
+    final int attemptIndex = _activeCandidateIndex;
+    _activeCandidateIndex++;
+    if (_activeCandidateIndex != attemptIndex + 1) return;
+
+    final nextUrl = _playbackUrlCandidates[_activeCandidateIndex];
+    debugPrint('[VideoPlayerAdapter] Web播放失败，切换候选[$_activeCandidateIndex/${_playbackUrlCandidates.length - 1}]: ${_redactUrl(nextUrl)}');
+
+    final wasInPlayback = _controller?.value.isInitialized ?? false;
+    final wasPlaying = _controller?.value.isPlaying ?? false;
+    _disposeController();
+    _mediaPath = nextUrl;
+    await Future.delayed(const Duration(milliseconds: 250));
+    if (_disposed) return;
+
+    try {
+      _controller = VideoPlayerController.networkUrl(Uri.parse(nextUrl));
+      _controller!.setVolume(_volume);
+      _controller!.addListener(_controllerListener);
+      await _controller!.initialize();
+      if (_disposed) return;
+      _textureIdNotifier.value = _readTextureId();
+      _updateMediaInfo();
+      if (wasInPlayback || wasPlaying) {
+        await _controller!.play();
+      }
+      debugPrint('[VideoPlayerAdapter] 候选 URL 切换成功: ${_redactUrl(nextUrl)}');
+    } catch (e) {
+      debugPrint('[VideoPlayerAdapter] 候选 URL 初始化失败: $e');
+      _controller = null;
+      _textureIdNotifier.value = null;
     }
   }
 
