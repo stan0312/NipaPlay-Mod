@@ -237,12 +237,13 @@ class VideoPlayerAdapter implements AbstractPlayer, TickerProvider {
   }
 
   /// Web 专用：返回 HTML video 平台视图。
-  /// video_player_web 通过 HtmlElementView 渲染画面，Texture(textureId) 在 Web 上无效。
+  /// 直接用官方 VideoPlayer(controller) widget——它内部会用注册的
+  /// 'VideoPlayerPlugin' viewType 创建 HtmlElementView，纹理在 Web 上无效。
   Widget buildWebSurface() {
     if (!kIsWeb) return const SizedBox.shrink();
-    final tid = _textureIdNotifier.value;
-    if (tid == null) return const SizedBox.shrink();
-    return HtmlElementView(viewType: 'videoPlayer-$tid');
+    final ctrl = _controller;
+    if (ctrl == null) return const SizedBox.shrink();
+    return VideoPlayer(ctrl);
   }
 
   void _disposeController() {

@@ -3017,6 +3017,14 @@ class MediaKitPlayerAdapter
     }
   }
 
+  @override
+  void setPlaybackCandidates(List<String> urls) {
+    // MediaKit 内核不使用候选 URL 切换（iOS/桌面），仅 Web 路径的 VideoPlayerAdapter 生效
+  }
+
+  @override
+  Widget buildWebSurface() => const SizedBox.shrink();
+
   bool get prefersPlatformVideoSurface => _usesPlatformVideoSurface;
 
   bool get usesWindowOverlayVideoSurface =>

@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show Widget, SizedBox;
 import './abstract_player.dart';
 import './player_enums.dart';
 import './player_data_models.dart';
@@ -108,6 +109,12 @@ class MdkPlayerAdapter implements AbstractPlayer {
 
   @override
   void stepBackward() {}
+
+  @override
+  void setPlaybackCandidates(List<String> urls) {}
+
+  @override
+  Widget buildWebSurface() => const SizedBox.shrink();
 
   // 详细播放技术信息（不支持MDK的平台返回空）
   Map<String, dynamic> getDetailedMediaInfo() => const <String, dynamic>{};

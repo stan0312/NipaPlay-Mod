@@ -731,4 +731,12 @@ class MdkPlayerAdapter implements AbstractPlayer {
   Future<Map<String, dynamic>> getDetailedMediaInfoAsync() async {
     return getDetailedMediaInfo();
   }
+
+  @override
+  void setPlaybackCandidates(List<String> urls) {
+    // MDK 内核不使用候选 URL 切换（iOS/桌面），仅 Web 路径的 VideoPlayerAdapter 生效
+  }
+
+  @override
+  Widget buildWebSurface() => const SizedBox.shrink();
 }

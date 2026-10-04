@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart'; // For ValueListenable
-import 'package:flutter/widgets.dart' show Widget, SizedBox;
 import './player_enums.dart';
 import './player_data_models.dart';
 
@@ -118,10 +117,10 @@ abstract class AbstractPlayer {
   void stepBackward();
 
   /// Web 专用：设置播放候选 URL 列表（第一个优先，播放失败自动切换）。
-  /// 默认空实现，仅 VideoPlayerAdapter（Web 路径）实际生效。
-  void setPlaybackCandidates(List<String> urls) {}
+  /// 仅 VideoPlayerAdapter（Web 路径）实际生效，其余内核为空实现。
+  void setPlaybackCandidates(List<String> urls);
 
   /// Web 专用：返回 HTML video 平台视图（video_player_web 用 HtmlElementView 渲染）。
-  /// 默认返回空组件，仅 VideoPlayerAdapter（Web 路径）实际生效。
-  Widget buildWebSurface() => const SizedBox.shrink();
+  /// 仅 VideoPlayerAdapter（Web 路径）实际生效，其余内核返回空组件。
+  Widget buildWebSurface();
 }
