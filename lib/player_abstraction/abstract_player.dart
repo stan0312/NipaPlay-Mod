@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart'; // For ValueListenable
+import 'package:flutter/widgets.dart' show Widget;
 import './player_enums.dart';
 import './player_data_models.dart';
 
