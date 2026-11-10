@@ -794,11 +794,18 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       return;
     }
     final wasCurrent = index == _currentIndex;
-    // 只有删掉最后一条（没有下一条可播）时才在这里停播。
-    // 有下一条时不能先 stop()：播放器会进入 stopped，紧接着 initializePlayer
-    // 重新打开会出现时序竞争，表现就是跳到下一条却不播。交给下一条初始化替换旧播放。
     final hasNext = _items.length > 1;
-    if (!hasNext) {
+    if (hasNext) {
+      // 先把旧视频暂停（保留 paused 状态，便于下一次 initializePlayer 接管），
+      // 否则旧音频会一直播被删掉的那一条，而画面已经换成下一条的缩略图。
+      try {
+        Provider.of<VideoPlayerState>(context, listen: false).pause();
+      } catch (e) {
+        debugPrint('删除后暂停旧视频失败: $e');
+      }
+      await Future.delayed(const Duration(milliseconds: 120));
+      if (!mounted) return;
+    } else {
       await _stopPlayback();
       if (!mounted) return;
     }
@@ -815,15 +822,10 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         _currentIndex = _items.length - 1;
       }
     });
-    // 让 Emby 对该目录补一次扫描，清掉资料库里残留的孤儿条目
-    unawaited(() async {
-      final refreshed = parentId != null && parentId.isNotEmpty
-          ? await EmbyService.instance.refreshItem(parentId)
-          : false;
-      if (!refreshed) {
-        await EmbyService.instance.refreshLibrary();
-      }
-    }());
+    // 让 Emby 对该目录补一次扫描，清掉资料库里残留的孤儿条目。
+    // 推迟到新视频起播之后：目录扫描会短暂占用服务端，若与下一条的播放会话
+    // 创建并发，容易导致播放会话请求迟迟不返回，表现为停在缩略图。
+    unawaited(_refreshLibraryAfterDelete(parentId));
     _showTip('已删除：${item.displayName}');
     if (!wasCurrent || _items.isEmpty) return;
     // 列表项被移除后 PageView 索引前移，补一次跳转并自动播放新落到当前页的视频。
@@ -845,10 +847,25 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     });
   }
 
+  /// 删除后延迟刷新 Emby 目录，避让下一条的播放会话创建。
+  Future<void> _refreshLibraryAfterDelete(String? parentId) async {
+    await Future.delayed(const Duration(seconds: 5));
+    try {
+      final refreshed = parentId != null && parentId.isNotEmpty
+          ? await EmbyService.instance.refreshItem(parentId)
+          : false;
+      if (!refreshed) {
+        await EmbyService.instance.refreshLibrary();
+      }
+    } catch (e) {
+      debugPrint('删除后刷新 Emby 资料库失败: $e');
+    }
+  }
+
   /// 删除后自动播下一条的兜底：初始化成功但播放器仍处于 ready/paused 时补 play；
   /// 若初始化根本没起来，再补一次 _autoPlay。
   Future<void> _ensurePlayingAfterDelete(String itemId) async {
-    for (var i = 0; i < 20; i++) {
+    for (var i = 0; i < 36; i++) {
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
       if (_items.isEmpty ||
@@ -869,8 +886,30 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         }
         continue;
       }
-      // 既不在播放也不在加载：自动播放没有真正启动，补一次初始化
-      if (i == 4 && _pendingPlayId != itemId && _playingItemId != itemId) {
+      final pendingThis = _pendingPlayId == itemId;
+      // 初始化卡在播放会话/地址解析（还没进入 loading）：作废本次并重试
+      if (pendingThis &&
+          i >= 16 &&
+          videoState.status != PlayerStatus.loading &&
+          videoState.status != PlayerStatus.recognizing) {
+        _playbackGeneration++;
+        setState(() => _pendingPlayId = null);
+        await _autoPlay(_items[_currentIndex]);
+        continue;
+      }
+      // 既不在播放也不在加载：自动播放没有真正启动，补一次初始化（最多 4 次）
+      final noFlight = !pendingThis && _playingItemId != itemId;
+      if (noFlight && (i == 4 || i == 10 || i == 17 || i == 24)) {
+        await _autoPlay(_items[_currentIndex]);
+      }
+      // 初始化长时间无结果：彻底停掉再重来一次，避免播放器卡在旧状态
+      if (pendingThis && i == 33) {
+        try {
+          await videoState.stop();
+        } catch (_) {}
+        if (!mounted) return;
+        _playbackGeneration++;
+        setState(() => _pendingPlayId = null);
         await _autoPlay(_items[_currentIndex]);
       }
     }
