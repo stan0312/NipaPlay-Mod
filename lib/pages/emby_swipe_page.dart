@@ -114,6 +114,8 @@ class _EmbySwipePageState extends State<EmbySwipePage>
 
   // [QBSenHook] v8.60: 双击删除当前视频（无二次确认，删除中防重入）
   bool _deleting = false;
+  // [QBSenHook] v8.61: 删除后的接管起播进行中，避免兜底逻辑重复初始化
+  bool _deleteAutoplayActive = false;
 
   // [QBSenHook] v7.5.2: 单击调出的播放控件面板（3 秒自动隐藏）
   bool _controlsVisible = false;
@@ -840,11 +842,127 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       await Future.delayed(const Duration(milliseconds: 200));
       if (!mounted || _items.isEmpty) return;
       final nextItem = _items[_currentIndex];
-      if (_pendingPlayId != nextItem.id && _playingItemId != nextItem.id) {
-        await _autoPlay(nextItem);
-      }
+      await _playNextAfterDelete(nextItem);
       await _ensurePlayingAfterDelete(nextItem.id);
     });
+  }
+
+  /// [QBSenHook] v8.61: 删除后接管下一条的起播。
+  /// 删片会触发 Emby 扫描目录，PlaybackInfo/详情接口可能长时间不返回，
+  /// 因此会话请求最多等 4 秒；超时就直接用 Emby 直连地址起播，
+  /// 详情上下文用本地 fallback，整条链路不再依赖服务端返回。
+  Future<void> _playNextAfterDelete(EmbyMediaItem item) async {
+    if (_playingItemId == item.id) {
+      try {
+        Provider.of<VideoPlayerState>(context, listen: false).play();
+      } catch (_) {}
+      return;
+    }
+    _deleteAutoplayActive = true;
+    _playbackGeneration++;
+    try {
+      for (var attempt = 0; attempt < 3; attempt++) {
+        if (!mounted) return;
+        if (_items.isEmpty ||
+            _currentIndex < 0 ||
+            _currentIndex >= _items.length ||
+            _items[_currentIndex].id != item.id) {
+          return;
+        }
+        final gen = ++_playbackGeneration;
+        setState(() {
+          _pendingPlayId = item.id;
+          _playingItemId = null;
+          _playbackError = null;
+        });
+        final videoState =
+            Provider.of<VideoPlayerState>(context, listen: false);
+        videoState.setContext(context);
+        final historyItem = WatchHistoryItem(
+          filePath: 'emby://${item.id}',
+          animeName: item.name,
+          episodeTitle: null,
+          watchProgress: 0.0,
+          lastPosition: 0,
+          duration: 0,
+          lastWatchTime: DateTime.now(),
+          animeId: null,
+          isFromScan: false,
+        );
+        PlaybackSession? session;
+        try {
+          session = await EmbyService.instance
+              .createPlaybackSession(itemId: item.id)
+              .timeout(const Duration(seconds: 4));
+        } catch (e) {
+          debugPrint('删除后创建播放会话超时，改用直连: $e');
+          session = null;
+        }
+        if (!mounted || gen != _playbackGeneration) return;
+        final playable = PlayableItem(
+          videoPath: historyItem.filePath,
+          title: item.name,
+          historyItem: historyItem,
+          playbackSession: session,
+        );
+        // 本地兜底详情，避免再走一次可能被扫描阻塞的详情接口
+        final detail = PlaybackSourceService.fallback(playable);
+        String? directUrl;
+        if (session == null) {
+          try {
+            directUrl = EmbyService.instance
+                .getStreamUrlWithOptions(item.id, forceDirectPlay: true);
+          } catch (e) {
+            debugPrint('删除后构建直连地址失败: $e');
+          }
+        }
+        try {
+          await videoState.initializePlayer(
+            playable.videoPath,
+            actualPlayUrl: directUrl,
+            historyItem: historyItem,
+            playbackSession: session,
+            playbackDetailContext: detail,
+            startFromBeginning: true,
+            mediaKey: item.displayName,
+          );
+        } catch (e) {
+          debugPrint('删除后初始化播放器失败: $e');
+        }
+        if (!mounted || gen != _playbackGeneration) return;
+        final error = videoState.error;
+        final hasVideo = videoState.hasVideo;
+        if (hasVideo && (error == null || error.trim().isEmpty)) {
+          setState(() {
+            _playingItemId = item.id;
+            _pendingPlayId = null;
+            _playbackError = null;
+          });
+          try {
+            videoState.play();
+          } catch (e) {
+            debugPrint('删除后补播放失败: $e');
+          }
+          await Future.delayed(const Duration(milliseconds: 500));
+          if (!mounted || gen != _playbackGeneration) return;
+          if (videoState.status == PlayerStatus.playing) return;
+        }
+        // 这一轮没成：轻停一下清掉半开状态，再重试
+        try {
+          await videoState.stop();
+        } catch (_) {}
+        if (!mounted) return;
+        await Future.delayed(const Duration(milliseconds: 600));
+      }
+      if (mounted) {
+        setState(() {
+          _pendingPlayId = null;
+          _playbackError = '自动播放失败，请点击画面手动播放';
+        });
+      }
+    } finally {
+      _deleteAutoplayActive = false;
+    }
   }
 
   /// 删除后延迟刷新 Emby 目录，避让下一条的播放会话创建。
@@ -875,6 +993,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         return;
       }
       final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+      if (_deleteAutoplayActive) continue;
       if (_playingItemId == itemId) {
         if (videoState.status == PlayerStatus.playing) return;
         if (videoState.hasVideo) {

@@ -261,7 +261,12 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     }
 
     if (isJellyfinStream || isEmbyStream) {
-      if (resolvedSession == null) {
+      // 调用方已经给出可直接播放的地址（例如删除后服务端扫描导致会话接口
+      // 迟迟不返回时，页面侧会构建 Emby 直连地址），不要再请求播放会话，
+      // 否则会重新卡在同一个网络调用上。
+      final hasProvidedUrl = resolvedActualPlayUrl != null &&
+          resolvedActualPlayUrl.isNotEmpty;
+      if (resolvedSession == null && !hasProvidedUrl) {
         try {
           resolvedSession = await _createPlaybackSessionForStream(
             videoPath,
