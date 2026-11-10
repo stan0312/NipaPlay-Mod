@@ -906,6 +906,21 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     });
   }
 
+  /// 删除后延迟刷新 Emby 目录，避让下一条的播放会话创建。
+  Future<void> _refreshLibraryAfterDelete(String? parentId) async {
+    await Future.delayed(const Duration(seconds: 5));
+    try {
+      final refreshed = parentId != null && parentId.isNotEmpty
+          ? await EmbyService.instance.refreshItem(parentId)
+          : false;
+      if (!refreshed) {
+        await EmbyService.instance.refreshLibrary();
+      }
+    } catch (e) {
+      debugPrint('删除后刷新 Emby 资料库失败: $e');
+    }
+  }
+
   void _showTip(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
