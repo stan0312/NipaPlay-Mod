@@ -794,8 +794,14 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       return;
     }
     final wasCurrent = index == _currentIndex;
-    await _stopPlayback();
-    if (!mounted) return;
+    // 只有删掉最后一条（没有下一条可播）时才在这里停播。
+    // 有下一条时不能先 stop()：播放器会进入 stopped，紧接着 initializePlayer
+    // 重新打开会出现时序竞争，表现就是跳到下一条却不播。交给下一条初始化替换旧播放。
+    final hasNext = _items.length > 1;
+    if (!hasNext) {
+      await _stopPlayback();
+      if (!mounted) return;
+    }
     setState(() {
       _deleting = false;
       _items.removeAt(index);
@@ -820,14 +826,54 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     }());
     _showTip('已删除：${item.displayName}');
     if (!wasCurrent || _items.isEmpty) return;
-    // 列表项被移除后 PageView 索引前移，补一次跳转并自动播放新落到当前页的视频
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // 列表项被移除后 PageView 索引前移，补一次跳转并自动播放新落到当前页的视频。
+    // 注意：stop() 之后立刻 initializePlayer 存在时序竞争，初始化完成时状态可能
+    // 停在 ready/paused，play() 不生效，表现为“跳到下一条但不播”。这里等一帧
+    // 布局稳定后再初始化，并在之后确认播放状态，必要时补一次 play。
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || _items.isEmpty) return;
       if (_pageController.hasClients) {
         _pageController.jumpToPage(_currentIndex);
       }
-      _autoPlay(_items[_currentIndex]);
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted || _items.isEmpty) return;
+      final nextItem = _items[_currentIndex];
+      if (_pendingPlayId != nextItem.id && _playingItemId != nextItem.id) {
+        await _autoPlay(nextItem);
+      }
+      await _ensurePlayingAfterDelete(nextItem.id);
     });
+  }
+
+  /// 删除后自动播下一条的兜底：初始化成功但播放器仍处于 ready/paused 时补 play；
+  /// 若初始化根本没起来，再补一次 _autoPlay。
+  Future<void> _ensurePlayingAfterDelete(String itemId) async {
+    for (var i = 0; i < 20; i++) {
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      if (_items.isEmpty ||
+          _currentIndex < 0 ||
+          _currentIndex >= _items.length ||
+          _items[_currentIndex].id != itemId) {
+        return;
+      }
+      final videoState = Provider.of<VideoPlayerState>(context, listen: false);
+      if (_playingItemId == itemId) {
+        if (videoState.status == PlayerStatus.playing) return;
+        if (videoState.hasVideo) {
+          try {
+            videoState.play();
+          } catch (e) {
+            debugPrint('删除后补播放失败: $e');
+          }
+        }
+        continue;
+      }
+      // 既不在播放也不在加载：自动播放没有真正启动，补一次初始化
+      if (i == 4 && _pendingPlayId != itemId && _playingItemId != itemId) {
+        await _autoPlay(_items[_currentIndex]);
+      }
+    }
   }
 
   void _showTip(String msg) {
