@@ -785,6 +785,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       return;
     }
     setState(() => _deleting = true);
+    final parentId = item.parentId;
     final ok = await EmbyService.instance.deleteItem(item.id);
     if (!mounted) return;
     if (!ok) {
@@ -808,6 +809,15 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         _currentIndex = _items.length - 1;
       }
     });
+    // 让 Emby 对该目录补一次扫描，清掉资料库里残留的孤儿条目
+    unawaited(() async {
+      final refreshed = parentId != null && parentId.isNotEmpty
+          ? await EmbyService.instance.refreshItem(parentId)
+          : false;
+      if (!refreshed) {
+        await EmbyService.instance.refreshLibrary();
+      }
+    }());
     _showTip('已删除：${item.displayName}');
     if (!wasCurrent || _items.isEmpty) return;
     // 列表项被移除后 PageView 索引前移，补一次跳转并自动播放新落到当前页的视频

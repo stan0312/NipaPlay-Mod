@@ -6,6 +6,7 @@ import 'package:nipaplay/services/incremental_sync_repository.dart';
 import 'package:nipaplay/services/backup_category.dart';
 import 'package:nipaplay/src/rust/api/incremental_sync.dart' as rust_sync;
 import 'package:nipaplay/src/rust/rust_init.dart';
+import 'package:nipaplay/services/platform_int64_compat.dart';
 
 class IncrementalSyncEncodedBlob {
   const IncrementalSyncEncodedBlob({
@@ -156,7 +157,7 @@ class IncrementalSyncNativeCodec {
         includeWatchHistory: request.includeWatchHistory,
         includeEpisodeMatches: request.includeEpisodeMatches,
         includeAccounts: request.includeAccounts,
-        batchSize: request.batchSize,
+        batchSize: toPlatformInt64(request.batchSize),
       );
       return FullBackupNativeRestorePlan(
         version: result.version.toInt(),
@@ -233,7 +234,7 @@ class IncrementalSyncNativeCodec {
         snapshotBytes: snapshotBytes,
         expectedSha256: expectedSha256,
         expectedRepositoryId: expectedRepositoryId,
-        expectedSnapshotVersion: expectedSnapshotVersion,
+        expectedSnapshotVersion: toPlatformInt64(expectedSnapshotVersion),
       );
       return _stateFromJsonMap(await compute(
         _decodeJsonMap,
@@ -278,7 +279,7 @@ class IncrementalSyncNativeCodec {
                   expectedId: patch.expectedId,
                 ))
             .toList(),
-        maximumSnapshotVersion: maximumSnapshotVersion,
+        maximumSnapshotVersion: toPlatformInt64(maximumSnapshotVersion),
       );
       return IncrementalSyncNativePatchResult(
         state: _stateFromJsonMap(await compute(

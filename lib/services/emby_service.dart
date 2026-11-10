@@ -1084,6 +1084,37 @@ class EmbyService extends MediaServerServiceBase
     }
   }
 
+  /// 删除媒体后让 Emby 重新扫描条目所在目录。
+  /// DELETE /Items/{id} 只负责删除文件与条目，资料库里的孤儿条目要等一次扫描才会消失。
+  Future<bool> refreshItem(String itemId) async {
+    if (!_isConnected || itemId.isEmpty) return false;
+    try {
+      final response = await _makeAuthenticatedRequest(
+        '/emby/Items/$itemId/Refresh?Recursive=true&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&ReplaceAllMetadata=false',
+        method: 'POST',
+      );
+      return response.statusCode == 200 || response.statusCode == 204;
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 刷新条目异常: ');
+      return false;
+    }
+  }
+
+  /// 全库扫描兜底：条目所在目录已不存在时，目录级刷新会失败。
+  Future<bool> refreshLibrary() async {
+    if (!_isConnected) return false;
+    try {
+      final response = await _makeAuthenticatedRequest(
+        '/emby/Library/Refresh',
+        method: 'POST',
+      );
+      return response.statusCode == 200 || response.statusCode == 204;
+    } catch (e) {
+      DebugLogService().addLog('EmbyService: 刷新资料库异常: ');
+      return false;
+    }
+  }
+
   // [QBSenHook] v8.6: 标记已播放/未播放（Emby 原生 PlayedItems）
   Future<bool> setPlayed(String itemId, {required bool played}) async {
     if (!_isConnected || _userId == null || itemId.isEmpty) return false;
