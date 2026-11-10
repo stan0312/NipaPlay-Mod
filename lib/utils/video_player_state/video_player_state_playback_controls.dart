@@ -714,6 +714,13 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
     }
   }
 
+  /// [QBSenHook] v8.62: 作废当前正在进行的异步初始化。
+  /// 页面侧对 initializePlayer 加超时后调用，避免内部准备流程在超时之后
+  /// 继续完成并把新视频的音频放出来（画面却仍停在缩略图）。
+  void invalidatePendingInitialization() {
+    _playbackGeneration++;
+  }
+
   void _clearPreviousVideoState() {
     _playbackGeneration++;
     _isBackgroundDanmakuLoading = false;

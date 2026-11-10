@@ -6,6 +6,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:nipaplay/models/emby_model.dart';
 import 'package:nipaplay/models/media_server_playback.dart';
+import 'package:nipaplay/models/playback_detail_context.dart';
 import 'package:nipaplay/models/watch_history_model.dart';
 import 'package:nipaplay/models/playable_item.dart';
 import 'package:nipaplay/models/swipe_play_record.dart';
@@ -114,8 +115,9 @@ class _EmbySwipePageState extends State<EmbySwipePage>
 
   // [QBSenHook] v8.60: 双击删除当前视频（无二次确认，删除中防重入）
   bool _deleting = false;
-  // [QBSenHook] v8.61: 删除后的接管起播进行中，避免兜底逻辑重复初始化
-  bool _deleteAutoplayActive = false;
+  // [QBSenHook] v8.62: 删除跳页期间抑制 onPageChanged 的重复起播，
+  // 避免两套 _autoPlay 并发初始化互相作废。
+  bool _suppressPageAutoplay = false;
 
   // [QBSenHook] v7.5.2: 单击调出的播放控件面板（3 秒自动隐藏）
   bool _controlsVisible = false;
@@ -490,13 +492,17 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       // [QBSenHook] v7.3: 内嵌播放必须绑定本页 context（视频 tab 已移除，
       // 不再有播放器页帮忙 setContext）。
       videoState.setContext(context);
-      // 预创建播放会话；失败不放弃，交给播放器内部处理
+      // 预创建播放会话；失败或超时都改用 Emby 直连地址。
+      // 删片会触发服务端目录扫描，扫描期间 PlaybackInfo 可能长时间不返回，
+      // 因此这里最多等 4 秒，绝不把起播挂在一个无上限的请求上。
       PlaybackSession? session;
       try {
         session = await EmbyService.instance
-            .createPlaybackSession(itemId: item.id);
+            .createPlaybackSession(itemId: item.id)
+            .timeout(const Duration(seconds: 4));
       } catch (e) {
-        debugPrint('刷片预创建播放会话失败(将由播放器内部处理): $e');
+        debugPrint('[QBSenHook][起播] 播放会话失败/超时，改用直连: $e');
+        session = null;
       }
       if (!mounted || gen != _playbackGeneration) return;
       final playable = PlayableItem(
@@ -505,19 +511,59 @@ class _EmbySwipePageState extends State<EmbySwipePage>
         historyItem: historyItem,
         playbackSession: session,
       );
-      final detailContext =
-          await PlaybackSourceService.resolve(context, playable);
+      PlaybackDetailContext detailContext;
+      String? directPlayUrl;
+      if (session == null) {
+        // 纯本地详情，避免再走一次可能被扫描阻塞的剧集详情接口
+        detailContext = PlaybackSourceService.fallback(playable);
+        try {
+          directPlayUrl = EmbyService.instance
+              .getStreamUrlWithOptions(item.id, forceDirectPlay: true);
+          debugPrint('[QBSenHook][起播] 已生成直连地址');
+        } catch (e) {
+          debugPrint('[QBSenHook][起播] 构建直连地址失败: $e');
+        }
+      } else {
+        detailContext = await PlaybackSourceService.resolve(context, playable);
+      }
       if (!mounted || gen != _playbackGeneration) return;
-      await videoState.initializePlayer(
-        playable.videoPath,
-        historyItem: historyItem,
-        playbackSession: session,
-        playbackDetailContext: detailContext,
-        // [QBSenHook] v8.4: 刷片模式不续播——强制从头播放
-        startFromBeginning: true,
-        // [QBSenHook] v8.7: currentMediaKey=真实文件名（全屏页顶部显示）
-        mediaKey: item.displayName,
-      );
+      if (session == null && (directPlayUrl == null || directPlayUrl.isEmpty)) {
+        setState(() {
+          _playingItemId = null;
+          _pendingPlayId = null;
+          _playbackError = '无法获取播放地址（会话与直连均不可用）';
+        });
+        return;
+      }
+      try {
+        await videoState
+            .initializePlayer(
+              playable.videoPath,
+              actualPlayUrl: directPlayUrl,
+              historyItem: historyItem,
+              playbackSession: session,
+              playbackDetailContext: detailContext,
+              // [QBSenHook] v8.4: 刷片模式不续播——强制从头播放
+              startFromBeginning: true,
+              // [QBSenHook] v8.7: currentMediaKey=真实文件名（全屏页顶部显示）
+              mediaKey: item.displayName,
+            )
+            .timeout(const Duration(seconds: 20));
+      } catch (e) {
+        debugPrint('[QBSenHook][起播] 初始化失败/超时: $e');
+        // 作废播放器内部仍在跑的异步初始化，防止它在超时后又把音频放出来。
+        videoState.invalidatePendingInitialization();
+        try {
+          await videoState.stop();
+        } catch (_) {}
+        if (!mounted || gen != _playbackGeneration) return;
+        setState(() {
+          _playingItemId = null;
+          _pendingPlayId = null;
+          _playbackError = '播放初始化超时，请点击“重试播放”';
+        });
+        return;
+      }
       if (!mounted || gen != _playbackGeneration) return;
       // [QBSenHook] v7.3: initializePlayer 内部失败会置 error 而非抛异常，
       // 必须显式检查，否则卡片会一直只显示缩略图、用户看不到原因。
@@ -816,6 +862,10 @@ class _EmbySwipePageState extends State<EmbySwipePage>
       _items.removeAt(index);
       _favoriteOn.remove(item.id);
       _favoriteOff.remove(item.id);
+      // 下一条尚未起播：清掉旧条目的占位，避免 _autoPlay 防重入直接返回。
+      _pendingPlayId = null;
+      _playingItemId = null;
+      _playbackError = null;
       if (_items.isEmpty) {
         _currentIndex = 0;
       } else if (index < _currentIndex) {
@@ -836,202 +886,24 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     // 布局稳定后再初始化，并在之后确认播放状态，必要时补一次 play。
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || _items.isEmpty) return;
-      if (_pageController.hasClients) {
-        _pageController.jumpToPage(_currentIndex);
-      }
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (!mounted || _items.isEmpty) return;
-      final nextItem = _items[_currentIndex];
-      await _playNextAfterDelete(nextItem);
-      await _ensurePlayingAfterDelete(nextItem.id);
-    });
-  }
-
-  /// [QBSenHook] v8.61: 删除后接管下一条的起播。
-  /// 删片会触发 Emby 扫描目录，PlaybackInfo/详情接口可能长时间不返回，
-  /// 因此会话请求最多等 4 秒；超时就直接用 Emby 直连地址起播，
-  /// 详情上下文用本地 fallback，整条链路不再依赖服务端返回。
-  Future<void> _playNextAfterDelete(EmbyMediaItem item) async {
-    if (_playingItemId == item.id) {
+      _suppressPageAutoplay = true;
       try {
-        Provider.of<VideoPlayerState>(context, listen: false).play();
-      } catch (_) {}
-      return;
-    }
-    _deleteAutoplayActive = true;
-    _playbackGeneration++;
-    try {
-      for (var attempt = 0; attempt < 3; attempt++) {
-        if (!mounted) return;
-        if (_items.isEmpty ||
-            _currentIndex < 0 ||
-            _currentIndex >= _items.length ||
-            _items[_currentIndex].id != item.id) {
-          return;
+        if (_pageController.hasClients) {
+          _pageController.jumpToPage(_currentIndex);
         }
-        final gen = ++_playbackGeneration;
-        setState(() {
-          _pendingPlayId = item.id;
-          _playingItemId = null;
-          _playbackError = null;
-        });
-        final videoState =
-            Provider.of<VideoPlayerState>(context, listen: false);
-        videoState.setContext(context);
-        final historyItem = WatchHistoryItem(
-          filePath: 'emby://${item.id}',
-          animeName: item.name,
-          episodeTitle: null,
-          watchProgress: 0.0,
-          lastPosition: 0,
-          duration: 0,
-          lastWatchTime: DateTime.now(),
-          animeId: null,
-          isFromScan: false,
-        );
-        PlaybackSession? session;
-        try {
-          session = await EmbyService.instance
-              .createPlaybackSession(itemId: item.id)
-              .timeout(const Duration(seconds: 4));
-        } catch (e) {
-          debugPrint('删除后创建播放会话超时，改用直连: $e');
-          session = null;
-        }
-        if (!mounted || gen != _playbackGeneration) return;
-        final playable = PlayableItem(
-          videoPath: historyItem.filePath,
-          title: item.name,
-          historyItem: historyItem,
-          playbackSession: session,
-        );
-        // 本地兜底详情，避免再走一次可能被扫描阻塞的详情接口
-        final detail = PlaybackSourceService.fallback(playable);
-        String? directUrl;
-        if (session == null) {
-          try {
-            directUrl = EmbyService.instance
-                .getStreamUrlWithOptions(item.id, forceDirectPlay: true);
-          } catch (e) {
-            debugPrint('删除后构建直连地址失败: $e');
-          }
-        }
-        try {
-          await videoState.initializePlayer(
-            playable.videoPath,
-            actualPlayUrl: directUrl,
-            historyItem: historyItem,
-            playbackSession: session,
-            playbackDetailContext: detail,
-            startFromBeginning: true,
-            mediaKey: item.displayName,
-          );
-        } catch (e) {
-          debugPrint('删除后初始化播放器失败: $e');
-        }
-        if (!mounted || gen != _playbackGeneration) return;
-        final error = videoState.error;
-        final hasVideo = videoState.hasVideo;
-        if (hasVideo && (error == null || error.trim().isEmpty)) {
-          setState(() {
-            _playingItemId = item.id;
-            _pendingPlayId = null;
-            _playbackError = null;
-          });
-          try {
-            videoState.play();
-          } catch (e) {
-            debugPrint('删除后补播放失败: $e');
-          }
-          await Future.delayed(const Duration(milliseconds: 500));
-          if (!mounted || gen != _playbackGeneration) return;
-          if (videoState.status == PlayerStatus.playing) return;
-        }
-        // 这一轮没成：轻停一下清掉半开状态，再重试
-        try {
-          await videoState.stop();
-        } catch (_) {}
-        if (!mounted) return;
-        await Future.delayed(const Duration(milliseconds: 600));
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (!mounted || _items.isEmpty) return;
+        final nextItem = _items[_currentIndex];
+        // 直接复用正常刷片的起播链路（已带会话超时 + 直连兜底）。
+        // 不再并行一套“删除专用”初始化，避免两套流程互相作废。
+        final future = _autoPlay(nextItem);
+        // _autoPlay 已在首个同步段占位 _pendingPlayId，后续重复回调会被防重入拦截。
+        _suppressPageAutoplay = false;
+        await future;
+      } finally {
+        _suppressPageAutoplay = false;
       }
-      if (mounted) {
-        setState(() {
-          _pendingPlayId = null;
-          _playbackError = '自动播放失败，请点击画面手动播放';
-        });
-      }
-    } finally {
-      _deleteAutoplayActive = false;
-    }
-  }
-
-  /// 删除后延迟刷新 Emby 目录，避让下一条的播放会话创建。
-  Future<void> _refreshLibraryAfterDelete(String? parentId) async {
-    await Future.delayed(const Duration(seconds: 5));
-    try {
-      final refreshed = parentId != null && parentId.isNotEmpty
-          ? await EmbyService.instance.refreshItem(parentId)
-          : false;
-      if (!refreshed) {
-        await EmbyService.instance.refreshLibrary();
-      }
-    } catch (e) {
-      debugPrint('删除后刷新 Emby 资料库失败: $e');
-    }
-  }
-
-  /// 删除后自动播下一条的兜底：初始化成功但播放器仍处于 ready/paused 时补 play；
-  /// 若初始化根本没起来，再补一次 _autoPlay。
-  Future<void> _ensurePlayingAfterDelete(String itemId) async {
-    for (var i = 0; i < 36; i++) {
-      await Future.delayed(const Duration(milliseconds: 300));
-      if (!mounted) return;
-      if (_items.isEmpty ||
-          _currentIndex < 0 ||
-          _currentIndex >= _items.length ||
-          _items[_currentIndex].id != itemId) {
-        return;
-      }
-      final videoState = Provider.of<VideoPlayerState>(context, listen: false);
-      if (_deleteAutoplayActive) continue;
-      if (_playingItemId == itemId) {
-        if (videoState.status == PlayerStatus.playing) return;
-        if (videoState.hasVideo) {
-          try {
-            videoState.play();
-          } catch (e) {
-            debugPrint('删除后补播放失败: $e');
-          }
-        }
-        continue;
-      }
-      final pendingThis = _pendingPlayId == itemId;
-      // 初始化卡在播放会话/地址解析（还没进入 loading）：作废本次并重试
-      if (pendingThis &&
-          i >= 16 &&
-          videoState.status != PlayerStatus.loading &&
-          videoState.status != PlayerStatus.recognizing) {
-        _playbackGeneration++;
-        setState(() => _pendingPlayId = null);
-        await _autoPlay(_items[_currentIndex]);
-        continue;
-      }
-      // 既不在播放也不在加载：自动播放没有真正启动，补一次初始化（最多 4 次）
-      final noFlight = !pendingThis && _playingItemId != itemId;
-      if (noFlight && (i == 4 || i == 10 || i == 17 || i == 24)) {
-        await _autoPlay(_items[_currentIndex]);
-      }
-      // 初始化长时间无结果：彻底停掉再重来一次，避免播放器卡在旧状态
-      if (pendingThis && i == 33) {
-        try {
-          await videoState.stop();
-        } catch (_) {}
-        if (!mounted) return;
-        _playbackGeneration++;
-        setState(() => _pendingPlayId = null);
-        await _autoPlay(_items[_currentIndex]);
-      }
-    }
+    });
   }
 
   void _showTip(String msg) {
@@ -1212,6 +1084,7 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 itemCount: _items.length,
                 onPageChanged: (i) {
                   setState(() => _currentIndex = i);
+                  if (_suppressPageAutoplay) return;
                   if (i >= 0 && i < _items.length) {
                     _autoPlay(_items[i]);
                   }
@@ -1394,6 +1267,23 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                     maxLines: 4,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () {
+                      if (index < 0 || index >= _items.length) return;
+                      final retryItem = _items[index];
+                      setState(() {
+                        _playbackError = null;
+                        _pendingPlayId = null;
+                        _playingItemId = null;
+                      });
+                      _autoPlay(retryItem);
+                    },
+                    child: const Text(
+                      '重试播放',
+                      style: TextStyle(color: Colors.white, fontSize: 13),
+                    ),
                   ),
                 ],
               ),
