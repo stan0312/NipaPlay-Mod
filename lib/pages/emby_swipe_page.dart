@@ -112,6 +112,9 @@ class _EmbySwipePageState extends State<EmbySwipePage>
   String? _playbackError;
   int _playbackGeneration = 0;
 
+  // [QBSenHook] v8.60: 双击删除当前视频（无二次确认，删除中防重入）
+  bool _deleting = false;
+
   // [QBSenHook] v7.5.2: 单击调出的播放控件面板（3 秒自动隐藏）
   bool _controlsVisible = false;
   // [QBSenHook] v8.13: 左右滑快进快退时临时显示底部细进度条，松手自动隐藏
@@ -770,6 +773,53 @@ class _EmbySwipePageState extends State<EmbySwipePage>
     }
   }
 
+  /// [QBSenHook] v8.60: 双击删除当前正在查看的视频。
+  /// 调用 Emby DELETE /Items/{id} 直接从媒体库删除，按需求不做二次确认；
+  /// 删除成功后停播、从刷片列表移除，并自动播放下一条。失败通常是账号无管理员权限。
+  Future<void> _deleteCurrent(EmbyMediaItem item) async {
+    if (_deleting) return;
+    final index = _items.indexWhere((e) => e.id == item.id);
+    if (index < 0) return;
+    if (index != _currentIndex) {
+      _showTip('只能删除当前正在查看的视频');
+      return;
+    }
+    setState(() => _deleting = true);
+    final ok = await EmbyService.instance.deleteItem(item.id);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() => _deleting = false);
+      _showTip('删除失败：需要 Emby 管理员权限');
+      return;
+    }
+    final wasCurrent = index == _currentIndex;
+    await _stopPlayback();
+    if (!mounted) return;
+    setState(() {
+      _deleting = false;
+      _items.removeAt(index);
+      _favoriteOn.remove(item.id);
+      _favoriteOff.remove(item.id);
+      if (_items.isEmpty) {
+        _currentIndex = 0;
+      } else if (index < _currentIndex) {
+        _currentIndex -= 1;
+      } else if (_currentIndex > _items.length - 1) {
+        _currentIndex = _items.length - 1;
+      }
+    });
+    _showTip('已删除：${item.displayName}');
+    if (!wasCurrent || _items.isEmpty) return;
+    // 列表项被移除后 PageView 索引前移，补一次跳转并自动播放新落到当前页的视频
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _items.isEmpty) return;
+      if (_pageController.hasClients) {
+        _pageController.jumpToPage(_currentIndex);
+      }
+      _autoPlay(_items[_currentIndex]);
+    });
+  }
+
   void _showTip(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1188,6 +1238,9 @@ class _EmbySwipePageState extends State<EmbySwipePage>
                 label: _landscapeView ? '横屏' : '竖屏',
                 onTap: () => setState(() => _landscapeView = !_landscapeView),
               ),
+              // [QBSenHook] v8.60: 右下角双击删除当前视频
+              const SizedBox(height: 14),
+              _buildDeleteButton(item),
             ],
           ),
         ),
@@ -1762,6 +1815,40 @@ class _EmbySwipePageState extends State<EmbySwipePage>
           const SizedBox(height: 4),
           Text(
             label,
+            style: const TextStyle(color: Colors.white70, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// [QBSenHook] v8.60: 右下角删除控件——双击删除当前视频；
+  /// 单击只给文字提示、不执行删除，避免误触。
+  Widget _buildDeleteButton(EmbyMediaItem item) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _showTip('双击删除当前视频'),
+      onDoubleTap: _deleting ? null : () => _deleteCurrent(item),
+      child: Column(
+        children: [
+          _deleting
+              ? const SizedBox(
+                  width: 30,
+                  height: 30,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white70,
+                  ),
+                )
+              : const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.white,
+                  size: 30,
+                  shadows: [Shadow(color: Colors.black54, blurRadius: 8)],
+                ),
+          const SizedBox(height: 4),
+          Text(
+            _deleting ? '删除中' : '双击删除',
             style: const TextStyle(color: Colors.white70, fontSize: 11),
           ),
         ],
